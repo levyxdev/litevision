@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "You exceeded your current per-minute request limit for this model. Please retry later."
+  }
+}

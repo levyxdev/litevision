@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "api_error",
+    "message": "An internal error has occurred. Please retry."
+  }
+}

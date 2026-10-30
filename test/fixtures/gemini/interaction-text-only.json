@@ -1,0 +1,14 @@
+{
+  "id": "v1_ChdGb3hJbWFnZUludGVyYWN0aW9uMDAwMxIXRm94SW1hZ2VJbnRlcmFjdGlvbjAwMDM",
+  "object": "interaction",
+  "model": "gemini-3.1-flash-image",
+  "status": "completed",
+  "created": "2026-10-30T13:05:00Z",
+  "updated": "2026-10-30T13:05:02Z",
+  "steps": [
+    {
+      "type": "model_output",
+      "content": [{ "type": "text", "text": "I can describe a red fox, but I was unable to draw one this time." }]
+    }
+  ]
+}
