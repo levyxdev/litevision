@@ -35,10 +35,15 @@ export const providerPresets: ProviderPreset[] = [
   { id: "apimart", label: "APIMart", baseUrl: "https://api.apimart.ai/v1", protocol: "apimart" },
 ];
 
-const providerId = z
-  .string()
-  .trim()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, "A Provider id is 1–64 letters, digits, '.', '_' or '-', starting with a letter or digit.");
+/** A short User-chosen name, such as a Provider id or an Alias. `what` names it in the error, e.g. "A Provider id". */
+export function shortName(what: string) {
+  return z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, `${what} is 1–64 letters, digits, '.', '_' or '-', starting with a letter or digit.`);
+}
+
+const providerId = shortName("A Provider id");
 
 const baseUrl = z
   .string()

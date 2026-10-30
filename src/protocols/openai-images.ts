@@ -5,10 +5,10 @@ import { multipartBody } from "./multipart.ts";
 import {
   formatSize,
   ProviderError,
-  type ConnectionResult,
   type GeneratedImage,
   type ImageCapabilities,
   type ImageRequest,
+  type ModelIdsResult,
   type ModelTarget,
   type ProtocolAdapter,
   type ProviderTarget,
@@ -118,13 +118,19 @@ export const openaiImages: ProtocolAdapter = {
     return { wait: async () => images };
   },
 
-  testConnection: testOpenaiConnection,
+  async testConnection(target, http) {
+    const list = await fetchModelIds(target, http);
+    if (!list.ok) return list;
+    return { ok: true, message: `Connected to Provider "${target.providerId}". It offers ${list.modelIds.length} model id(s).` };
+  },
+
+  listModelIds: fetchModelIds,
 };
 
 const modelListSchema = z.object({ data: z.array(z.object({ id: z.string() })) });
 
-/** Lists the Provider's models (`GET {baseUrl}/models`), which needs a working base URL and Credential. */
-async function testOpenaiConnection(target: ProviderTarget, http: HttpTransport): Promise<ConnectionResult> {
+/** `GET {baseUrl}/models`, which needs a working base URL and Credential. Model ids come back sorted. */
+async function fetchModelIds(target: ProviderTarget, http: HttpTransport): Promise<ModelIdsResult> {
   const providerLabel = `Provider "${target.providerId}"`;
   let response: Response;
   try {
@@ -145,5 +151,5 @@ async function testOpenaiConnection(target: ProviderTarget, http: HttpTransport)
   if (!parsed.success) {
     return { ok: false, message: `${providerLabel} answered, but not with an OpenAI-style model list. Check the base URL.` };
   }
-  return { ok: true, message: `Connected to ${providerLabel}. It offers ${parsed.data.data.length} model id(s).` };
+  return { ok: true, modelIds: parsed.data.data.map((model) => model.id).sort() };
 }

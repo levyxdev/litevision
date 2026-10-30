@@ -1,3 +1,5 @@
+import { modelNotesMaxLength } from "../config.ts";
+
 /**
  * The settings page: one self-contained HTML document (no external assets) talking to the settings JSON API.
  * Every API call carries the one-time token from the page's own URL. Data is only ever inserted as text.
@@ -33,8 +35,11 @@ export function renderPage(nonce: string): string {
   .row + .row { margin-top: 10px; }
   .grow { flex: 1 1 220px; min-width: 0; }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-  input, select, button { font: inherit; border-radius: 7px; }
-  input, select { width: 100%; padding: 7px 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  input, select, textarea, button { font: inherit; border-radius: 7px; }
+  input, select, textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  textarea { resize: vertical; min-height: 60px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: #fff; }
+  .counter { font-size: 12px; color: var(--muted); text-align: right; }
   button { padding: 7px 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; white-space: nowrap; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.danger { color: var(--danger); }
@@ -75,7 +80,29 @@ export function renderPage(nonce: string): string {
 
   <section id="models">
     <h2>Models</h2>
-    <p class="muted">Choosing Models, Aliases and Model Notes will appear here.</p>
+    <p class="muted">Your Agent picks a Model by its Alias. Model Notes tell it what each Model is good or bad at.</p>
+    <div id="model-list"><p class="muted">Loading…</p></div>
+
+    <form id="add-model" class="card" autocomplete="off">
+      <h3>Add a Model</h3>
+      <div class="row">
+        <div class="grow"><label for="model-provider">Provider</label><select id="model-provider" required></select></div>
+        <div class="grow"><label for="model-protocol">Protocol</label><select id="model-protocol" required></select></div>
+      </div>
+      <div class="row">
+        <div class="grow"><label for="model-id">Model id</label><input id="model-id" required spellcheck="false" list="model-ids" placeholder="gpt-image-1"></div>
+        <button id="fetch-models" type="button">Fetch model list</button>
+      </div>
+      <datalist id="model-ids"></datalist>
+      <div id="fetch-result" class="result"></div>
+      <div class="row">
+        <div class="grow"><label for="model-alias">Alias</label><input id="model-alias" required spellcheck="false" placeholder="gpt-image-cheap"></div>
+      </div>
+      <div class="row">
+        <div class="grow"><label for="model-notes">Model Notes</label><textarea id="model-notes" maxlength="${modelNotesMaxLength}" placeholder="photoreal, cheap, bad at Chinese text"></textarea></div>
+      </div>
+      <div class="row"><button class="primary" type="submit">Add Model</button></div>
+    </form>
   </section>
 
   <section id="history">
@@ -89,6 +116,9 @@ export function renderPage(nonce: string): string {
 "use strict";
 const token = new URLSearchParams(location.search).get("token") || "";
 let presets = [];
+let protocols = [];
+let providerIds = [];
+const notesMax = ${modelNotesMaxLength};
 
 async function api(method, path, body) {
   const init = { method, headers: { "x-litevision-token": token } };
@@ -219,6 +249,134 @@ async function loadProviders() {
   list.replaceChildren(...(providers.length === 0
     ? [el("p", { className: "muted", textContent: "No Providers yet. Add one below." })]
     : providers.map(providerCard)));
+  providerIds = providers.map((p) => p.id);
+  const select = document.getElementById("model-provider");
+  const chosen = select.value;
+  select.replaceChildren(...options(providerIds, chosen));
+  select.onchange();
+  // Model cards list the Providers too.
+  await loadModels();
+}
+
+function options(values, selected) {
+  return values.map((value) => el("option", { value, textContent: value, selected: value === selected }));
+}
+
+/** A textarea for Model Notes with a live character count. */
+function notesField(value) {
+  const textarea = el("textarea", { value, maxLength: notesMax, placeholder: "photoreal, cheap, bad at Chinese text" });
+  const counter = el("div", { className: "counter" });
+  const update = () => (counter.textContent = textarea.value.length + " / " + notesMax);
+  textarea.oninput = update;
+  update();
+  return { textarea, wrapper: el("div", { className: "grow" }, el("label", { textContent: "Model Notes" }), textarea, counter) };
+}
+
+function labelled(text, control) {
+  return el("div", { className: "grow" }, el("label", { textContent: text }), control);
+}
+
+function modelCard(model) {
+  const alias = el("input", { value: model.alias, spellcheck: false });
+  const provider = el("select", {}, ...options(providerIds.includes(model.provider) ? providerIds : [model.provider, ...providerIds], model.provider));
+  const modelId = el("input", { value: model.modelId, spellcheck: false });
+  const protocol = el("select", {}, ...options(protocols.includes(model.protocol) ? protocols : [model.protocol, ...protocols], model.protocol));
+  const notes = notesField(model.notes);
+  const path = "/api/models/" + encodeURIComponent(model.alias);
+
+  const save = el("button", { type: "button", className: "primary", textContent: "Save" });
+  save.onclick = () => act(save, async () => {
+    await api("PATCH", path, { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value, notes: notes.textarea.value });
+    await loadModels();
+  }, "Model saved.");
+
+  const makeDefault = el("button", { type: "button", textContent: "Make default" });
+  makeDefault.onclick = () => act(makeDefault, async () => {
+    await api("PUT", "/api/default-image-model", { alias: model.alias });
+    await loadModels();
+  }, model.alias + " is now the default image Model.");
+
+  const remove = el("button", { type: "button", className: "danger", textContent: "Remove Model" });
+  remove.onclick = () => {
+    if (!confirm("Remove the Model " + model.alias + "?")) return;
+    act(remove, async () => {
+      await api("DELETE", path);
+      await loadModels();
+    }, "Model removed.");
+  };
+
+  return el("div", { className: "card" },
+    el("div", { className: "row" }, el("h3", { className: "grow", textContent: model.alias }),
+      model.default ? el("span", { className: "badge", textContent: "Default" }) : makeDefault),
+    el("div", { className: "row" }, labelled("Alias", alias), labelled("Provider", provider)),
+    el("div", { className: "row" }, labelled("Model id", modelId), labelled("Protocol", protocol)),
+    el("div", { className: "row" }, notes.wrapper),
+    el("div", { className: "row" }, save, remove),
+  );
+}
+
+async function loadModels() {
+  const list = document.getElementById("model-list");
+  const { models } = await api("GET", "/api/models");
+  list.replaceChildren(...(models.length === 0
+    ? [el("p", { className: "muted", textContent: providerIds.length === 0 ? "Add a Provider first, then add its Models below." : "No Models yet. Add one below." })]
+    : models.map(modelCard)));
+}
+
+function setUpAddModelForm() {
+  const provider = document.getElementById("model-provider");
+  const protocol = document.getElementById("model-protocol");
+  const modelId = document.getElementById("model-id");
+  const alias = document.getElementById("model-alias");
+  const notes = document.getElementById("model-notes");
+  const fetchButton = document.getElementById("fetch-models");
+  const fetchResult = document.getElementById("fetch-result");
+  const ids = document.getElementById("model-ids");
+  protocol.replaceChildren(...options(protocols));
+
+  // Suggest the Protocol a preset Provider's Models usually speak; the User can still change it.
+  provider.onchange = () => {
+    const suggested = presets.find((p) => p.id === provider.value);
+    if (suggested && protocols.includes(suggested.protocol)) protocol.value = suggested.protocol;
+    ids.replaceChildren();
+    fetchResult.textContent = "";
+  };
+  protocol.onchange = () => ids.replaceChildren();
+
+  fetchButton.onclick = () => act(fetchButton, async () => {
+    fetchResult.textContent = "Fetching…";
+    fetchResult.className = "result";
+    const outcome = await api("POST", "/api/providers/" + encodeURIComponent(provider.value) + "/model-ids", { protocol: protocol.value });
+    if (outcome.result === "success") {
+      ids.replaceChildren(...outcome.modelIds.map((id) => el("option", { value: id })));
+      fetchResult.textContent = outcome.modelIds.length + " model id(s) found. Pick one in the Model id field, or type your own.";
+      fetchResult.className = "result success";
+      modelId.focus();
+    } else {
+      fetchResult.textContent = outcome.message;
+      fetchResult.className = "result " + outcome.result;
+    }
+  });
+
+  // Until the User types their own Alias, suggest the model id.
+  let aliasEdited = false;
+  alias.oninput = () => (aliasEdited = alias.value !== "");
+  modelId.oninput = () => {
+    if (!aliasEdited) alias.value = modelId.value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 64);
+  };
+
+  const form = document.getElementById("add-model");
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const body = { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value };
+    if (notes.value.trim() !== "") body.notes = notes.value;
+    act(form.querySelector("button[type=submit]"), async () => {
+      await api("POST", "/api/models", body);
+      modelId.value = alias.value = notes.value = "";
+      aliasEdited = false;
+      await loadModels();
+    }, "Model added.");
+  };
 }
 
 function setUpAddForm() {
@@ -254,10 +412,14 @@ function setUpAddForm() {
 (async () => {
   try {
     ({ presets } = await api("GET", "/api/presets"));
+    ({ protocols } = await api("GET", "/api/protocols"));
     setUpAddForm();
+    setUpAddModelForm();
     await loadProviders();
   } catch (error) {
-    document.getElementById("provider-list").replaceChildren(el("p", { className: "muted", textContent: error.message }));
+    for (const id of ["provider-list", "model-list"]) {
+      document.getElementById(id).replaceChildren(el("p", { className: "muted", textContent: error.message }));
+    }
   }
 })();
 </script>

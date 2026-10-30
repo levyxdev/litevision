@@ -8,11 +8,15 @@ export const providerSchema = z.object({
   baseUrl: z.string().url(),
 });
 
-const modelSchema = z.object({
+/** Model Notes stay short so `list_models` costs the Agent little context. */
+export const modelNotesMaxLength = 300;
+
+export const modelSchema = z.object({
   alias: z.string().min(1),
   provider: z.string().min(1),
   modelId: z.string().min(1),
   protocol: z.string().min(1),
+  notes: z.string().optional(),
 });
 
 const configSchema = z.object({
@@ -31,7 +35,7 @@ export type Config = z.infer<typeof configSchema>;
 export class ConfigError extends Error {}
 
 /** A configuration problem only the User can fix, in the settings page. */
-function needsSettings(problem: string): ConfigError {
+export function needsSettings(problem: string): ConfigError {
   return new ConfigError(
     `${problem} Call \`open_settings\` so the User can fix this in their browser. Never ask the User for an API key or any other Credential in the conversation.`,
   );
@@ -74,6 +78,12 @@ export async function requireCredential(dirs: Dirs, provider: Provider): Promise
 export interface ResolvedModel {
   model: Model;
   provider: Provider;
+}
+
+/** The default image Model's Alias, when one is set and that Model exists. */
+export function defaultModelAlias(config: Config): string | undefined {
+  const wanted = config.defaultImageModel;
+  return config.models.some((model) => model.alias === wanted) ? wanted : undefined;
 }
 
 /** Picks the Model for a Job: the named Alias, else the default image Model. */

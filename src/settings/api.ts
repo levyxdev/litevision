@@ -2,7 +2,18 @@ import type { IncomingMessage } from "node:http";
 import { z } from "zod";
 import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
-import { testConnection } from "./connection.ts";
+import { supportedProtocols } from "../protocols/index.ts";
+import { fetchModelIds, testConnection } from "./connection.ts";
+import {
+  addModel,
+  addModelInput,
+  listModels,
+  removeModel,
+  setDefaultImageModel,
+  setDefaultInput,
+  updateModel,
+  updateModelInput,
+} from "./models.ts";
 import {
   addProvider,
   addProviderInput,
@@ -36,7 +47,7 @@ interface Route {
 
 /**
  * The settings JSON API. Every route sits behind the three checks of ADR 0001.
- * Areas added later (Models, Job history) add their routes here.
+ * Areas added later (Job history) add their routes here.
  */
 const routes: Route[] = [
   {
@@ -83,13 +94,56 @@ const routes: Route[] = [
     method: "POST",
     path: "/api/providers/:id/test-connection",
     handler: async ({ dirs, http, params, body }) => {
-      const { protocol } = parse(testConnectionInput, body);
+      const { protocol } = parse(protocolInput, body);
       return { body: await testConnection(dirs, http, params.id!, protocol) };
     },
   },
+  {
+    method: "POST",
+    path: "/api/providers/:id/model-ids",
+    handler: async ({ dirs, http, params, body }) => {
+      const { protocol } = parse(protocolInput, body);
+      return { body: await fetchModelIds(dirs, http, params.id!, protocol) };
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/protocols",
+    handler: async () => ({ body: { protocols: supportedProtocols } }),
+  },
+  {
+    method: "GET",
+    path: "/api/models",
+    handler: async ({ dirs }) => ({ body: await listModels(dirs) }),
+  },
+  {
+    method: "POST",
+    path: "/api/models",
+    handler: async ({ dirs, body }) => ({ status: 201, body: { model: await addModel(dirs, parse(addModelInput, body)) } }),
+  },
+  {
+    method: "PATCH",
+    path: "/api/models/:alias",
+    handler: async ({ dirs, params, body }) => ({
+      body: { model: await updateModel(dirs, params.alias!, parse(updateModelInput, body)) },
+    }),
+  },
+  {
+    method: "DELETE",
+    path: "/api/models/:alias",
+    handler: async ({ dirs, params }) => {
+      await removeModel(dirs, params.alias!);
+      return undefined;
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/default-image-model",
+    handler: async ({ dirs, body }) => ({ body: await setDefaultImageModel(dirs, parse(setDefaultInput, body).alias) }),
+  },
 ];
 
-const testConnectionInput = z.object({ protocol: z.string().trim().min(1, "Choose a Protocol to test with.") });
+const protocolInput = z.object({ protocol: z.string().trim().min(1, "Choose a Protocol.") });
 
 export function matchRoute(method: string, pathname: string): { handler: Route["handler"]; params: Record<string, string> } | undefined {
   const segments = pathname.split("/");

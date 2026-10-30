@@ -94,6 +94,9 @@ export interface ConnectionResult {
   message: string;
 }
 
+/** A Provider's model list, for the settings page. A failure message is plain language and never contains the Credential. */
+export type ModelIdsResult = { ok: true; modelIds: string[] } | { ok: false; message: string };
+
 /** The code that speaks one Protocol (ADR 0002). */
 export interface ProtocolAdapter {
   /** What a Model with this model id can do. Unknown model ids get the Protocol's most common capabilities. */
@@ -104,7 +107,11 @@ export interface ProtocolAdapter {
   /**
    * Checks that a Provider's base URL and Credential work with this Protocol, for the settings page's
    * "test connection". Optional: the page reports "not supported yet" for a Protocol without it.
-   * Provider-level calls the settings page needs later (such as listing Models) sit alongside it.
    */
   testConnection?(target: ProviderTarget, http: HttpTransport): Promise<ConnectionResult>;
+  /**
+   * The model ids a Provider offers through this Protocol, for picking Models in the settings page.
+   * Optional: without it, the User types the model id.
+   */
+  listModelIds?(target: ProviderTarget, http: HttpTransport): Promise<ModelIdsResult>;
 }

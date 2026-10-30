@@ -1,11 +1,11 @@
 import { resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { ConfigError, loadConfig, requireCredential, resolveModel } from "./config.ts";
+import { ConfigError, defaultModelAlias, loadConfig, needsSettings, requireCredential, resolveModel, type Model } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, runJob } from "./jobs.ts";
-import { normaliseImageRequest } from "./protocols/capabilities.ts";
+import { describeCapabilities, modelCapabilities, normaliseImageRequest } from "./protocols/capabilities.ts";
 import { adapterFor } from "./protocols/index.ts";
 import { aspectRatios, formatSize } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
@@ -26,12 +26,47 @@ export interface ServerDeps {
 
 export const instructions = `litevision generates images through Models the User has configured with their own Providers.
 
-- Use the Model the User names (pass its Alias as \`model\`); otherwise omit \`model\` to use the default image Model.
+- Use the Model the User names (pass its Alias as \`model\`).
+- When the User names none, omit \`model\` to use the default image Model, unless the request needs something the default lacks (e.g. legible Chinese text, reference images, an aspect ratio). Then call \`list_models\` and choose by each Model's capabilities and Model Notes.
 - Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
 - \`generate_image\` returns file paths, not image data. Tell the User where the files are.
 - Ask for an aspect ratio, not pixel sizes. If the Model does not support it, the closest supported one is used; when the result says it was adjusted, tell the User the actual size.
 - If \`generate_image\` says a Model cannot do something (reference images, that many images), the error lists what the Model supports: choose another Model or change the request.
 - Pass \`output_path\` when the images belong in the User's project (e.g. its assets folder); otherwise omit it.`;
+
+/** One Model as `list_models` reports it, as structured output and as a line of text. */
+function listedModel(model: Model, isDefault: boolean) {
+  const base = {
+    alias: model.alias,
+    provider: model.provider,
+    protocol: model.protocol,
+    model_id: model.modelId,
+    default: isDefault,
+    notes: model.notes ?? "",
+  };
+  const heading = `${model.alias}${isDefault ? " (default)" : ""}: ${model.modelId} on ${model.provider} via ${model.protocol}.`;
+  const notes = model.notes ? ` Notes: ${model.notes}` : "";
+
+  let capabilities;
+  try {
+    capabilities = modelCapabilities(model);
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    return { output: { ...base, capabilities: null, problem: error.message }, text: `${heading} Cannot be used: ${error.message}${notes}` };
+  }
+  return {
+    output: {
+      ...base,
+      capabilities: {
+        aspect_ratios: capabilities.sizes.map((size) => ({ aspect_ratio: size.aspectRatio, size: formatSize(size) })),
+        reference_images: capabilities.maxReferences > 0,
+        max_reference_images: capabilities.maxReferences,
+        max_images_per_job: capabilities.maxImages,
+      },
+    },
+    text: `${heading} Supports ${describeCapabilities(capabilities)}${notes}`,
+  };
+}
 
 function toolError(text: string) {
   return { content: [{ type: "text" as const, text }], isError: true };
@@ -121,6 +156,54 @@ export function createServer(deps: ServerDeps): McpServer {
       } catch (error) {
         if (error instanceof ConfigError) return toolError(error.message);
         if (error instanceof JobFailedError) return toolError(`Job ${error.jobId} failed: ${error.message}`);
+        throw error;
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_models",
+    {
+      description:
+        "List the User's configured image Models: Alias, Provider, Protocol, capabilities and Model Notes, and which one is the default. Use it to choose a Model when the request needs something the default may lack.",
+      inputSchema: {},
+      outputSchema: {
+        default_model: z.string().nullable().describe("Alias of the default image Model, used when `generate_image` gets no `model`."),
+        models: z.array(
+          z.object({
+            alias: z.string(),
+            provider: z.string(),
+            protocol: z.string(),
+            model_id: z.string().describe("The Provider's own name for the model."),
+            default: z.boolean(),
+            notes: z.string().describe("Model Notes: what the Model is good or bad at, agreed with the User."),
+            capabilities: z
+              .object({
+                aspect_ratios: z.array(z.object({ aspect_ratio: z.enum(aspectRatios), size: z.string() })),
+                reference_images: z.boolean(),
+                max_reference_images: z.number(),
+                max_images_per_job: z.number(),
+              })
+              .nullable()
+              .describe("Null when the Model cannot be used; `problem` then says why."),
+            problem: z.string().optional(),
+          }),
+        ),
+      },
+    },
+    async () => {
+      try {
+        const config = await loadConfig(deps.dirs);
+        if (config.models.length === 0) throw needsSettings("litevision has no image Model configured yet.");
+        const defaultModel = defaultModelAlias(config) ?? null;
+        const entries = config.models.map((model) => listedModel(model, model.alias === defaultModel));
+        const text = entries.map((entry) => entry.text).join("\n");
+        return {
+          content: [{ type: "text", text }],
+          structuredContent: { default_model: defaultModel, models: entries.map((entry) => entry.output) },
+        };
+      } catch (error) {
+        if (error instanceof ConfigError) return toolError(error.message);
         throw error;
       }
     },
