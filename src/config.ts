@@ -11,12 +11,28 @@ export const providerSchema = z.object({
 /** Model Notes stay short so `list_models` costs the Agent little context. */
 export const modelNotesMaxLength = 300;
 
+/** Who changed Model Notes: the User (in the settings page) or the Agent (with `update_model_notes`). */
+export const notesAuthors = ["User", "Agent"] as const;
+export type NotesAuthor = (typeof notesAuthors)[number];
+
+/** The last change to a Model's Notes, and the one previous version it replaced. */
+export const notesHistorySchema = z.object({
+  changedBy: z.enum(notesAuthors),
+  /** ISO 8601. */
+  changedAt: z.string(),
+  /** The Model Notes before the last change; `""` when there were none. Absent when there is nothing to undo to. */
+  previous: z.string().optional(),
+});
+
+export type NotesHistory = z.infer<typeof notesHistorySchema>;
+
 export const modelSchema = z.object({
   alias: z.string().min(1),
   provider: z.string().min(1),
   modelId: z.string().min(1),
   protocol: z.string().min(1),
   notes: z.string().optional(),
+  notesHistory: notesHistorySchema.optional(),
 });
 
 const configSchema = z.object({

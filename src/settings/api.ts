@@ -12,6 +12,7 @@ import {
   removeModel,
   setDefaultImageModel,
   setDefaultInput,
+  undoModelNotes,
   updateModel,
   updateModelInput,
 } from "./models.ts";
@@ -34,6 +35,7 @@ export interface RouteContext {
   body: unknown;
   dirs: Dirs;
   http: HttpTransport;
+  now: () => Date;
 }
 
 /** `undefined` answers 204 No Content. */
@@ -94,10 +96,10 @@ const routes: Route[] = [
   {
     method: "POST",
     path: "/api/providers/:id/test-connection",
-    handler: async ({ dirs, http, params, body }) => {
+    handler: async ({ dirs, http, now, params, body }) => {
       const { protocol } = parse(protocolInput, body);
       const result = await testConnection(dirs, http, params.id!, protocol);
-      if (result.result === "success") await refreshProviderModelInfo(infoDeps(dirs, http), params.id!, protocol);
+      if (result.result === "success") await refreshProviderModelInfo(infoDeps(dirs, http, now), params.id!, protocol);
       return { body: result };
     },
   },
@@ -122,20 +124,25 @@ const routes: Route[] = [
   {
     method: "POST",
     path: "/api/models",
-    handler: async ({ dirs, http, body }) => {
-      const model = await addModel(dirs, parse(addModelInput, body));
-      await refreshModelInfo(infoDeps(dirs, http), model.alias);
+    handler: async ({ dirs, http, now, body }) => {
+      const model = await addModel(dirs, parse(addModelInput, body), now());
+      await refreshModelInfo(infoDeps(dirs, http, now), model.alias);
       return { status: 201, body: { model } };
     },
   },
   {
     method: "PATCH",
     path: "/api/models/:alias",
-    handler: async ({ dirs, http, params, body }) => {
-      const model = await updateModel(dirs, params.alias!, parse(updateModelInput, body));
-      await refreshModelInfo(infoDeps(dirs, http), model.alias);
+    handler: async ({ dirs, http, now, params, body }) => {
+      const model = await updateModel(dirs, params.alias!, parse(updateModelInput, body), now());
+      await refreshModelInfo(infoDeps(dirs, http, now), model.alias);
       return { body: { model } };
     },
+  },
+  {
+    method: "POST",
+    path: "/api/models/:alias/notes/undo",
+    handler: async ({ dirs, now, params }) => ({ body: { model: await undoModelNotes(dirs, params.alias!, now()) } }),
   },
   {
     method: "DELETE",
@@ -153,8 +160,8 @@ const routes: Route[] = [
 ];
 
 /** Adding or changing a Model, or a successful "test connection", asks the Provider again about its Models (ADR 0004). */
-function infoDeps(dirs: Dirs, http: HttpTransport): ModelInfoDeps {
-  return { dirs, http, now: () => new Date() };
+function infoDeps(dirs: Dirs, http: HttpTransport, now: () => Date): ModelInfoDeps {
+  return { dirs, http, now };
 }
 
 const protocolInput = z.object({ protocol: z.string().trim().min(1, "Choose a Protocol.") });

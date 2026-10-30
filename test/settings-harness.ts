@@ -10,6 +10,8 @@ export interface SettingsHarnessOptions extends TempDirsOptions {
   routes?: Routes;
   /** Defaults to a minute, so only idle-shutdown tests need to think about it. */
   idleMs?: number;
+  /** The clock the settings server records changes with, e.g. who changed Model Notes when. */
+  now?: () => Date;
 }
 
 /**
@@ -61,7 +63,7 @@ export interface SettingsHarness {
 export async function startSettingsHarness(options: SettingsHarnessOptions = {}): Promise<SettingsHarness> {
   const { root, dirs } = await makeTempDirs(options);
   const { http, requests } = recordedTransport(options.routes);
-  const server = await startSettingsServer({ dirs, http, idleMs: options.idleMs ?? 60_000 });
+  const server = await startSettingsServer({ dirs, http, idleMs: options.idleMs ?? 60_000, now: options.now });
   const token = new URL(server.url).searchParams.get("token") ?? "";
   const { host } = new URL(server.origin);
 

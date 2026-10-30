@@ -5,7 +5,9 @@ import {
   ConfigError,
   defaultModelAlias,
   loadConfig,
+  modelNotesMaxLength,
   needsSettings,
+  notesAuthors,
   requireCredential,
   resolveModel,
   type Config,
@@ -16,6 +18,7 @@ import { knownGoodOptions, readJobs } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, runJob } from "./jobs.ts";
 import { modelInfo, type ModelInfoDeps } from "./model-info.ts";
+import { updateNotesAsAgent } from "./model-notes.ts";
 import { describeCapabilities, normaliseImageRequest } from "./protocols/capabilities.ts";
 import { adapterFor } from "./protocols/index.ts";
 import { aspectRatios, formatSize } from "./protocols/protocol.ts";
@@ -45,7 +48,8 @@ export const instructions = `litevision generates images through Models the User
 - If \`generate_image\` says a Model cannot do something (reference images, that many images), the error lists what the Model supports: choose another Model or change the request.
 - Pass \`output_path\` when the images belong in the User's project (e.g. its assets folder); otherwise omit it.
 - For Provider-specific \`provider_options\`, call \`list_models\` with \`model\` first: it gives the Model's docs link, the Provider's parameter schema when it publishes one, and options that already worked for this Model. litevision passes \`provider_options\` through unchecked; if the Provider rejects one, its error says why, so fix it and try again.
-- If fewer images came back than you asked for, the result says why. Tell the User.`;
+- If fewer images came back than you asked for, the result says why. Tell the User.
+- Model Notes say what each Model is good or bad at. When the User learns something worth keeping, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
 
 /** The structured form of one Model in `list_models`. */
 const listedModelSchema = z.object({
@@ -264,9 +268,52 @@ export function createServer(deps: ServerDeps): McpServer {
     },
   );
 
+  server.registerTool(
+    "update_model_notes",
+    {
+      description: `Replace a Model's Notes with new text, whole: never append. Call it only after showing the User the old and new Model Notes and getting their agreement. At most ${modelNotesMaxLength} characters. The previous version is kept, and the User can undo the change in the settings page.`,
+      inputSchema: {
+        model: z.string().min(1).describe("Alias of the Model."),
+        notes: z
+          .string()
+          .describe(`The complete new Model Notes the User agreed to, at most ${modelNotesMaxLength} characters. An empty string clears them.`),
+      },
+      outputSchema: {
+        model: z.string(),
+        notes: z.string().describe("The Model Notes now."),
+        previous_notes: z.string().describe("The Model Notes before this call."),
+        changed: z.boolean().describe("False when the text was already the Model Notes, so nothing was recorded."),
+        changed_by: z.enum(notesAuthors).nullable().describe("Who made the last change."),
+        changed_at: z.string().nullable().describe("When the last change was made, ISO 8601."),
+      },
+    },
+    async ({ model, notes }) => {
+      try {
+        const change = await updateNotesAsAgent(deps.dirs, model, notes, now());
+        const output = {
+          model,
+          notes: change.notes,
+          previous_notes: change.previous,
+          changed: change.changed,
+          changed_by: change.history?.changedBy ?? null,
+          changed_at: change.history?.changedAt ?? null,
+        };
+        const summary = change.changed
+          ? `Replaced the Model Notes of ${model}. The User can undo this in the settings page.`
+          : `The Model Notes of ${model} already were this text; nothing changed.`;
+        const text = `${summary}\nBefore: ${change.previous || "(none)"}\nNow: ${change.notes || "(none)"}`;
+        return { content: [{ type: "text", text }], structuredContent: output };
+      } catch (error) {
+        if (error instanceof ConfigError) return toolError(error.message);
+        throw error;
+      }
+    },
+  );
+
   const settings = settingsOpener({
     dirs: deps.dirs,
     http: deps.http,
+    now,
     idleMs: deps.settingsIdleMs ?? defaultSettingsIdleMs,
     openBrowser: deps.openBrowser ?? openInBrowser,
   });

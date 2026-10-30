@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { modelNotesMaxLength, modelSchema } from "../config.ts";
+import { modelNotesMaxLength, modelSchema, type NotesHistory } from "../config.ts";
 import { isPlainObject, readConfigObject, updateConfig, type ConfigObject } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
+import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { SettingsError, shortName } from "./providers.ts";
 
@@ -12,13 +13,15 @@ export interface ModelView {
   modelId: string;
   protocol: string;
   notes: string;
+  /** Who changed the Model Notes last and when, and the previous version to undo to. Absent until they first change. */
+  notesHistory?: NotesHistory;
   /** True for the default image Model. */
   default: boolean;
 }
 
 const alias = shortName("An Alias");
 
-const notes = z.string().trim().max(modelNotesMaxLength, `Model Notes are at most ${modelNotesMaxLength} characters.`);
+const notes = z.string().trim().max(modelNotesMaxLength, notesTooLong);
 
 export const addModelInput = z.object({
   alias,
@@ -48,20 +51,27 @@ async function getModel(dirs: Dirs, wanted: string): Promise<ModelView> {
   return model;
 }
 
-export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>): Promise<ModelView> {
+/** Model Notes written with a new Model are the User's, with no previous version to undo to. */
+export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>, at: Date): Promise<ModelView> {
   await updateConfig(dirs, (config) => {
     const models = modelsOf(config);
     requireFreeAlias(models, input.alias);
     requireProvider(config, input.provider);
     const stored: StoredModel = { alias: input.alias, provider: input.provider, modelId: input.modelId, protocol: input.protocol };
-    if (input.notes) stored.notes = input.notes;
+    if (input.notes) {
+      stored.notes = input.notes;
+      stored.notesHistory = { changedBy: "User", changedAt: at.toISOString() };
+    }
     config.models = [...models, stored];
   });
   return getModel(dirs, input.alias);
 }
 
-/** Changes any of a Model's fields. Renaming the default image Model keeps it the default. */
-export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typeof updateModelInput>): Promise<ModelView> {
+/**
+ * Changes any of a Model's fields. Renaming the default image Model keeps it the default.
+ * Changed Model Notes are recorded as the User's, keeping the previous version.
+ */
+export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typeof updateModelInput>, at: Date): Promise<ModelView> {
   await updateConfig(dirs, (config) => {
     const models = modelsOf(config);
     const model = models.find((candidate) => candidate.alias === wanted);
@@ -77,12 +87,19 @@ export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typ
     }
     if (input.modelId !== undefined) model.modelId = input.modelId;
     if (input.protocol !== undefined) model.protocol = input.protocol;
-    if (input.notes !== undefined) {
-      if (input.notes === "") delete model.notes;
-      else model.notes = input.notes;
-    }
+    if (input.notes !== undefined) replaceNotes(model, input.notes, "User", at);
   });
   return getModel(dirs, input.alias ?? wanted);
+}
+
+/** Swaps a Model's Notes with their previous version, as a change by the User; a second undo redoes. */
+export async function undoModelNotes(dirs: Dirs, wanted: string, at: Date): Promise<ModelView> {
+  await updateConfig(dirs, (config) => {
+    const model = modelsOf(config).find((candidate) => candidate.alias === wanted);
+    if (model === undefined) throw notFound(wanted);
+    if (!undoNotes(model, at)) throw new SettingsError(409, `The Model Notes of "${wanted}" have no previous version to undo to.`);
+  });
+  return getModel(dirs, wanted);
 }
 
 /** Removes a Model; if it was the default image Model, no default is left. */
@@ -138,6 +155,7 @@ function view(model: StoredModel, defaultImageModel: string | null): ModelView {
     modelId: model.modelId,
     protocol: model.protocol,
     notes: model.notes ?? "",
+    ...(model.notesHistory && { notesHistory: model.notesHistory }),
     default: model.alias === defaultImageModel,
   };
 }
