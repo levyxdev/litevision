@@ -1,0 +1,3 @@
+# Protocol belongs to the Model, not the Provider
+
+A Provider is just a base URL and a Credential. Each Model declares its own Protocol. One Provider can serve different Models in different wire formats: a relay might expose `gpt-image-1` through OpenAI's images API and a Gemini image model through `generateContent`. An endpoint that looks OpenAI-compatible can also behave differently. APIMart's `/v1/images/generations` uses OpenAI's path but returns a task id to poll, and its result URLs expire after 24 hours. Protocols are therefore defined by how they behave, not by the path they use. A per-Provider protocol would force Users to register the same account twice to reach Models that speak different formats.
