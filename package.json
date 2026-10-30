@@ -1,0 +1,26 @@
+{
+  "name": "litevision",
+  "version": "0.0.0",
+  "description": "Let an AI agent generate images and videos through models you already pay for.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "litevision": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "bun@1.4.4",
+  "scripts": {
+    "build": "bun build src/cli.ts --target node --outfile dist/cli.js",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}
