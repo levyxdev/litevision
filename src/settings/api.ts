@@ -11,6 +11,7 @@ import {
   removeModel,
   setDefaultImageModel,
   setDefaultInput,
+  undoModelNotes,
   updateModel,
   updateModelInput,
 } from "./models.ts";
@@ -33,6 +34,7 @@ export interface RouteContext {
   body: unknown;
   dirs: Dirs;
   http: HttpTransport;
+  now: () => Date;
 }
 
 /** `undefined` answers 204 No Content. */
@@ -119,14 +121,19 @@ const routes: Route[] = [
   {
     method: "POST",
     path: "/api/models",
-    handler: async ({ dirs, body }) => ({ status: 201, body: { model: await addModel(dirs, parse(addModelInput, body)) } }),
+    handler: async ({ dirs, now, body }) => ({ status: 201, body: { model: await addModel(dirs, parse(addModelInput, body), now()) } }),
   },
   {
     method: "PATCH",
     path: "/api/models/:alias",
-    handler: async ({ dirs, params, body }) => ({
-      body: { model: await updateModel(dirs, params.alias!, parse(updateModelInput, body)) },
+    handler: async ({ dirs, now, params, body }) => ({
+      body: { model: await updateModel(dirs, params.alias!, parse(updateModelInput, body), now()) },
     }),
+  },
+  {
+    method: "POST",
+    path: "/api/models/:alias/notes/undo",
+    handler: async ({ dirs, now, params }) => ({ body: { model: await undoModelNotes(dirs, params.alias!, now()) } }),
   },
   {
     method: "DELETE",

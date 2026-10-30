@@ -40,6 +40,7 @@ export function renderPage(nonce: string): string {
   textarea { resize: vertical; min-height: 60px; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: #fff; }
   .counter { font-size: 12px; color: var(--muted); text-align: right; }
+  .notes-history { font-size: 13px; }
   button { padding: 7px 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; white-space: nowrap; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.danger { color: var(--danger); }
@@ -272,6 +273,24 @@ function notesField(value) {
   return { textarea, wrapper: el("div", { className: "grow" }, el("label", { textContent: "Model Notes" }), textarea, counter) };
 }
 
+/** "Last changed by the Agent, 30 Oct 2026, 10:00", plus an undo button when there is a previous version. */
+function notesHistoryRow(model, path) {
+  const history = model.notesHistory;
+  if (!history) return [];
+  const who = history.changedBy === "Agent" ? "your Agent" : "you";
+  const when = new Date(history.changedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const parts = [el("span", { className: "grow muted", textContent: "Model Notes last changed by " + who + ", " + when + "." })];
+  if (history.previous !== undefined) {
+    const undo = el("button", { type: "button", textContent: "Undo", title: "Back to: " + (history.previous || "(no Model Notes)") });
+    undo.onclick = () => act(undo, async () => {
+      await api("POST", path + "/notes/undo");
+      await loadModels();
+    }, "Model Notes restored. Undo again to redo.");
+    parts.push(undo);
+  }
+  return [el("div", { className: "row notes-history" }, ...parts)];
+}
+
 function labelled(text, control) {
   return el("div", { className: "grow" }, el("label", { textContent: text }), control);
 }
@@ -311,6 +330,7 @@ function modelCard(model) {
     el("div", { className: "row" }, labelled("Alias", alias), labelled("Provider", provider)),
     el("div", { className: "row" }, labelled("Model id", modelId), labelled("Protocol", protocol)),
     el("div", { className: "row" }, notes.wrapper),
+    ...notesHistoryRow(model, path),
     el("div", { className: "row" }, save, remove),
   );
 }

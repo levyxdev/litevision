@@ -20,17 +20,28 @@ const withProviders = { config: { providers: [openai, relay] }, credentials: { o
 
 const gptImage = { alias: "gpt-image", provider: "openai", modelId: "gpt-image-1", protocol: "openai-images" };
 
+const firstChange = new Date("2026-10-30T10:00:00.000Z");
+const secondChange = new Date("2026-10-30T11:30:00.000Z");
+
+/** A clock the test moves forward by hand. */
+function clock(start: Date) {
+  let current = start;
+  return { now: () => current, set: (next: Date) => (current = next) };
+}
+
 describe("Models", () => {
   test("adding a Model writes it to config.json and lists it", async () => {
-    const h = await start(withProviders);
+    const h = await start({ ...withProviders, now: () => firstChange });
     const response = await h.send("POST", "/api/models", { body: { ...gptImage, notes: "photoreal, good at text" } });
 
+    // Model Notes written with the Model are the User's, with no previous version to undo to.
+    const notes = { notes: "photoreal, good at text", notesHistory: { changedBy: "User", changedAt: firstChange.toISOString() } };
     expect(response.status).toBe(201);
-    expect(response.json()).toEqual({ model: { ...gptImage, notes: "photoreal, good at text", default: false } });
-    expect((await h.readConfig()).models).toEqual([{ ...gptImage, notes: "photoreal, good at text" }]);
+    expect(response.json()).toEqual({ model: { ...gptImage, ...notes, default: false } });
+    expect((await h.readConfig()).models).toEqual([{ ...gptImage, ...notes }]);
 
     expect((await h.send("GET", "/api/models")).json()).toEqual({
-      models: [{ ...gptImage, notes: "photoreal, good at text", default: false }],
+      models: [{ ...gptImage, ...notes, default: false }],
       defaultImageModel: null,
     });
   });
@@ -88,6 +99,7 @@ describe("Models", () => {
     const other = { ...gptImage, alias: "dalle", modelId: "dall-e-3" };
     const h = await start({
       config: { providers: [openai, relay], models: [{ ...gptImage, extra: "kept" }, other], defaultImageModel: "gpt-image" },
+      now: () => firstChange,
     });
 
     const response = await h.send("PATCH", "/api/models/gpt-image", {
@@ -95,16 +107,17 @@ describe("Models", () => {
     });
     expect(response.status).toBe(200);
     const edited = { alias: "gpt-image-cheap", provider: "relay", modelId: "gpt-image-1-mini", protocol: "openai-images" };
-    expect(response.json()).toEqual({ model: { ...edited, notes: "cheap drafts", default: true } });
+    const notesHistory = { changedBy: "User", changedAt: firstChange.toISOString(), previous: "" };
+    expect(response.json()).toEqual({ model: { ...edited, notes: "cheap drafts", notesHistory, default: true } });
     expect(await h.readConfig()).toEqual({
       providers: [openai, relay],
-      models: [{ ...edited, notes: "cheap drafts", extra: "kept" }, other],
+      models: [{ ...edited, notes: "cheap drafts", notesHistory, extra: "kept" }, other],
       defaultImageModel: "gpt-image-cheap",
     });
 
     // Empty Model Notes are removed rather than stored.
     await h.send("PATCH", "/api/models/gpt-image-cheap", { body: { notes: "  " } });
-    expect((await h.readConfig()).models[0]).toEqual({ ...edited, extra: "kept" });
+    expect((await h.readConfig()).models[0]).toEqual({ ...edited, notesHistory: { ...notesHistory, previous: "cheap drafts" }, extra: "kept" });
 
     expect((await h.send("PATCH", "/api/models/gpt-image-cheap", { body: { alias: "dalle" } })).status).toBe(409);
     expect((await h.send("PATCH", "/api/models/gpt-image-cheap", { body: { provider: "missing" } })).status).toBe(400);
@@ -172,11 +185,90 @@ describe("fetching a Provider's model list", () => {
   });
 });
 
+describe("Model Notes", () => {
+  const withNotes = (notes: string) => ({ config: { providers: [openai, relay], models: [{ ...gptImage, notes }] } });
+  const editNotes = (notes: string, alias = "gpt-image") => harness!.send("PATCH", `/api/models/${alias}`, { body: { notes } });
+  const undo = (alias = "gpt-image") => harness!.send("POST", `/api/models/${alias}/notes/undo`);
+  const listed = async () => (await harness!.send("GET", "/api/models")).json().models[0];
+
+  test("editing Model Notes replaces them, keeps the previous version and records the User and when", async () => {
+    const h = await start({ ...withNotes("photoreal"), now: () => firstChange });
+    const response = await editNotes("photoreal, cheap");
+
+    expect(response.status).toBe(200);
+    const notesHistory = { changedBy: "User", changedAt: firstChange.toISOString(), previous: "photoreal" };
+    expect(response.json().model).toMatchObject({ notes: "photoreal, cheap", notesHistory });
+    expect((await h.readConfig()).models[0]).toEqual({ ...gptImage, notes: "photoreal, cheap", notesHistory });
+    expect(await listed()).toMatchObject({ notes: "photoreal, cheap", notesHistory });
+  });
+
+  test("saving a Model without changing its Model Notes records no change", async () => {
+    const time = clock(firstChange);
+    const h = await start({ ...withNotes("photoreal"), now: time.now });
+    await editNotes("cartoonish");
+    time.set(secondChange);
+
+    // The page sends every field on save, Model Notes included.
+    await h.send("PATCH", "/api/models/gpt-image", { body: { ...gptImage, provider: "relay", notes: "cartoonish" } });
+    expect((await h.readConfig()).models[0].notesHistory).toEqual({
+      changedBy: "User",
+      changedAt: firstChange.toISOString(),
+      previous: "photoreal",
+    });
+  });
+
+  test("undo swaps the current and previous Model Notes as a User change, and a second undo redoes", async () => {
+    const time = clock(firstChange);
+    const h = await start({ ...withNotes("photoreal"), now: time.now });
+    await editNotes("cartoonish");
+
+    time.set(secondChange);
+    const undone = await undo();
+    expect(undone.status).toBe(200);
+    const afterUndo = { changedBy: "User", changedAt: secondChange.toISOString(), previous: "cartoonish" };
+    expect(undone.json().model).toMatchObject({ notes: "photoreal", notesHistory: afterUndo });
+    expect((await h.readConfig()).models[0]).toEqual({ ...gptImage, notes: "photoreal", notesHistory: afterUndo });
+
+    const redone = await undo();
+    expect(redone.json().model).toMatchObject({
+      notes: "cartoonish",
+      notesHistory: { changedBy: "User", changedAt: secondChange.toISOString(), previous: "photoreal" },
+    });
+  });
+
+  test("undo restores empty Model Notes when there were none before", async () => {
+    const h = await start({ config: { providers: [openai], models: [gptImage] } });
+    await editNotes("photoreal");
+    await undo();
+    expect((await h.readConfig()).models[0].notes).toBeUndefined();
+    expect(await listed()).toMatchObject({ notes: "", notesHistory: { previous: "photoreal" } });
+  });
+
+  test("undo is refused when there is no previous version, and for an unknown Model", async () => {
+    const h = await start(withNotes("photoreal"));
+    const response = await undo();
+    expect(response.status).toBe(409);
+    expect(response.json().error).toContain("no previous");
+    expect((await h.readConfig()).models[0]).toEqual({ ...gptImage, notes: "photoreal" });
+
+    expect((await undo("missing")).status).toBe(404);
+  });
+
+  test("over-long Model Notes are rejected on edit", async () => {
+    const h = await start(withNotes("photoreal"));
+    const response = await editNotes("x".repeat(301));
+    expect(response.status).toBe(400);
+    expect(response.json().error).toContain("at most 300 characters");
+    expect((await h.readConfig()).models[0]).toEqual({ ...gptImage, notes: "photoreal" });
+  });
+});
+
 describe("Models area", () => {
   test("the settings page has a Models area", async () => {
     const h = await start();
     const page = await h.send("GET", "/");
     expect(page.text).toContain('id="model-list"');
     expect(page.text).toContain('id="add-model"');
+    expect(page.text).toContain("/notes/undo");
   });
 });

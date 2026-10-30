@@ -14,6 +14,8 @@ export interface SettingsServerOptions {
   http: HttpTransport;
   /** The server shuts itself down after this long without an accepted request. */
   idleMs: number;
+  /** Timestamps changes, such as who changed Model Notes when. Defaults to the system clock. */
+  now?: () => Date;
 }
 
 export interface SettingsServer {
@@ -34,6 +36,7 @@ export const defaultSettingsIdleMs = 15 * 60 * 1000;
 /** Starts the settings page on 127.0.0.1 on a random port (ADR 0001). */
 export async function startSettingsServer(options: SettingsServerOptions): Promise<SettingsServer> {
   const token = randomBytes(32).toString("base64url");
+  const now = options.now ?? (() => new Date());
   let host = "";
   let origin = "";
 
@@ -60,7 +63,7 @@ export async function startSettingsServer(options: SettingsServerOptions): Promi
       const route = matchRoute(request.method ?? "GET", url.pathname);
       if (route === undefined) throw new SettingsError(404, "Not found.");
       const body = request.method === "GET" || request.method === "HEAD" ? undefined : await readJsonBody(request);
-      const result = await route.handler({ params: route.params, body, dirs: options.dirs, http: options.http });
+      const result = await route.handler({ params: route.params, body, dirs: options.dirs, http: options.http, now });
       if (result === undefined) {
         response.writeHead(204, commonHeaders);
         response.end();
