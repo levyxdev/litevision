@@ -20,6 +20,8 @@ export interface HarnessOptions {
 export interface Harness {
   client: Client;
   dirs: Dirs;
+  /** The server's working directory: an empty temporary folder that relative paths resolve against. */
+  cwd: string;
   /** Every request litevision sent to a Provider, in order. */
   requests: Request[];
   close(): Promise<void>;
@@ -32,7 +34,9 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     data: join(root, "data"),
     output: join(root, "outputs"),
   };
+  const cwd = join(root, "cwd");
   await mkdir(dirs.config, { recursive: true });
+  await mkdir(cwd, { recursive: true });
   if (options.config !== undefined) {
     await writeFile(join(dirs.config, "config.json"), JSON.stringify(options.config));
   }
@@ -52,7 +56,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     return route(request);
   };
 
-  const server = createServer({ dirs, http, now: options.now });
+  const server = createServer({ dirs, http, now: options.now, cwd });
   const client = new Client({ name: "test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -60,6 +64,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   return {
     client,
     dirs,
+    cwd,
     requests,
     async close() {
       await client.close();

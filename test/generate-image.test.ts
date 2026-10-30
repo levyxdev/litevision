@@ -88,7 +88,7 @@ describe("generate_image", () => {
 
     const [request] = harness.requests;
     expect(request!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
-    expect(await request!.json()).toEqual({ model: "gpt-image-1", prompt: "a red fox", n: 1 });
+    expect(await request!.json()).toEqual({ model: "gpt-image-1", prompt: "a red fox", n: 1, size: "1024x1024" });
   });
 
   test("uses the default image Model when model is omitted", async () => {
@@ -132,7 +132,13 @@ describe("generate_image", () => {
         protocol: "openai-images",
         modelId: "gpt-image-1",
         prompt: "a red fox",
-        parameters: { n: 1 },
+        parameters: {
+          n: 1,
+          aspectRatio: "1:1",
+          size: { aspectRatio: "1:1", width: 1024, height: 1024 },
+          references: [],
+          providerOptions: {},
+        },
         durationMs: 2500,
         files: output.files,
         outcome: "completed",
@@ -151,7 +157,7 @@ describe("generate_image", () => {
 
     const history = await readHistory(harness);
     expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({ outcome: "failed", files: [], error: { kind: "other" } });
+    expect(history[0]).toMatchObject({ outcome: "failed", files: [], error: { kind: "auth" } });
     expect(JSON.stringify(history)).not.toContain(apiKey);
   });
 

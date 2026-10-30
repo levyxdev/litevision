@@ -3,11 +3,14 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
+import { imageTypeOf } from "./images.ts";
 import type { HttpTransport } from "./http.ts";
+import type { NormalisedRequest } from "./protocols/capabilities.ts";
 import {
   ProviderError,
+  type AspectRatio,
   type GeneratedImage,
-  type ImageRequest,
+  type ImageSize,
   type ProtocolAdapter,
   type ProviderErrorKind,
 } from "./protocols/protocol.ts";
@@ -21,7 +24,9 @@ export interface JobRunnerDeps {
 export interface JobSpec extends ResolvedModel {
   adapter: ProtocolAdapter;
   credential: string;
-  request: ImageRequest;
+  normalised: NormalisedRequest;
+  /** Absolute folder to save into; omitted, images go under a dated folder in `dirs.output`. */
+  outputDir?: string;
 }
 
 export interface CompletedJob {
@@ -40,6 +45,20 @@ export class JobFailedError extends Error {
   }
 }
 
+/** The `generate_image` parameters of a Job, as recorded in the Job history. */
+export interface JobParameters {
+  n: number;
+  /** What the Agent asked for. */
+  aspectRatio: AspectRatio;
+  /** What was actually requested from the Provider. */
+  size: ImageSize;
+  /** Absolute paths of the reference images. */
+  references: string[];
+  /** Absolute folder the Agent asked to save into, when it gave one. */
+  outputPath?: string;
+  providerOptions: Record<string, unknown>;
+}
+
 /** One line of `jobs.jsonl`. */
 export interface JobRecord {
   type: "job";
@@ -50,7 +69,7 @@ export interface JobRecord {
   protocol: string;
   modelId: string;
   prompt: string;
-  parameters: { n: number };
+  parameters: JobParameters;
   durationMs: number;
   files: string[];
   outcome: "completed" | "failed";
@@ -60,6 +79,7 @@ export interface JobRecord {
 /** Submits a Job, waits for it, saves its images and records it in the Job history. */
 export async function runJob(deps: JobRunnerDeps, spec: JobSpec): Promise<CompletedJob> {
   const id = randomUUID();
+  const { request } = spec.normalised;
   const startedAt = deps.now();
   const target = {
     providerId: spec.provider.id,
@@ -75,8 +95,15 @@ export async function runJob(deps: JobRunnerDeps, spec: JobSpec): Promise<Comple
     provider: spec.provider.id,
     protocol: spec.model.protocol,
     modelId: spec.model.modelId,
-    prompt: spec.request.prompt,
-    parameters: { n: spec.request.n },
+    prompt: request.prompt,
+    parameters: {
+      n: request.n,
+      aspectRatio: spec.normalised.requestedAspectRatio,
+      size: request.size,
+      references: request.references.map((reference) => reference.path),
+      ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
+      providerOptions: request.providerOptions,
+    },
     durationMs: deps.now().getTime() - startedAt.getTime(),
     files,
     outcome,
@@ -84,9 +111,10 @@ export async function runJob(deps: JobRunnerDeps, spec: JobSpec): Promise<Comple
   });
 
   try {
-    const submitted = await spec.adapter.submit(spec.request, target, deps.http);
+    const submitted = await spec.adapter.submit(request, target, deps.http);
     const images = await submitted.wait();
-    const files = await saveImages(deps, id, startedAt, images, spec.provider.id);
+    const folder = spec.outputDir ?? join(deps.dirs.output, localDate(startedAt));
+    const files = await saveImages(deps.http, folder, id, startedAt, images, spec.provider.id);
     await appendHistory(deps.dirs, record("completed", files));
     return { id, files };
   } catch (error) {
@@ -103,20 +131,20 @@ function redact(text: string, credential: string): string {
 }
 
 async function saveImages(
-  deps: JobRunnerDeps,
+  http: HttpTransport,
+  folder: string,
   jobId: string,
   startedAt: Date,
   images: GeneratedImage[],
   providerId: string,
 ): Promise<string[]> {
-  const folder = join(deps.dirs.output, localDate(startedAt));
   await mkdir(folder, { recursive: true });
   const base = `${localTime(startedAt)}-${jobId.slice(0, 8)}`;
   const files: string[] = [];
   for (const [index, image] of images.entries()) {
-    const bytes = "bytes" in image ? image.bytes : await download(deps.http, image.url, providerId);
+    const bytes = "bytes" in image ? image.bytes : await download(http, image.url, providerId);
     const suffix = images.length === 1 ? "" : `-${index + 1}`;
-    const file = join(folder, `${base}${suffix}.${extensionOf(bytes)}`);
+    const file = join(folder, `${base}${suffix}.${imageTypeOf(bytes)?.extension ?? "bin"}`);
     await writeFile(file, bytes);
     files.push(file);
   }
@@ -131,15 +159,6 @@ async function download(http: HttpTransport, url: string, providerId: string): P
     throw new ProviderError("other", `Downloading a result from Provider "${providerId}" failed with HTTP ${response.status}.`);
   }
   return new Uint8Array(await response.arrayBuffer());
-}
-
-function extensionOf(bytes: Uint8Array): string {
-  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
-  if (bytes[0] === 0x89 && ascii(1, 4) === "PNG") return "png";
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
-  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "webp";
-  if (ascii(0, 4) === "GIF8") return "gif";
-  return "bin";
 }
 
 async function appendHistory(dirs: Dirs, record: JobRecord): Promise<void> {

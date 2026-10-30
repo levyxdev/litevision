@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "Rate limit reached for gpt-image-1 in organization org-abc123 on images per minute (IPM): Limit 5, Used 5, Requested 1. Please try again in 12s. Visit https://platform.openai.com/account/rate-limits to learn more.",
+    "type": "requests",
+    "param": null,
+    "code": "rate_limit_exceeded"
+  }
+}
