@@ -29,7 +29,7 @@ export const addModelInput = z.object({
   modelId: z.string().trim().min(1, "Enter a model id.").max(200, "A model id is at most 200 characters."),
   protocol: z
     .string()
-    .refine((value) => supportedProtocols.includes(value), `Choose a supported Protocol: ${supportedProtocols.join(", ")}.`),
+    .refine((value) => supportedProtocols().includes(value), { error: () => `Choose a supported Protocol: ${supportedProtocols().join(", ")}.` }),
   notes: notes.optional(),
 });
 

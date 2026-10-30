@@ -1,19 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
+import { appendHistory, type JobRecord } from "./history.ts";
 import { imageTypeOf } from "./images.ts";
 import type { HttpTransport } from "./http.ts";
 import type { NormalisedRequest } from "./protocols/capabilities.ts";
-import {
-  ProviderError,
-  type AspectRatio,
-  type GeneratedImage,
-  type ImageSize,
-  type ProtocolAdapter,
-  type ProviderErrorKind,
-} from "./protocols/protocol.ts";
+import { providerError, providerLabel } from "./protocols/errors.ts";
+import { ProviderError, type GeneratedImage, type ProtocolAdapter, type ProviderErrorKind } from "./protocols/protocol.ts";
 
 export interface JobRunnerDeps {
   dirs: Dirs;
@@ -32,6 +27,8 @@ export interface JobSpec extends ResolvedModel {
 export interface CompletedJob {
   id: string;
   files: string[];
+  /** Why fewer files than requested were saved; omitted when none are missing. Safe to show the Agent. */
+  shortfall?: string;
 }
 
 /** A Job that did not complete. Its message is safe to show the Agent. */
@@ -45,37 +42,6 @@ export class JobFailedError extends Error {
   }
 }
 
-/** The `generate_image` parameters of a Job, as recorded in the Job history. */
-export interface JobParameters {
-  n: number;
-  /** What the Agent asked for. */
-  aspectRatio: AspectRatio;
-  /** What was actually requested from the Provider. */
-  size: ImageSize;
-  /** Absolute paths of the reference images. */
-  references: string[];
-  /** Absolute folder the Agent asked to save into, when it gave one. */
-  outputPath?: string;
-  providerOptions: Record<string, unknown>;
-}
-
-/** One line of `jobs.jsonl`. */
-export interface JobRecord {
-  type: "job";
-  id: string;
-  createdAt: string;
-  model: string;
-  provider: string;
-  protocol: string;
-  modelId: string;
-  prompt: string;
-  parameters: JobParameters;
-  durationMs: number;
-  files: string[];
-  outcome: "completed" | "failed";
-  error?: { kind: ProviderErrorKind; message: string };
-}
-
 /** Submits a Job, waits for it, saves its images and records it in the Job history. */
 export async function runJob(deps: JobRunnerDeps, spec: JobSpec): Promise<CompletedJob> {
   const id = randomUUID();
@@ -87,7 +53,11 @@ export async function runJob(deps: JobRunnerDeps, spec: JobSpec): Promise<Comple
     modelId: spec.model.modelId,
     credential: spec.credential,
   };
-  const record = (outcome: JobRecord["outcome"], files: string[], error?: JobRecord["error"]): JobRecord => ({
+  const record = (
+    outcome: JobRecord["outcome"],
+    files: string[],
+    problem: { shortfall?: string; error?: JobRecord["error"] } = {},
+  ): JobRecord => ({
     type: "job",
     id,
     createdAt: startedAt.toISOString(),
@@ -107,21 +77,33 @@ export async function runJob(deps: JobRunnerDeps, spec: JobSpec): Promise<Comple
     durationMs: deps.now().getTime() - startedAt.getTime(),
     files,
     outcome,
-    ...(error === undefined ? {} : { error }),
+    ...(problem.shortfall === undefined ? {} : { shortfall: problem.shortfall }),
+    ...(problem.error === undefined ? {} : { error: problem.error }),
   });
+  // A Provider may echo the Credential back in an error; it must never reach the Agent or the history.
+  const safe = (text: string) => redact(text, spec.credential);
 
   try {
     const submitted = await spec.adapter.submit(request, target, deps.http);
-    const images = await submitted.wait();
+    const result = await submitted.wait();
     const folder = spec.outputDir ?? join(deps.dirs.output, localDate(startedAt));
-    const files = await saveImages(deps.http, folder, id, startedAt, images, spec.provider.id);
-    await appendHistory(deps.dirs, record("completed", files));
-    return { id, files };
+    const saved = await saveImages(deps.http, folder, id, startedAt, result.images, spec.provider.id);
+    const reasons = [result.shortfall, ...saved.failures.map((failure) => failure.message)].filter((reason) => reason !== undefined);
+    if (saved.files.length === 0) {
+      throw saved.failures[0] ?? providerError("other", spec.provider.id, reasons[0] ?? "it returned no images.");
+    }
+    const shortfall =
+      saved.files.length >= request.n
+        ? undefined
+        : safe(
+            `Got ${saved.files.length} of ${request.n} images from ${providerLabel(spec.provider.id)}.${reasons.length === 0 ? "" : ` ${reasons.join(" ")}`}`,
+          );
+    await appendHistory(deps.dirs, record("completed", saved.files, { shortfall }));
+    return { id, files: saved.files, ...(shortfall === undefined ? {} : { shortfall }) };
   } catch (error) {
     const kind = error instanceof ProviderError ? error.kind : "other";
-    // A Provider may echo the Credential back in an error; it must never reach the Agent or the history.
-    const message = redact((error as Error).message, spec.credential);
-    await appendHistory(deps.dirs, record("failed", [], { kind, message }));
+    const message = safe((error as Error).message);
+    await appendHistory(deps.dirs, record("failed", [], { error: { kind, message } }));
     throw new JobFailedError(id, kind, message);
   }
 }
@@ -137,18 +119,27 @@ async function saveImages(
   startedAt: Date,
   images: GeneratedImage[],
   providerId: string,
-): Promise<string[]> {
+): Promise<{ files: string[]; failures: ProviderError[] }> {
   await mkdir(folder, { recursive: true });
   const base = `${localTime(startedAt)}-${jobId.slice(0, 8)}`;
   const files: string[] = [];
+  const failures: ProviderError[] = [];
   for (const [index, image] of images.entries()) {
-    const bytes = "bytes" in image ? image.bytes : await download(http, image.url, providerId);
+    let bytes: Uint8Array;
+    try {
+      bytes = "bytes" in image ? image.bytes : await download(http, image.url, providerId);
+    } catch (error) {
+      // One lost download should not cost the images that did arrive.
+      if (!(error instanceof ProviderError)) throw error;
+      failures.push(error);
+      continue;
+    }
     const suffix = images.length === 1 ? "" : `-${index + 1}`;
     const file = join(folder, `${base}${suffix}.${imageTypeOf(bytes)?.extension ?? "bin"}`);
     await writeFile(file, bytes);
     files.push(file);
   }
-  return files;
+  return { files, failures };
 }
 
 async function download(http: HttpTransport, url: string, providerId: string): Promise<Uint8Array> {
@@ -159,11 +150,6 @@ async function download(http: HttpTransport, url: string, providerId: string): P
     throw new ProviderError("other", `Downloading a result from Provider "${providerId}" failed with HTTP ${response.status}.`);
   }
   return new Uint8Array(await response.arrayBuffer());
-}
-
-async function appendHistory(dirs: Dirs, record: JobRecord): Promise<void> {
-  await mkdir(dirs.data, { recursive: true });
-  await appendFile(join(dirs.data, "jobs.jsonl"), `${JSON.stringify(record)}\n`);
 }
 
 const pad = (value: number) => String(value).padStart(2, "0");

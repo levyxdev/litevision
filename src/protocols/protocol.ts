@@ -64,9 +64,16 @@ export interface ModelTarget {
 /** One result image: either its bytes, or a link the Job runner downloads straight away. */
 export type GeneratedImage = { bytes: Uint8Array } | { url: string };
 
+/** What a Job brought back. Fewer images than requested is still a result, as long as there is at least one. */
+export interface JobImages {
+  images: GeneratedImage[];
+  /** Why fewer images than requested came back, in plain language naming the Provider; omitted when none are missing. */
+  shortfall?: string;
+}
+
 /** A Job a Provider has accepted. Synchronous Protocols resolve `wait` immediately. */
 export interface SubmittedJob {
-  wait(): Promise<GeneratedImage[]>;
+  wait(): Promise<JobImages>;
 }
 
 export type ProviderErrorKind = "auth" | "balance" | "refusal" | "rate_limit" | "unsupported" | "other";
@@ -97,10 +104,28 @@ export interface ConnectionResult {
 /** A Provider's model list, for the settings page. A failure message is plain language and never contains the Credential. */
 export type ModelIdsResult = { ok: true; modelIds: string[] } | { ok: false; message: string };
 
+/** What a Provider itself reports about one of its Models. */
+export interface ProviderModelInfo {
+  /** Omitted when the Provider describes the Model's parameters but not in terms litevision can map. */
+  capabilities?: ImageCapabilities;
+  /** The Provider's own description of the Model's request parameters (usually JSON Schema), shown to the Agent as is. */
+  parameterSchema?: unknown;
+}
+
 /** The code that speaks one Protocol (ADR 0002). */
 export interface ProtocolAdapter {
-  /** What a Model with this model id can do. Unknown model ids get the Protocol's most common capabilities. */
-  capabilities(modelId: string): ImageCapabilities;
+  /**
+   * What a Model with this model id can do, from the adapter's own table: used whenever the Provider cannot be asked
+   * (ADR 0004). Unknown model ids get the Protocol's most common capabilities.
+   */
+  builtInCapabilities(modelId: string): ImageCapabilities;
+  /**
+   * Asks the Provider what one Model can do. Optional: without it, `builtInCapabilities` always apply.
+   * Resolves to undefined when the Provider knows nothing about the model id; a failure is thrown.
+   */
+  fetchModelInfo?(target: ModelTarget, http: HttpTransport): Promise<ProviderModelInfo | undefined>;
+  /** Where the Agent can read which `provider_options` a Model accepts. */
+  docsUrl(modelId: string): string;
   /** Request fields the adapter sets itself; `provider_options` may not set them. */
   reservedOptions: readonly string[];
   submit(request: ImageRequest, target: ModelTarget, http: HttpTransport): Promise<SubmittedJob>;

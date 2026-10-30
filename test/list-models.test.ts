@@ -38,6 +38,7 @@ describe("list_models", () => {
           model_id: "gpt-image-1",
           default: true,
           notes: "photoreal, legible text",
+          docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           capabilities: {
             aspect_ratios: [
               { aspect_ratio: "1:1", size: "1024x1024" },
@@ -56,6 +57,7 @@ describe("list_models", () => {
           model_id: "dall-e-3",
           default: false,
           notes: "",
+          docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           capabilities: {
             aspect_ratios: [
               { aspect_ratio: "1:1", size: "1024x1024" },
