@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { run, usage } from "../src/cli.ts";
+import { parseCommand, usage } from "../src/cli.ts";
 
-describe("run", () => {
-  test("prints usage with no command", () => {
-    expect(run([])).toEqual({ code: 0, output: usage });
+describe("parseCommand", () => {
+  test("starts the MCP server with no command", () => {
+    expect(parseCommand([])).toEqual({ kind: "serve" });
+  });
+
+  test("prints usage for --help", () => {
+    expect(parseCommand(["--help"])).toEqual({ kind: "exit", code: 0, output: usage });
   });
 
   test("rejects an unknown command", () => {
-    const result = run(["nope"]);
-    expect(result.code).toBe(1);
-    expect(result.output).toContain("Unknown command: nope");
+    const result = parseCommand(["nope"]);
+    expect(result).toMatchObject({ kind: "exit", code: 1 });
+    expect(result.kind === "exit" && result.output).toContain("Unknown command: nope");
   });
 });
