@@ -82,12 +82,16 @@ function buildRequest(request: ImageRequest, target: ModelTarget): { url: string
 
 /** OpenAI's images API: synchronous, results as base64 or links. */
 export const openaiImages: ProtocolAdapter = {
-  capabilities(modelId) {
+  builtInCapabilities(modelId) {
     if (modelId.startsWith("dall-e-3")) return dalle3;
     if (modelId.startsWith("dall-e-2")) return dalle2;
     // gpt-image-1 and its successors; also the safest guess for a relay's own model names.
     return gptImage;
   },
+
+  // OpenAI's `/models` says nothing about image sizes or limits, so there is no `fetchModelInfo`.
+
+  docsUrl: () => "https://platform.openai.com/docs/api-reference/images/create",
 
   reservedOptions: ["model", "prompt", "n", "size", "image", "image[]"],
 
@@ -115,7 +119,7 @@ export const openaiImages: ProtocolAdapter = {
       if (item.url !== undefined) return { url: item.url };
       throw providerError("other", target.providerId, "it returned an image with neither data nor a link.");
     });
-    return { wait: async () => images };
+    return { wait: async () => ({ images }) };
   },
 
   async testConnection(target, http) {
