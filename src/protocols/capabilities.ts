@@ -1,6 +1,5 @@
 import { ConfigError, type Model } from "../config.ts";
 import { readReferences } from "../images.ts";
-import { adapterFor } from "./index.ts";
 import { formatSize, type AspectRatio, type ImageCapabilities, type ImageRequest, type ImageSize, type ProtocolAdapter } from "./protocol.ts";
 
 /** The `generate_image` parameters, before they are checked against a Model's capabilities. */
@@ -18,11 +17,6 @@ export interface NormalisedRequest {
   requestedAspectRatio: AspectRatio;
   /** True when the Model does not support the requested aspect ratio and the closest one was used instead. */
   aspectRatioAdjusted: boolean;
-}
-
-/** What a configured Model can do; also what `list_models` reports. */
-export function modelCapabilities(model: Model): ImageCapabilities {
-  return adapterFor(model).capabilities(model.modelId);
 }
 
 /** One sentence describing a Model's capabilities, for errors and tool output. */
@@ -53,16 +47,16 @@ function ratioOf(aspectRatio: AspectRatio): number {
 }
 
 /**
- * Checks `generate_image` parameters against a Model's capabilities and turns them into an ImageRequest.
- * Everything that would fail here fails before any Provider request.
+ * Checks `generate_image` parameters against a Model's capabilities (see `modelInfo`) and turns them into an
+ * ImageRequest. Everything that would fail here fails before any Provider request.
  */
 export async function normaliseImageRequest(
   parameters: ImageParameters,
   model: Model,
   adapter: ProtocolAdapter,
+  capabilities: ImageCapabilities,
   cwd: string,
 ): Promise<NormalisedRequest> {
-  const capabilities = adapter.capabilities(model.modelId);
   const unsupported = (problem: string) =>
     new ConfigError(`${problem} Model "${model.alias}" supports: ${describeCapabilities(capabilities)} Choose another Model or change the request.`);
 

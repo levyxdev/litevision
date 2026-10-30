@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { z } from "zod";
 import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
+import { refreshModelInfo, refreshProviderModelInfo, type ModelInfoDeps } from "../model-info.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { fetchModelIds, testConnection } from "./connection.ts";
 import {
@@ -95,7 +96,9 @@ const routes: Route[] = [
     path: "/api/providers/:id/test-connection",
     handler: async ({ dirs, http, params, body }) => {
       const { protocol } = parse(protocolInput, body);
-      return { body: await testConnection(dirs, http, params.id!, protocol) };
+      const result = await testConnection(dirs, http, params.id!, protocol);
+      if (result.result === "success") await refreshProviderModelInfo(infoDeps(dirs, http), params.id!, protocol);
+      return { body: result };
     },
   },
   {
@@ -109,7 +112,7 @@ const routes: Route[] = [
   {
     method: "GET",
     path: "/api/protocols",
-    handler: async () => ({ body: { protocols: supportedProtocols } }),
+    handler: async () => ({ body: { protocols: supportedProtocols() } }),
   },
   {
     method: "GET",
@@ -119,14 +122,20 @@ const routes: Route[] = [
   {
     method: "POST",
     path: "/api/models",
-    handler: async ({ dirs, body }) => ({ status: 201, body: { model: await addModel(dirs, parse(addModelInput, body)) } }),
+    handler: async ({ dirs, http, body }) => {
+      const model = await addModel(dirs, parse(addModelInput, body));
+      await refreshModelInfo(infoDeps(dirs, http), model.alias);
+      return { status: 201, body: { model } };
+    },
   },
   {
     method: "PATCH",
     path: "/api/models/:alias",
-    handler: async ({ dirs, params, body }) => ({
-      body: { model: await updateModel(dirs, params.alias!, parse(updateModelInput, body)) },
-    }),
+    handler: async ({ dirs, http, params, body }) => {
+      const model = await updateModel(dirs, params.alias!, parse(updateModelInput, body));
+      await refreshModelInfo(infoDeps(dirs, http), model.alias);
+      return { body: { model } };
+    },
   },
   {
     method: "DELETE",
@@ -142,6 +151,11 @@ const routes: Route[] = [
     handler: async ({ dirs, body }) => ({ body: await setDefaultImageModel(dirs, parse(setDefaultInput, body).alias) }),
   },
 ];
+
+/** Adding or changing a Model, or a successful "test connection", asks the Provider again about its Models (ADR 0004). */
+function infoDeps(dirs: Dirs, http: HttpTransport): ModelInfoDeps {
+  return { dirs, http, now: () => new Date() };
+}
 
 const protocolInput = z.object({ protocol: z.string().trim().min(1, "Choose a Protocol.") });
 

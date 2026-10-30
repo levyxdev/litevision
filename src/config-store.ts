@@ -72,7 +72,7 @@ export async function writeFileAtomic(path: string, text: string, mode = 0o644):
 const queues = new Map<string, Promise<unknown>>();
 
 /** Runs read-change-write cycles on one file one at a time within this process. */
-function serialised<T>(path: string, task: () => Promise<T>): Promise<T> {
+export function serialised<T>(path: string, task: () => Promise<T>): Promise<T> {
   const previous = queues.get(path) ?? Promise.resolve();
   const next = previous.then(task);
   const settled = next.catch(() => undefined);

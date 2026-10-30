@@ -1,11 +1,22 @@
 import { resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { ConfigError, defaultModelAlias, loadConfig, needsSettings, requireCredential, resolveModel, type Model } from "./config.ts";
+import {
+  ConfigError,
+  defaultModelAlias,
+  loadConfig,
+  needsSettings,
+  requireCredential,
+  resolveModel,
+  type Config,
+  type Model,
+} from "./config.ts";
 import type { Dirs } from "./dirs.ts";
+import { knownGoodOptions, readJobs } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, runJob } from "./jobs.ts";
-import { describeCapabilities, modelCapabilities, normaliseImageRequest } from "./protocols/capabilities.ts";
+import { modelInfo, type ModelInfoDeps } from "./model-info.ts";
+import { describeCapabilities, normaliseImageRequest } from "./protocols/capabilities.ts";
 import { adapterFor } from "./protocols/index.ts";
 import { aspectRatios, formatSize } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
@@ -32,10 +43,41 @@ export const instructions = `litevision generates images through Models the User
 - \`generate_image\` returns file paths, not image data. Tell the User where the files are.
 - Ask for an aspect ratio, not pixel sizes. If the Model does not support it, the closest supported one is used; when the result says it was adjusted, tell the User the actual size.
 - If \`generate_image\` says a Model cannot do something (reference images, that many images), the error lists what the Model supports: choose another Model or change the request.
-- Pass \`output_path\` when the images belong in the User's project (e.g. its assets folder); otherwise omit it.`;
+- Pass \`output_path\` when the images belong in the User's project (e.g. its assets folder); otherwise omit it.
+- For Provider-specific \`provider_options\`, call \`list_models\` with \`model\` first: it gives the Model's docs link, the Provider's parameter schema when it publishes one, and options that already worked for this Model. litevision passes \`provider_options\` through unchecked; if the Provider rejects one, its error says why, so fix it and try again.
+- If fewer images came back than you asked for, the result says why. Tell the User.`;
 
-/** One Model as `list_models` reports it, as structured output and as a line of text. */
-function listedModel(model: Model, isDefault: boolean) {
+/** The structured form of one Model in `list_models`. */
+const listedModelSchema = z.object({
+  alias: z.string(),
+  provider: z.string(),
+  protocol: z.string(),
+  model_id: z.string().describe("The Provider's own name for the model."),
+  default: z.boolean(),
+  notes: z.string().describe("Model Notes: what the Model is good or bad at, agreed with the User."),
+  capabilities: z
+    .object({
+      aspect_ratios: z.array(z.object({ aspect_ratio: z.enum(aspectRatios), size: z.string() })),
+      reference_images: z.boolean(),
+      max_reference_images: z.number(),
+      max_images_per_job: z.number(),
+    })
+    .nullable()
+    .describe("Null when the Model cannot be used; `problem` then says why."),
+  docs_url: z.string().nullable().describe("Where to read which `provider_options` this Model accepts."),
+  problem: z.string().optional(),
+  parameter_schema: z
+    .unknown()
+    .optional()
+    .describe("Only with `model`: the Provider's own description of the Model's parameters, when it publishes one."),
+  known_good_options: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe("Only with `model`: `provider_options` that completed Jobs on this Model have sent, with the latest value of each."),
+});
+
+/** One Model as `list_models` reports it, as structured output and as a line of text; `detailed` adds what only `model` asks for. */
+async function listedModel(deps: ModelInfoDeps, config: Config, model: Model, isDefault: boolean, detailed: boolean) {
   const base = {
     alias: model.alias,
     provider: model.provider,
@@ -47,25 +89,40 @@ function listedModel(model: Model, isDefault: boolean) {
   const heading = `${model.alias}${isDefault ? " (default)" : ""}: ${model.modelId} on ${model.provider} via ${model.protocol}.`;
   const notes = model.notes ? ` Notes: ${model.notes}` : "";
 
-  let capabilities;
+  let info;
   try {
-    capabilities = modelCapabilities(model);
+    const provider = config.providers.find((candidate) => candidate.id === model.provider);
+    if (provider === undefined) throw needsSettings(`Model "${model.alias}" refers to Provider "${model.provider}", which is not configured.`);
+    info = await modelInfo(deps, { model, provider });
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
-    return { output: { ...base, capabilities: null, problem: error.message }, text: `${heading} Cannot be used: ${error.message}${notes}` };
+    return {
+      output: { ...base, capabilities: null, docs_url: null, problem: error.message },
+      text: `${heading} Cannot be used: ${error.message}${notes}`,
+    };
   }
-  return {
-    output: {
-      ...base,
-      capabilities: {
-        aspect_ratios: capabilities.sizes.map((size) => ({ aspect_ratio: size.aspectRatio, size: formatSize(size) })),
-        reference_images: capabilities.maxReferences > 0,
-        max_reference_images: capabilities.maxReferences,
-        max_images_per_job: capabilities.maxImages,
-      },
+  const { capabilities } = info;
+  const output: z.infer<typeof listedModelSchema> = {
+    ...base,
+    capabilities: {
+      aspect_ratios: capabilities.sizes.map((size) => ({ aspect_ratio: size.aspectRatio, size: formatSize(size) })),
+      reference_images: capabilities.maxReferences > 0,
+      max_reference_images: capabilities.maxReferences,
+      max_images_per_job: capabilities.maxImages,
     },
-    text: `${heading} Supports ${describeCapabilities(capabilities)}${notes}`,
+    docs_url: info.docsUrl,
   };
+  let text = `${heading} Supports ${describeCapabilities(capabilities)}${notes} provider_options: ${info.docsUrl}`;
+  if (detailed) {
+    const knownGood = knownGoodOptions(await readJobs(deps.dirs), { provider: model.provider, protocol: model.protocol, modelId: model.modelId });
+    output.known_good_options = knownGood;
+    text += `\nKnown-good provider_options: ${Object.keys(knownGood).length === 0 ? "none recorded yet" : JSON.stringify(knownGood)}`;
+    if (info.parameterSchema !== undefined) {
+      output.parameter_schema = info.parameterSchema;
+      text += `\nParameter schema from the Provider: ${JSON.stringify(info.parameterSchema)}`;
+    }
+  }
+  return { output, text };
 }
 
 function toolError(text: string) {
@@ -76,6 +133,7 @@ export function createServer(deps: ServerDeps): McpServer {
   const server = new McpServer({ name: "litevision", version: "0.0.0" }, { instructions });
   const now = deps.now ?? (() => new Date());
   const cwd = deps.cwd ?? process.cwd();
+  const infoDeps: ModelInfoDeps = { dirs: deps.dirs, http: deps.http, now };
 
   server.registerTool(
     "generate_image",
@@ -118,6 +176,7 @@ export function createServer(deps: ServerDeps): McpServer {
         aspect_ratio_adjusted: z
           .boolean()
           .describe("True when the Model does not support the requested aspect ratio and the closest one was used."),
+        shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
       },
     },
     async ({ prompt, model: alias, n, aspect_ratio, references, output_path, provider_options }) => {
@@ -126,10 +185,12 @@ export function createServer(deps: ServerDeps): McpServer {
         const { model } = resolved;
         const adapter = adapterFor(model);
         const credential = await requireCredential(deps.dirs, resolved.provider);
+        const { capabilities } = await modelInfo(infoDeps, resolved);
         const normalised = await normaliseImageRequest(
           { prompt, n, aspectRatio: aspect_ratio, references, providerOptions: provider_options },
           model,
           adapter,
+          capabilities,
           cwd,
         );
 
@@ -147,11 +208,13 @@ export function createServer(deps: ServerDeps): McpServer {
           size: formatSize(size),
           requested_aspect_ratio: normalised.requestedAspectRatio,
           aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
+          ...(job.shortfall === undefined ? {} : { shortfall: job.shortfall }),
         };
+        const shortfall = job.shortfall === undefined ? "" : ` ${job.shortfall}`;
         const adjustment = normalised.aspectRatioAdjusted
           ? ` ${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.`
           : "";
-        const text = `Saved ${job.files.length} image(s) from ${model.alias} at ${size.aspectRatio} (${formatSize(size)}), Job ${job.id}.${adjustment}\n${job.files.join("\n")}`;
+        const text = `Saved ${job.files.length} image(s) from ${model.alias} at ${size.aspectRatio} (${formatSize(size)}), Job ${job.id}.${adjustment}${shortfall}\n${job.files.join("\n")}`;
         return { content: [{ type: "text", text }], structuredContent: output };
       } catch (error) {
         if (error instanceof ConfigError) return toolError(error.message);
@@ -165,38 +228,30 @@ export function createServer(deps: ServerDeps): McpServer {
     "list_models",
     {
       description:
-        "List the User's configured image Models: Alias, Provider, Protocol, capabilities and Model Notes, and which one is the default. Use it to choose a Model when the request needs something the default may lack.",
-      inputSchema: {},
+        "List the User's configured image Models: Alias, Provider, Protocol, capabilities, Model Notes and a docs link for `provider_options`, and which one is the default. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the Provider's parameter schema and the `provider_options` known to work.",
+      inputSchema: {
+        model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
+      },
       outputSchema: {
         default_model: z.string().nullable().describe("Alias of the default image Model, used when `generate_image` gets no `model`."),
-        models: z.array(
-          z.object({
-            alias: z.string(),
-            provider: z.string(),
-            protocol: z.string(),
-            model_id: z.string().describe("The Provider's own name for the model."),
-            default: z.boolean(),
-            notes: z.string().describe("Model Notes: what the Model is good or bad at, agreed with the User."),
-            capabilities: z
-              .object({
-                aspect_ratios: z.array(z.object({ aspect_ratio: z.enum(aspectRatios), size: z.string() })),
-                reference_images: z.boolean(),
-                max_reference_images: z.number(),
-                max_images_per_job: z.number(),
-              })
-              .nullable()
-              .describe("Null when the Model cannot be used; `problem` then says why."),
-            problem: z.string().optional(),
-          }),
-        ),
+        models: z.array(listedModelSchema),
       },
     },
-    async () => {
+    async ({ model: alias }) => {
       try {
         const config = await loadConfig(deps.dirs);
         if (config.models.length === 0) throw needsSettings("litevision has no image Model configured yet.");
         const defaultModel = defaultModelAlias(config) ?? null;
-        const entries = config.models.map((model) => listedModel(model, model.alias === defaultModel));
+        let models = config.models;
+        if (alias !== undefined) {
+          models = models.filter((model) => model.alias === alias);
+          if (models.length === 0) {
+            throw new ConfigError(`Unknown Model Alias "${alias}". Known Aliases: ${config.models.map((model) => model.alias).join(", ")}.`);
+          }
+        }
+        const entries = await Promise.all(
+          models.map((model) => listedModel(infoDeps, config, model, model.alias === defaultModel, alias !== undefined)),
+        );
         const text = entries.map((entry) => entry.text).join("\n");
         return {
           content: [{ type: "text", text }],
