@@ -1,0 +1,5 @@
+{
+  "id": "generate-image-1761833100001",
+  "images": ["iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="],
+  "timing": { "inferenceDuration": 4120, "inferencePreprocessingTime": 35, "inferenceQueueTime": 210, "total": 4380 }
+}

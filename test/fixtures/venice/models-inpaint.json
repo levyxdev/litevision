@@ -1,0 +1,49 @@
+{
+  "object": "list",
+  "type": "inpaint",
+  "data": [
+    {
+      "created": 1756000000,
+      "id": "nano-banana-pro-edit",
+      "model_spec": {
+        "constraints": {
+          "aspectRatios": ["auto", "1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:3", "4:5"],
+          "promptCharacterLimit": 32768,
+          "combineImages": true,
+          "maxInputImages": 14,
+          "defaultResolution": "1K",
+          "resolutions": ["1K", "2K", "4K"]
+        },
+        "description": "Edits and combines images with Nano Banana Pro.",
+        "name": "Nano Banana Pro Edit",
+        "offline": false,
+        "privacy": "anonymized",
+        "pricing": { "inpaint": { "usd": 0.18, "diem": 0.18 } },
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "inpaint"
+    },
+    {
+      "created": 1745000000,
+      "id": "firered-image-edit",
+      "model_spec": {
+        "constraints": {
+          "aspectRatios": ["auto", "1:1", "16:9", "9:16"],
+          "promptCharacterLimit": 1500,
+          "combineImages": false
+        },
+        "description": "Venice's default single-image edit model.",
+        "name": "FireRed Image Edit",
+        "offline": false,
+        "privacy": "private",
+        "pricing": { "inpaint": { "usd": 0.04, "diem": 0.04 } },
+        "traits": ["default"]
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "inpaint"
+    }
+  ]
+}

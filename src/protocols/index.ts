@@ -1,9 +1,11 @@
 import { ConfigError, type Model } from "../config.ts";
 import { openaiImages } from "./openai-images.ts";
 import type { ProtocolAdapter } from "./protocol.ts";
+import { venice } from "./venice.ts";
 
 const adapters: Record<string, ProtocolAdapter> = {
   "openai-images": openaiImages,
+  venice,
 };
 
 /** The Protocols litevision supports, which a Model may use. */
