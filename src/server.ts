@@ -5,11 +5,18 @@ import type { Dirs } from "./dirs.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, runJob } from "./jobs.ts";
 import { adapterFor } from "./protocols/index.ts";
+import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
+import { settingsOpener } from "./settings/opener.ts";
+import { defaultSettingsIdleMs } from "./settings/server.ts";
 
 export interface ServerDeps {
   dirs: Dirs;
   http: HttpTransport;
   now?: () => Date;
+  /** Opens the settings page for `open_settings`. Defaults to the User's default browser. */
+  openBrowser?: OpenBrowser;
+  /** How long the settings page `open_settings` starts may sit idle before it shuts down. */
+  settingsIdleMs?: number;
 }
 
 export const instructions = `litevision generates images through Models the User has configured with their own Providers.
@@ -60,6 +67,36 @@ export function createServer(deps: ServerDeps): McpServer {
         if (error instanceof JobFailedError) return toolError(`Job ${error.jobId} failed: ${error.message}`);
         throw error;
       }
+    },
+  );
+
+  const settings = settingsOpener({
+    dirs: deps.dirs,
+    http: deps.http,
+    idleMs: deps.settingsIdleMs ?? defaultSettingsIdleMs,
+    openBrowser: deps.openBrowser ?? openInBrowser,
+  });
+  server.server.onclose = () => void settings.close();
+
+  server.registerTool(
+    "open_settings",
+    {
+      description:
+        "Open litevision's settings page in the User's browser, where the User adds Providers, enters Credentials and sets up Models. Call it whenever litevision reports that something is not configured. The User enters Credentials only on that page, never in the conversation.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        await settings.open();
+      } catch {
+        // The page URL carries the one-time token, so it is never given to the Agent.
+        return toolError(
+          "Could not open the User's browser. Ask the User to run `litevision settings` in a terminal, which opens the settings page and prints its address.",
+        );
+      }
+      const text =
+        "Opened the litevision settings page in the User's browser. Ask the User to finish setting up there and tell you when they are done. Never ask the User for a Credential in the conversation.";
+      return { content: [{ type: "text", text }] };
     },
   );
 

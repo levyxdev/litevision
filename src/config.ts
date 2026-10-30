@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { Dirs } from "./dirs.ts";
 
-const providerSchema = z.object({
+export const providerSchema = z.object({
   id: z.string().min(1),
   baseUrl: z.string().url(),
 });
@@ -21,7 +21,7 @@ const configSchema = z.object({
   defaultImageModel: z.string().optional(),
 });
 
-const credentialsSchema = z.record(z.string(), z.object({ apiKey: z.string().min(1) }));
+export const credentialsSchema = z.record(z.string(), z.object({ apiKey: z.string().min(1) }));
 
 export type Provider = z.infer<typeof providerSchema>;
 export type Model = z.infer<typeof modelSchema>;

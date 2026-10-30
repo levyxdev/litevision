@@ -35,7 +35,26 @@ export class ProviderError extends Error {
   }
 }
 
+/** Everything an adapter needs to reach a Provider before any Model is chosen. */
+export interface ProviderTarget {
+  providerId: string;
+  baseUrl: string;
+  credential: string;
+}
+
+/** The outcome of "test connection". Its message is plain language and never contains the Credential. */
+export interface ConnectionResult {
+  ok: boolean;
+  message: string;
+}
+
 /** The code that speaks one Protocol (ADR 0002). */
 export interface ProtocolAdapter {
   submit(request: ImageRequest, target: ModelTarget, http: HttpTransport): Promise<SubmittedJob>;
+  /**
+   * Checks that a Provider's base URL and Credential work with this Protocol, for the settings page's
+   * "test connection". Optional: the page reports "not supported yet" for a Protocol without it.
+   * Provider-level calls the settings page needs later (such as listing Models) sit alongside it.
+   */
+  testConnection?(target: ProviderTarget, http: HttpTransport): Promise<ConnectionResult>;
 }

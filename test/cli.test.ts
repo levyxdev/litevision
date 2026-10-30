@@ -6,6 +6,10 @@ describe("parseCommand", () => {
     expect(parseCommand([])).toEqual({ kind: "serve" });
   });
 
+  test("starts the settings page with `settings`", () => {
+    expect(parseCommand(["settings"])).toEqual({ kind: "settings" });
+  });
+
   test("prints usage for --help", () => {
     expect(parseCommand(["--help"])).toEqual({ kind: "exit", code: 0, output: usage });
   });
