@@ -10,6 +10,7 @@ import {
   type ImageRequest,
   type ImageSize,
   type JobImages,
+  type ModelDescription,
   type ModelIdsResult,
   type ModelTarget,
   type ProtocolAdapter,
@@ -47,6 +48,11 @@ const constraintsSchema = z.object({
   combineImages: z.boolean().optional(),
   maxInputImages: z.number().int().positive().optional(),
 });
+
+type Constraints = z.infer<typeof constraintsSchema>;
+
+/** Pixel-sized models are the ones with a `widthHeightDivisor` above 1; the rest take `aspect_ratio`. */
+const sizingOf = (constraints: Constraints): VeniceModel["sizing"] => ((constraints.widthHeightDivisor ?? 1) > 1 ? "pixels" : "ratio");
 
 const modelListSchema = z.object({
   data: z.array(
@@ -143,8 +149,7 @@ function describeModel(listed: ListedModel, listType: ModelType): VeniceModel {
       constraints: raw,
     };
   }
-  // Pixel-sized models are the ones with a `widthHeightDivisor` above 1; the rest take `aspect_ratio`.
-  if ((constraints.widthHeightDivisor ?? 1) > 1) {
+  if (sizingOf(constraints) === "pixels") {
     return {
       kind: "generate",
       sizing: "pixels",
@@ -187,6 +192,18 @@ async function listModels(
   return { ok: true, models: parsed.data.data };
 }
 
+/**
+ * How to call a model, from what litevision already knows about it rather than another model list request: only edit
+ * models take reference images, and Venice's constraints (the parameter schema) say how to size the rest. Without
+ * them, the built-in guess.
+ */
+function describedModel(described: ModelDescription, modelId: string): Pick<VeniceModel, "kind" | "sizing"> {
+  const kind = described.capabilities.maxReferences > 0 ? "edit" : "generate";
+  const constraints = constraintsSchema.safeParse(described.parameterSchema);
+  if (described.parameterSchema === undefined || !constraints.success) return { kind, sizing: builtInModel(modelId).sizing };
+  return { kind, sizing: sizingOf(constraints.data) };
+}
+
 /** Finds a model in Venice's image and edit model lists; undefined when neither has it. Throws when a list cannot be read. */
 async function lookUpModel(target: ModelTarget, http: HttpTransport): Promise<VeniceModel | undefined> {
   const types: ModelType[] = looksLikeEdit(target.modelId) ? ["inpaint", "image"] : ["image", "inpaint"];
@@ -223,7 +240,7 @@ async function veniceError(response: Response, providerId: string): Promise<Erro
 /** Defaults litevision sets on every request; `provider_options` may override each. Prompts go out verbatim. */
 const sharedDefaults = { safe_mode: false, enhance_prompt: false };
 
-async function generate(request: ImageRequest, target: ModelTarget, model: VeniceModel, http: HttpTransport): Promise<JobImages> {
+async function generate(request: ImageRequest, target: ModelTarget, model: Pick<VeniceModel, "sizing">, http: HttpTransport): Promise<JobImages> {
   const { size } = request;
   const sizing = model.sizing === "pixels" ? { width: size.width, height: size.height } : { aspect_ratio: size.aspectRatio };
   const body = {
@@ -305,8 +322,7 @@ export const venice: ProtocolAdapter = {
   reservedOptions: ["model", "modelId", "prompt", "variants", "return_binary", "width", "height", "aspect_ratio", "image", "images"],
 
   async submit(request, target, http) {
-    // How to size the request depends on the model, which only Venice's model list says; without it, the built-in guess.
-    const model = (await lookUpModel(target, http).catch(() => undefined)) ?? builtInModel(target.modelId);
+    const model = describedModel(request.model, target.modelId);
 
     if (request.references.length > 0) {
       return { wait: () => inParallel(request.n, target.providerId, () => edit(request, target, http)) };

@@ -319,6 +319,33 @@ describe("live capabilities from Venice's model list", () => {
     expect(model!.parameter_schema).toMatchObject({ resolutions: ["1K", "2K", "4K"], defaultResolution: "1K" });
   });
 
+  test("a second generation within a day asks for no model list and still sizes pixel models with width and height", async () => {
+    harness = await startHarness(veniceSetup());
+    const modelListRequests = () => harness!.requests.filter((request) => request.url.includes("/models"));
+
+    outputOf(await generate({ model: "sd35", aspect_ratio: "16:9" }));
+    const afterFirst = modelListRequests().length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    outputOf(await generate({ model: "sd35", aspect_ratio: "9:16" }));
+    expect(modelListRequests()).toHaveLength(afterFirst);
+    const body = await bodyOf(generateUrl, 1);
+    expect(body).toMatchObject({ model: "venice-sd35", width: 720, height: 1280 });
+    expect(body).not.toHaveProperty("aspect_ratio");
+  });
+
+  test("a cached edit Model still refuses a Job without reference images, without asking for the model list", async () => {
+    harness = await startHarness(veniceSetup({ [editUrl]: pngResponse }));
+    outputOf(await generate({ model: "banana-edit", references: await writeReferences("fox.png") }));
+    const modelListRequests = harness.requests.filter((request) => request.url.includes("/models")).length;
+
+    const result = await generate({ model: "banana-edit" });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("edit model");
+    expect(harness.requests.filter((request) => request.url.includes("/models"))).toHaveLength(modelListRequests);
+    expect(sent(generateUrl)).toHaveLength(0);
+  });
+
   test("with the model list unreachable, falls back to built-in capabilities and still sizes each Model the right way", async () => {
     const unreachable: Route = () => {
       throw new Error("connect ECONNREFUSED");
