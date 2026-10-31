@@ -1,6 +1,6 @@
 {
   "name": "litevision",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Let an AI agent generate images and videos through models you already pay for.",
   "keywords": [
     "mcp",
