@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
+import { readHistory, readHistoryLines } from "./helpers.ts";
 
 const generationsUrl = "POST https://api.openai.com/v1/images/generations";
 const apiKey = "sk-test-0000secret0000";
@@ -121,28 +122,27 @@ describe("generate_image", () => {
     const result = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox" } });
     const output = result.structuredContent as unknown as GenerateResult;
 
-    const history = await readHistory(harness);
-    expect(history).toEqual([
-      {
-        type: "job",
-        id: output.job_id,
-        createdAt: new Date(2026, 9, 30, 14, 5, 0).toISOString(),
-        model: "gpt-image",
-        provider: "openai",
-        protocol: "openai-images",
-        modelId: "gpt-image-1",
-        prompt: "a red fox",
-        parameters: {
-          n: 1,
-          aspectRatio: "1:1",
-          size: { aspectRatio: "1:1", width: 1024, height: 1024 },
-          references: [],
-          providerOptions: {},
-        },
-        durationMs: 2500,
-        files: output.files,
-        outcome: "completed",
+    const job = {
+      type: "job",
+      id: output.job_id,
+      createdAt: new Date(2026, 9, 30, 14, 5, 0).toISOString(),
+      model: "gpt-image",
+      provider: "openai",
+      protocol: "openai-images",
+      modelId: "gpt-image-1",
+      prompt: "a red fox",
+      parameters: {
+        n: 1,
+        aspectRatio: "1:1",
+        size: { aspectRatio: "1:1", width: 1024, height: 1024 },
+        references: [],
+        providerOptions: {},
       },
+    };
+    // Append-only: one record when the Job starts, one when it ends.
+    expect(await readHistoryLines(harness)).toEqual([
+      { ...job, durationMs: 0, files: [], outcome: "running" },
+      { ...job, durationMs: 2500, files: output.files, outcome: "completed" },
     ]);
   });
 
@@ -197,7 +197,3 @@ describe("generate_image", () => {
   });
 });
 
-async function readHistory(harness: Harness): Promise<unknown[]> {
-  const text = await readFile(join(harness.dirs.data, "jobs.jsonl"), "utf8");
-  return text.trim().split("\n").map((line) => JSON.parse(line));
-}

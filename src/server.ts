@@ -16,7 +16,7 @@ import {
 import type { Dirs } from "./dirs.ts";
 import { knownGoodOptions, readJobs } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
-import { JobFailedError, runJob } from "./jobs.ts";
+import { JobFailedError, JobRunner, type JobState } from "./jobs.ts";
 import { modelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
 import { describeCapabilities, normaliseImageRequest } from "./protocols/capabilities.ts";
@@ -36,6 +36,10 @@ export interface ServerDeps {
   openBrowser?: OpenBrowser;
   /** How long the settings page `open_settings` starts may sit idle before it shuts down. */
   settingsIdleMs?: number;
+  /** How long `generate_image` and `get_job` wait for a Job before returning its id; defaults to two minutes. */
+  waitLimitMs?: number;
+  /** How often asynchronous Protocols poll their Provider; defaults to three seconds. */
+  pollIntervalMs?: number;
 }
 
 export const instructions = `litevision generates images through Models the User has configured with their own Providers.
@@ -44,6 +48,7 @@ export const instructions = `litevision generates images through Models the User
 - When the User names none, omit \`model\` to use the default image Model, unless the request needs something the default lacks (e.g. legible Chinese text, reference images, an aspect ratio). Then call \`list_models\` and choose by each Model's capabilities and Model Notes.
 - Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
 - \`generate_image\` returns file paths, not image data. Tell the User where the files are.
+- A Job that takes longer than two minutes keeps running in the background: \`generate_image\` then returns its Job id with status "running". Tell the User it is still running, and call \`get_job\` with that Job id to wait for it again and get the files.
 - Ask for an aspect ratio, not pixel sizes. If the Model does not support it, the closest supported one is used; when the result says it was adjusted, tell the User the actual size.
 - If \`generate_image\` says a Model cannot do something (reference images, that many images), the error lists what the Model supports: choose another Model or change the request.
 - Pass \`output_path\` when the images belong in the User's project (e.g. its assets folder); otherwise omit it.
@@ -129,6 +134,25 @@ async function listedModel(deps: ModelInfoDeps, config: Config, model: Model, is
   return { output, text };
 }
 
+const jobStatusSchema = z
+  .enum(["completed", "running"])
+  .describe('"running" when the Job outlasted the wait limit and continues in the background; call `get_job` with its `job_id`.');
+
+/** The fields `generate_image` and `get_job` share. */
+function jobOutput(job: JobState) {
+  return {
+    job_id: job.id,
+    status: job.status,
+    model: job.model,
+    files: job.status === "completed" ? job.files : [],
+    ...(job.status === "completed" && job.shortfall !== undefined ? { shortfall: job.shortfall } : {}),
+  };
+}
+
+function jobText(job: JobState & { status: "running" }): string {
+  return `Job ${job.id} on ${job.model} is still running and continues in the background. Call \`get_job\` with job_id "${job.id}" to wait for it again and get the files.`;
+}
+
 function toolError(text: string) {
   return { content: [{ type: "text" as const, text }], isError: true };
 }
@@ -138,6 +162,7 @@ export function createServer(deps: ServerDeps): McpServer {
   const now = deps.now ?? (() => new Date());
   const cwd = deps.cwd ?? process.cwd();
   const infoDeps: ModelInfoDeps = { dirs: deps.dirs, http: deps.http, now };
+  const jobs = new JobRunner({ dirs: deps.dirs, http: deps.http, now, waitLimitMs: deps.waitLimitMs, pollIntervalMs: deps.pollIntervalMs });
 
   server.registerTool(
     "generate_image",
@@ -172,8 +197,9 @@ export function createServer(deps: ServerDeps): McpServer {
       },
       outputSchema: {
         job_id: z.string(),
+        status: jobStatusSchema,
         model: z.string().describe("Alias of the Model that ran the Job."),
-        files: z.array(z.string()).describe("Paths of the saved images."),
+        files: z.array(z.string()).describe("Paths of the saved images; empty while the Job is running."),
         aspect_ratio: z.enum(aspectRatios).describe("Aspect ratio actually used."),
         size: z.string().describe("Size actually requested from the Provider, e.g. 1536x1024."),
         requested_aspect_ratio: z.enum(aspectRatios),
@@ -199,27 +225,55 @@ export function createServer(deps: ServerDeps): McpServer {
         );
 
         const outputDir = output_path === undefined ? undefined : resolve(cwd, output_path);
-        const job = await runJob(
-          { dirs: deps.dirs, http: deps.http, now },
-          { ...resolved, adapter, credential, normalised, outputDir },
-        );
+        const job = await jobs.start({ ...resolved, adapter, credential, normalised, outputDir });
         const { size } = normalised.request;
         const output = {
-          job_id: job.id,
-          model: model.alias,
-          files: job.files,
+          ...jobOutput(job),
           aspect_ratio: size.aspectRatio,
           size: formatSize(size),
           requested_aspect_ratio: normalised.requestedAspectRatio,
           aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
-          ...(job.shortfall === undefined ? {} : { shortfall: job.shortfall }),
         };
-        const shortfall = job.shortfall === undefined ? "" : ` ${job.shortfall}`;
         const adjustment = normalised.aspectRatioAdjusted
           ? ` ${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.`
           : "";
-        const text = `Saved ${job.files.length} image(s) from ${model.alias} at ${size.aspectRatio} (${formatSize(size)}), Job ${job.id}.${adjustment}${shortfall}\n${job.files.join("\n")}`;
+        const text =
+          job.status === "running"
+            ? `${jobText(job)} It asks ${model.alias} for ${size.aspectRatio} (${formatSize(size)}).${adjustment}`
+            : `Saved ${job.files.length} image(s) from ${model.alias} at ${size.aspectRatio} (${formatSize(size)}), Job ${job.id}.${adjustment}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
         return { content: [{ type: "text", text }], structuredContent: output };
+      } catch (error) {
+        if (error instanceof ConfigError) return toolError(error.message);
+        if (error instanceof JobFailedError) return toolError(`Job ${error.jobId} failed: ${error.message}`);
+        throw error;
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_job",
+    {
+      description:
+        "Get a Job's status, waiting up to two minutes while it runs; once it has completed, the paths of its saved images. Use it when `generate_image` returned a Job that is still running.",
+      inputSchema: {
+        job_id: z.string().min(1).describe("The `job_id` that `generate_image` returned."),
+      },
+      outputSchema: {
+        job_id: z.string(),
+        status: jobStatusSchema,
+        model: z.string().describe("Alias of the Model that ran the Job."),
+        files: z.array(z.string()).describe("Paths of the saved images; empty while the Job is running."),
+        shortfall: z.string().optional().describe("Present when fewer images than asked for were saved: how many, and why."),
+      },
+    },
+    async ({ job_id }) => {
+      try {
+        const job = await jobs.get(job_id);
+        const text =
+          job.status === "running"
+            ? jobText(job)
+            : `Job ${job.id} completed: saved ${job.files.length} image(s) from ${job.model}.${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
+        return { content: [{ type: "text", text }], structuredContent: jobOutput(job) };
       } catch (error) {
         if (error instanceof ConfigError) return toolError(error.message);
         if (error instanceof JobFailedError) return toolError(`Job ${error.jobId} failed: ${error.message}`);
@@ -317,7 +371,10 @@ export function createServer(deps: ServerDeps): McpServer {
     idleMs: deps.settingsIdleMs ?? defaultSettingsIdleMs,
     openBrowser: deps.openBrowser ?? openInBrowser,
   });
-  server.server.onclose = () => void settings.close();
+  server.server.onclose = () => {
+    jobs.close();
+    void settings.close();
+  };
 
   server.registerTool(
     "open_settings",

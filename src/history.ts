@@ -1,11 +1,12 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Dirs } from "./dirs.ts";
-import type { AspectRatio, ImageSize, ProviderErrorKind } from "./protocols/protocol.ts";
+import type { AspectRatio, ImageSize, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
 
 /**
- * The Job history, `jobs.jsonl`: append-only, one JSON record per line. A Job may get several records over its life;
- * the latest one for an id is what it is now.
+ * The Job history, `jobs.jsonl`: append-only, one JSON record per line. A Job gets several records over its life
+ * (running when it starts, running again once an asynchronous Provider accepts it, then completed or failed); the
+ * latest one for an id is what it is now.
  */
 
 /** The `generate_image` parameters of a Job, as recorded in the Job history. */
@@ -33,9 +34,14 @@ export interface JobRecord {
   modelId: string;
   prompt: string;
   parameters: JobParameters;
+  /** So far, while the Job is running. */
   durationMs: number;
   files: string[];
-  outcome: "completed" | "failed";
+  outcome: "running" | "completed" | "failed";
+  /** While running: what the Protocol needs to pick the Job back up after a restart; absent for synchronous Protocols. */
+  resume?: ResumeHandle;
+  /** What the Provider says a completed Job cost, in its own unit, when it says. */
+  cost?: number;
   /** Why a completed Job has fewer files than `parameters.n`. */
   shortfall?: string;
   error?: { kind: ProviderErrorKind; message: string };
@@ -72,6 +78,11 @@ export async function readJobs(dirs: Dirs): Promise<JobRecord[]> {
     jobs.set(record.id, record);
   }
   return [...jobs.values()];
+}
+
+/** One Job as its latest record says it is now, if the history has it. */
+export async function readJob(dirs: Dirs, id: string): Promise<JobRecord | undefined> {
+  return (await readJobs(dirs)).find((job) => job.id === id);
 }
 
 function isJobRecord(value: unknown): value is JobRecord {
