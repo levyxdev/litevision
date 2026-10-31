@@ -26,6 +26,14 @@ export interface ImageCapabilities {
   maxImages: number;
 }
 
+/** What litevision knows about a Model when a Job starts: the Provider's cached answer where there is one (ADR 0004). */
+export interface ModelDescription {
+  /** The capabilities the request was checked against. */
+  capabilities: ImageCapabilities;
+  /** The Provider's own description of the Model's parameters, as `fetchModelInfo` reported it; omitted when none is known. */
+  parameterSchema?: unknown;
+}
+
 /** A reference image, already read from disk. */
 export interface ReferenceImage {
   /** Absolute path it was read from. */
@@ -51,6 +59,8 @@ export interface ImageRequest {
   references: ReferenceImage[];
   /** Merged into the Provider request untouched. Never contains an adapter's `reservedOptions`. */
   providerOptions: Record<string, unknown>;
+  /** So an adapter need not ask the Provider about the Model again for every Job. */
+  model: ModelDescription;
 }
 
 /** Everything an adapter needs to reach one Model. */

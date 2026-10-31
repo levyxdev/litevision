@@ -216,12 +216,11 @@ export function createServer(deps: ServerDeps): McpServer {
         const { model } = resolved;
         const adapter = adapterFor(model);
         const credential = await requireCredential(deps.dirs, resolved.provider);
-        const { capabilities } = await modelInfo(infoDeps, resolved);
         const normalised = await normaliseImageRequest(
           { prompt, n, aspectRatio: aspect_ratio, references, providerOptions: provider_options },
           model,
           adapter,
-          capabilities,
+          await modelInfo(infoDeps, resolved),
           cwd,
         );
 

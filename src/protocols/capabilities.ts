@@ -1,6 +1,14 @@
 import { ConfigError, type Model } from "../config.ts";
 import { readReferences } from "../images.ts";
-import { formatSize, type AspectRatio, type ImageCapabilities, type ImageRequest, type ImageSize, type ProtocolAdapter } from "./protocol.ts";
+import {
+  formatSize,
+  type AspectRatio,
+  type ImageCapabilities,
+  type ImageRequest,
+  type ImageSize,
+  type ModelDescription,
+  type ProtocolAdapter,
+} from "./protocol.ts";
 
 /** The `generate_image` parameters, before they are checked against a Model's capabilities. */
 export interface ImageParameters {
@@ -47,16 +55,17 @@ function ratioOf(aspectRatio: AspectRatio): number {
 }
 
 /**
- * Checks `generate_image` parameters against a Model's capabilities (see `modelInfo`) and turns them into an
+ * Checks `generate_image` parameters against what is known about a Model (see `modelInfo`) and turns them into an
  * ImageRequest. Everything that would fail here fails before any Provider request.
  */
 export async function normaliseImageRequest(
   parameters: ImageParameters,
   model: Model,
   adapter: ProtocolAdapter,
-  capabilities: ImageCapabilities,
+  described: ModelDescription,
   cwd: string,
 ): Promise<NormalisedRequest> {
+  const { capabilities } = described;
   const unsupported = (problem: string) =>
     new ConfigError(`${problem} Model "${model.alias}" supports: ${describeCapabilities(capabilities)} Choose another Model or change the request.`);
 
@@ -79,7 +88,14 @@ export async function normaliseImageRequest(
   const { size, adjusted } = closestSize(capabilities.sizes, parameters.aspectRatio);
   const references = await readReferences(parameters.references, cwd);
   return {
-    request: { prompt: parameters.prompt, n: parameters.n, size, references, providerOptions: parameters.providerOptions },
+    request: {
+      prompt: parameters.prompt,
+      n: parameters.n,
+      size,
+      references,
+      providerOptions: parameters.providerOptions,
+      model: { capabilities, ...(described.parameterSchema === undefined ? {} : { parameterSchema: described.parameterSchema }) },
+    },
     requestedAspectRatio: parameters.aspectRatio,
     aspectRatioAdjusted: adjusted,
   };
