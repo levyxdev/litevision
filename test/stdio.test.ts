@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { version } from "../package.json";
 
 let root: string;
 let bundle: string;
@@ -26,6 +27,8 @@ test("the built CLI serves MCP over stdio on Node", async () => {
     new StdioClientTransport({ command: "node", args: [bundle], env: { PATH: process.env.PATH ?? "", HOME: root } }),
   );
   try {
+    expect(client.getServerVersion()).toMatchObject({ name: "litevision", version });
+
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toContain("generate_image");
 

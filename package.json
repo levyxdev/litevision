@@ -1,14 +1,32 @@
 {
   "name": "litevision",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Let an AI agent generate images and videos through models you already pay for.",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "image-generation",
+    "ai-agent",
+    "claude-code",
+    "openai",
+    "gemini",
+    "venice",
+    "apimart"
+  ],
+  "homepage": "https://github.com/levyxdev/litevision#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/levyxdev/litevision.git"
+  },
+  "bugs": "https://github.com/levyxdev/litevision/issues",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "litevision": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "engines": {
     "node": ">=22"
@@ -17,7 +35,8 @@
   "scripts": {
     "build": "bun build src/cli.ts --target node --outfile dist/cli.js",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
