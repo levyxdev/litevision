@@ -25,6 +25,7 @@ import { aspectRatios, formatSize } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
 import { settingsOpener } from "./settings/opener.ts";
 import { defaultSettingsIdleMs } from "./settings/server.ts";
+import { version } from "../package.json";
 
 export interface ServerDeps {
   dirs: Dirs;
@@ -159,7 +160,7 @@ function toolError(text: string) {
 }
 
 export function createServer(deps: ServerDeps): McpServer {
-  const server = new McpServer({ name: "litevision", version: "0.0.0" }, { instructions });
+  const server = new McpServer({ name: "litevision", version }, { instructions });
   const now = deps.now ?? (() => new Date());
   const cwd = deps.cwd ?? process.cwd();
   const infoDeps: ModelInfoDeps = { dirs: deps.dirs, http: deps.http, now };
