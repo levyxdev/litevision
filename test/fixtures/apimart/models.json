@@ -1,0 +1,51 @@
+{
+  "success": true,
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-image-2",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "openai",
+      "supported_endpoint_types": ["openai"],
+      "category": "image",
+      "capability_tags": ["Text to Image", "Image to Image"]
+    },
+    {
+      "id": "seedream-4.5",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "bytedance",
+      "supported_endpoint_types": ["openai"],
+      "category": "image",
+      "capability_tags": ["Text to Image", "Image to Image"]
+    },
+    {
+      "id": "gemini-3-pro-image-preview",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "google",
+      "supported_endpoint_types": ["openai"],
+      "category": "image",
+      "capability_tags": ["Text to Image", "Image to Image"]
+    },
+    {
+      "id": "wan2.6",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "alibaba",
+      "supported_endpoint_types": ["openai"],
+      "category": "video",
+      "capability_tags": ["Text to Video"]
+    },
+    {
+      "id": "gpt-4o",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "openai",
+      "supported_endpoint_types": ["openai"],
+      "category": "chat",
+      "capability_tags": ["Text", "Vision"]
+    }
+  ]
+}

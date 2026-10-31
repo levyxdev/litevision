@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 429,
+    "message": "Too many requests, please try again later",
+    "type": "rate_limit_error"
+  }
+}

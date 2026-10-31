@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 402,
+    "message": "Insufficient account balance, please top up and try again",
+    "type": "payment_required"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "code": 200,
+  "data": {
+    "id": "task_01KPQ7J7DWB7QZ3WCEK3YVPBRA",
+    "status": "failed",
+    "progress": 0,
+    "created": 1793369100,
+    "estimated_time": 60,
+    "error": {
+      "code": 400,
+      "message": "The request was blocked by content moderation (safety review). Please modify the prompt and try again",
+      "type": "invalid_request_error"
+    }
+  }
+}
