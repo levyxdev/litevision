@@ -14,7 +14,7 @@ import {
   type Model,
 } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
-import { knownGoodOptions, readJobs } from "./history.ts";
+import { knownGoodOptions, rateJob, ratingReasonMaxLength, RatingError, readJobs, verdicts } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, JobRunner, type JobState } from "./jobs.ts";
 import { modelInfo, type ModelInfoDeps } from "./model-info.ts";
@@ -54,6 +54,7 @@ export const instructions = `litevision generates images through Models the User
 - Pass \`output_path\` when the images belong in the User's project (e.g. its assets folder); otherwise omit it.
 - For Provider-specific \`provider_options\`, call \`list_models\` with \`model\` first: it gives the Model's docs link, the Provider's parameter schema when it publishes one, and options that already worked for this Model. litevision passes \`provider_options\` through unchecked; if the Provider rejects one, its error says why, so fix it and try again.
 - If fewer images came back than you asked for, the result says why. Tell the User.
+- When the User says what they think of a result ("this one's great", "the text is wrong"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. Call it only when the User actually states a verdict; never invent one, and never rate a result yourself.
 - Model Notes say what each Model is good or bad at. When the User learns something worth keeping, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
 
 /** The structured form of one Model in `list_models`. */
@@ -277,6 +278,41 @@ export function createServer(deps: ServerDeps): McpServer {
       } catch (error) {
         if (error instanceof ConfigError) return toolError(error.message);
         if (error instanceof JobFailedError) return toolError(`Job ${error.jobId} failed: ${error.message}`);
+        throw error;
+      }
+    },
+  );
+
+  server.registerTool(
+    "rate_job",
+    {
+      description:
+        "Record the User's Rating of a completed Job: good or bad, plus a one-line reason. Call it only when the User has actually said what they think of the result; never invent a verdict. A later Rating of the same Job replaces the earlier one.",
+      inputSchema: {
+        job_id: z.string().min(1).describe("The `job_id` that `generate_image` or `get_job` returned."),
+        verdict: z.enum(verdicts).describe("The User's verdict."),
+        reason: z
+          .string()
+          .max(ratingReasonMaxLength)
+          .describe(`Why, in one line and in the User's words, e.g. "the text is misspelled". At most ${ratingReasonMaxLength} characters.`),
+      },
+      outputSchema: {
+        job_id: z.string(),
+        verdict: z.enum(verdicts),
+        reason: z.string().describe("The reason as recorded, on one line."),
+        rated_at: z.string().describe("When the Rating was recorded, ISO 8601."),
+      },
+    },
+    async ({ job_id, verdict, reason }) => {
+      try {
+        const rating = await rateJob(deps.dirs, { jobId: job_id, verdict, reason }, now());
+        const output = { job_id: rating.jobId, verdict: rating.verdict, reason: rating.reason, rated_at: rating.ratedAt };
+        return {
+          content: [{ type: "text", text: `Recorded a ${rating.verdict} Rating on Job ${rating.jobId}: ${rating.reason}` }],
+          structuredContent: output,
+        };
+      } catch (error) {
+        if (error instanceof RatingError) return toolError(error.message);
         throw error;
       }
     },

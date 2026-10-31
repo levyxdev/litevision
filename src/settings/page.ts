@@ -1,8 +1,10 @@
 import { modelNotesMaxLength } from "../config.ts";
+import { ratingReasonMaxLength } from "../history.ts";
 
 /**
  * The settings page: one self-contained HTML document (no external assets) talking to the settings JSON API.
- * Every API call carries the one-time token from the page's own URL. Data is only ever inserted as text.
+ * Every API call carries the one-time token from the page's own URL: in a header, or for an <img>, which cannot set
+ * headers, in the image URL's query. Data is only ever inserted as text.
  */
 export function renderPage(nonce: string): string {
   return `<!doctype html>
@@ -52,6 +54,15 @@ export function renderPage(nonce: string): string {
   #status { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: calc(100% - 32px);
     background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px; display: none; }
   #status.error { background: var(--danger); color: #fff; }
+  .job-meta { font-size: 13px; color: var(--muted); }
+  .prompt { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .thumb { width: 112px; height: 112px; object-fit: cover; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); }
+  .thumb.placeholder { display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px;
+    font-size: 12px; color: var(--muted); border-style: dashed; }
+  .rating { font-size: 14px; }
+  .rating.good { color: var(--ok); } .rating.bad { color: var(--danger); }
+  .outcome.failed { color: var(--danger); } .outcome.running { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -108,7 +119,8 @@ export function renderPage(nonce: string): string {
 
   <section id="history">
     <h2>Job history</h2>
-    <p class="muted">Past Jobs and their Ratings will appear here.</p>
+    <p class="muted">Newest first. Rate a Job to keep your verdict on it; rating it again replaces the earlier Rating.</p>
+    <div id="job-list"><p class="muted">Loading…</p></div>
   </section>
 </main>
 <div id="status" role="status" aria-live="polite"></div>
@@ -120,6 +132,7 @@ let presets = [];
 let protocols = [];
 let providerIds = [];
 const notesMax = ${modelNotesMaxLength};
+const reasonMax = ${ratingReasonMaxLength};
 
 async function api(method, path, body) {
   const init = { method, headers: { "x-litevision-token": token } };
@@ -429,6 +442,65 @@ function setUpAddForm() {
   };
 }
 
+/** An image of a Job, or a placeholder once the file is gone. */
+function thumbnail(file) {
+  const img = el("img", { className: "thumb", src: file.thumbnail + "?token=" + encodeURIComponent(token), alt: file.path, title: file.path, loading: "lazy" });
+  img.onerror = () => img.replaceWith(el("div", { className: "thumb placeholder", title: file.path, textContent: "Image no longer on disk" }));
+  return img;
+}
+
+function formatDuration(ms) {
+  return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s";
+}
+
+/** The current Rating, and a one-line reason with Good and Bad buttons to rate the Job. Only completed Jobs can be rated. */
+function ratingRows(job) {
+  if (job.outcome !== "completed") return [];
+  const current = job.rating
+    ? el("span", { className: "grow rating " + job.rating.verdict, textContent: (job.rating.verdict === "good" ? "Good" : "Bad") + ": " + job.rating.reason })
+    : el("span", { className: "grow muted", textContent: "Not rated yet." });
+  const reason = el("input", { maxLength: reasonMax, placeholder: "One-line reason, e.g. the text is misspelled" });
+  const rateAs = (verdict, label) => {
+    const button = el("button", { type: "button", textContent: label });
+    button.onclick = () => act(button, async () => {
+      await api("POST", "/api/jobs/" + encodeURIComponent(job.id) + "/rating", { verdict, reason: reason.value });
+      await loadJobs();
+    }, "Rating saved.");
+    return button;
+  };
+  return [
+    el("div", { className: "row" }, current),
+    el("div", { className: "row" }, el("div", { className: "grow" }, reason), rateAs("good", "Good"), rateAs("bad", "Bad")),
+  ];
+}
+
+function jobCard(job) {
+  const when = new Date(job.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const outcome = job.outcome === "completed"
+    ? job.files.length + " image(s)"
+    : job.outcome === "running" ? "Running…" : "Failed";
+  const details = [];
+  if (job.error) details.push(el("p", { className: "result failure", textContent: job.error }));
+  if (job.shortfall) details.push(el("p", { className: "result unsupported", textContent: job.shortfall }));
+  return el("div", { className: "card" },
+    el("div", { className: "row job-meta" },
+      el("span", { className: "grow", textContent: job.model + " (" + job.modelId + " on " + job.provider + ") · " + when + " · " + formatDuration(job.durationMs) }),
+      el("span", { className: "outcome " + job.outcome, textContent: outcome })),
+    el("p", { className: "prompt", textContent: job.prompt }),
+    ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map(thumbnail))]),
+    ...details,
+    ...ratingRows(job),
+  );
+}
+
+async function loadJobs() {
+  const list = document.getElementById("job-list");
+  const { jobs } = await api("GET", "/api/jobs");
+  list.replaceChildren(...(jobs.length === 0
+    ? [el("p", { className: "muted", textContent: "No Jobs yet. Images your Agent generates will appear here." })]
+    : jobs.map(jobCard)));
+}
+
 (async () => {
   try {
     ({ presets } = await api("GET", "/api/presets"));
@@ -436,8 +508,9 @@ function setUpAddForm() {
     setUpAddForm();
     setUpAddModelForm();
     await loadProviders();
+    await loadJobs();
   } catch (error) {
-    for (const id of ["provider-list", "model-list"]) {
+    for (const id of ["provider-list", "model-list", "job-list"]) {
       document.getElementById(id).replaceChildren(el("p", { className: "muted", textContent: error.message }));
     }
   }

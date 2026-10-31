@@ -5,6 +5,7 @@ import type { HttpTransport } from "../http.ts";
 import { refreshModelInfo, refreshProviderModelInfo, type ModelInfoDeps } from "../model-info.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { fetchModelIds, testConnection } from "./connection.ts";
+import { jobImage, listJobHistory, rateJobFromPage, rateJobInput } from "./job-history.ts";
 import {
   addModel,
   addModelInput,
@@ -38,8 +39,8 @@ export interface RouteContext {
   now: () => Date;
 }
 
-/** `undefined` answers 204 No Content. */
-export type RouteResult = { status?: number; body: unknown } | undefined;
+/** `undefined` answers 204 No Content; `image` answers with the image's own bytes rather than JSON. */
+export type RouteResult = { status?: number; body: unknown } | { image: { bytes: Uint8Array; contentType: string } } | undefined;
 
 interface Route {
   method: string;
@@ -50,7 +51,6 @@ interface Route {
 
 /**
  * The settings JSON API. Every route sits behind the three checks of ADR 0001.
- * Areas added later (Job history) add their routes here.
  */
 const routes: Route[] = [
   {
@@ -156,6 +156,24 @@ const routes: Route[] = [
     method: "PUT",
     path: "/api/default-image-model",
     handler: async ({ dirs, body }) => ({ body: await setDefaultImageModel(dirs, parse(setDefaultInput, body).alias) }),
+  },
+  {
+    method: "GET",
+    path: "/api/jobs",
+    handler: async ({ dirs }) => ({ body: { jobs: await listJobHistory(dirs) } }),
+  },
+  {
+    method: "POST",
+    path: "/api/jobs/:id/rating",
+    handler: async ({ dirs, now, params, body }) => ({
+      body: { rating: await rateJobFromPage(dirs, params.id!, parse(rateJobInput, body), now()) },
+    }),
+  },
+  {
+    // An <img> cannot send the token header, so the page puts the token in this URL's query instead.
+    method: "GET",
+    path: "/api/jobs/:id/files/:index",
+    handler: async ({ dirs, params }) => ({ image: await jobImage(dirs, params.id!, params.index!) }),
   },
 ];
 
