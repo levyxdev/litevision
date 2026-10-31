@@ -141,7 +141,7 @@ describe("Models", () => {
 
   test("lists the Protocols a Model can use", async () => {
     const h = await start();
-    expect((await h.send("GET", "/api/protocols")).json()).toEqual({ protocols: expect.arrayContaining(["openai-images", "apimart"]) });
+    expect((await h.send("GET", "/api/protocols")).json()).toEqual({ protocols: expect.arrayContaining(["openai-images", "apimart", "gemini"]) });
   });
 });
 
@@ -178,7 +178,7 @@ describe("fetching a Provider's model list", () => {
 
   test("says a Protocol without a model list is not supported, so the User types the model id", async () => {
     const h = await start(withProviders);
-    const response = await fetchList("gemini");
+    const response = await fetchList("made-up");
     expect(response.json()).toEqual({ result: "unsupported", message: expect.stringContaining("type the model id") });
     expect(h.requests).toHaveLength(0);
     expect((await fetchList("openai-images", "missing")).status).toBe(404);

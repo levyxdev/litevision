@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "quota_exceeded",
+    "message": "You exceeded your daily quota for this model. Wait until it resets or request a quota increase."
+  }
+}

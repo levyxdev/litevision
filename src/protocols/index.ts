@@ -1,10 +1,12 @@
 import { ConfigError, type Model } from "../config.ts";
 import { apimart } from "./apimart.ts";
+import { gemini } from "./gemini.ts";
 import { openaiImages } from "./openai-images.ts";
 import type { ProtocolAdapter } from "./protocol.ts";
 
 const adapters: Record<string, ProtocolAdapter> = {
   "openai-images": openaiImages,
+  gemini,
   apimart,
 };
 
