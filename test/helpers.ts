@@ -24,10 +24,10 @@ export async function readHistoryLines(harness: Pick<Harness, "dirs">): Promise<
   return text.trim().split("\n").map((line) => JSON.parse(line));
 }
 
-/** Each Job's latest record in `jobs.jsonl`, ordered by when the Job started. */
+/** Each Job's latest record in `jobs.jsonl`, ordered by when the Job started. Rating records are left out. */
 export async function readHistory(harness: Pick<Harness, "dirs">): Promise<Array<Record<string, unknown>>> {
   const latest = new Map<unknown, Record<string, unknown>>();
-  for (const record of await readHistoryLines(harness)) latest.set(record.id, record);
+  for (const record of await readHistoryLines(harness)) if (record.type === "job") latest.set(record.id, record);
   return [...latest.values()];
 }
 

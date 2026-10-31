@@ -30,6 +30,8 @@ export interface SettingsResponse {
   status: number;
   headers: Record<string, string | string[] | undefined>;
   text: string;
+  /** The body as raw bytes, e.g. an image. */
+  bytes: Buffer;
   /** The body parsed as JSON. */
   json<T = any>(): T;
 }
@@ -105,8 +107,9 @@ function send(origin: string, method: string, path: string, options: SendOptions
       response.on("data", (chunk: Buffer) => chunks.push(chunk));
       response.on("error", reject);
       response.on("end", () => {
-        const text = Buffer.concat(chunks).toString("utf8");
-        resolve({ status: response.statusCode ?? 0, headers: response.headers, text, json: () => JSON.parse(text) });
+        const bytes = Buffer.concat(chunks);
+        const text = bytes.toString("utf8");
+        resolve({ status: response.statusCode ?? 0, headers: response.headers, text, bytes, json: () => JSON.parse(text) });
       });
     });
     request.on("error", reject);

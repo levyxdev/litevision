@@ -67,6 +67,13 @@ export async function startSettingsServer(options: SettingsServerOptions): Promi
       if (result === undefined) {
         response.writeHead(204, commonHeaders);
         response.end();
+      } else if ("image" in result) {
+        response.writeHead(200, {
+          "content-type": result.image.contentType,
+          "content-security-policy": "default-src 'none'; sandbox",
+          ...commonHeaders,
+        });
+        response.end(result.image.bytes);
       } else {
         sendJson(response, result.status ?? 200, result.body);
       }
