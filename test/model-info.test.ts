@@ -26,10 +26,14 @@ const liveTest: ProtocolAdapter = {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return (await response.json()) as ProviderModelInfo;
   },
-  async submit(request, target, http) {
+  async submit(request, target, http, context) {
     return {
       wait: () =>
-        inParallel(request.n, target.providerId, async () => (await (await openaiImages.submit({ ...request, n: 1 }, target, http)).wait()).images),
+        inParallel(
+          request.n,
+          target.providerId,
+          async () => (await (await openaiImages.submit({ ...request, n: 1 }, target, http, context)).wait()).images,
+        ),
     };
   },
 };

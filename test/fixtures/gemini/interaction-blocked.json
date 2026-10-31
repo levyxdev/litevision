@@ -1,0 +1,24 @@
+{
+  "id": "v1_ChdGb3hJbWFnZUludGVyYWN0aW9uMDAwMhIXRm94SW1hZ2VJbnRlcmFjdGlvbjAwMDI",
+  "object": "interaction",
+  "model": "gemini-3.1-flash-image",
+  "status": "failed",
+  "created": "2026-10-30T13:05:00Z",
+  "updated": "2026-10-30T13:05:03Z",
+  "steps": [],
+  "errors": [
+    {
+      "code": "image_safety",
+      "message": "Image generation was blocked because the output may violate Google's Generative AI Prohibited Use policy."
+    }
+  ],
+  "usage": {
+    "input_tokens_by_modality": [{ "modality": "text", "tokens": 9 }],
+    "total_cached_tokens": 0,
+    "total_input_tokens": 9,
+    "total_output_tokens": 0,
+    "total_thought_tokens": 0,
+    "total_tokens": 9,
+    "total_tool_use_tokens": 0
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "permission_denied",
+    "message": "Your API key does not have permission to use this model, or your project's API access is restricted."
+  }
+}

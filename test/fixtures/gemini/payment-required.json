@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "payment_required",
+    "message": "Your prepay credit balance is depleted. Add credits to your billing account to continue."
+  }
+}

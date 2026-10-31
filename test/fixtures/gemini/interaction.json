@@ -1,0 +1,33 @@
+{
+  "id": "v1_ChdGb3hJbWFnZUludGVyYWN0aW9uMDAwMRIXRm94SW1hZ2VJbnRlcmFjdGlvbjAwMDE",
+  "object": "interaction",
+  "model": "gemini-3.1-flash-image",
+  "status": "completed",
+  "created": "2026-10-30T13:05:00Z",
+  "updated": "2026-10-30T13:05:09Z",
+  "steps": [
+    {
+      "type": "thought",
+      "summary": [
+        { "type": "text", "text": "Placing the fox in the centre of a snowy clearing." },
+        { "type": "image", "mime_type": "image/jpeg", "data": "/9j/4AAQSkZJRgAB/9k=" }
+      ]
+    },
+    {
+      "type": "model_output",
+      "content": [
+        { "type": "image", "mime_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens_by_modality": [{ "modality": "text", "tokens": 9 }],
+    "output_tokens_by_modality": [{ "modality": "image", "tokens": 1120 }],
+    "total_cached_tokens": 0,
+    "total_input_tokens": 9,
+    "total_output_tokens": 1120,
+    "total_thought_tokens": 248,
+    "total_tokens": 1377,
+    "total_tool_use_tokens": 0
+  }
+}

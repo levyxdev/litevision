@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-2.5-flash-image",
+      "version": "2.5",
+      "displayName": "Nano Banana",
+      "description": "Gemini 2.5 Flash Image.",
+      "inputTokenLimit": 32768,
+      "outputTokenLimit": 32768,
+      "supportedGenerationMethods": ["generateContent", "countTokens"]
+    }
+  ]
+}

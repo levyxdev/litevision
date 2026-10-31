@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "authentication",
+    "message": "API key not valid: AIza-test-0000secret0000. Please pass a valid API key."
+  }
+}

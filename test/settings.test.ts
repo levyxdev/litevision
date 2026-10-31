@@ -332,7 +332,7 @@ describe("test connection", () => {
 
   test("says a Protocol without a connection test is not supported yet", async () => {
     const h = await start(saved);
-    const response = await testWith("gemini");
+    const response = await testWith("made-up");
     expect(response.status).toBe(200);
     expect(response.json()).toEqual({ result: "unsupported", message: expect.stringContaining("not supported yet") });
     expect(h.requests).toHaveLength(0);

@@ -69,11 +69,30 @@ export interface JobImages {
   images: GeneratedImage[];
   /** Why fewer images than requested came back, in plain language naming the Provider; omitted when none are missing. */
   shortfall?: string;
+  /** What the Provider says the Job cost, in its own unit; omitted when it does not say. */
+  cost?: number;
 }
+
+/**
+ * What an asynchronous Protocol needs to pick a submitted Job back up after litevision restarts, e.g. the Provider's
+ * task ids. Recorded in the Job history, so it must survive `JSON.stringify`, and must never contain the Credential.
+ */
+export type ResumeHandle = Record<string, unknown>;
 
 /** A Job a Provider has accepted. Synchronous Protocols resolve `wait` immediately. */
 export interface SubmittedJob {
   wait(): Promise<JobImages>;
+  /** Asynchronous Protocols only: recorded as soon as the Provider accepts the Job, for `resume`. */
+  resumeHandle?: ResumeHandle;
+}
+
+/** What the Job runner lends an adapter while a Job is under way. */
+export interface JobContext {
+  /**
+   * Resolves after one poll interval, which the Job runner sets. Rejects when litevision shuts down: let that
+   * propagate, so the Job is left to be resumed rather than recorded as failed.
+   */
+  pause(): Promise<void>;
 }
 
 export type ProviderErrorKind = "auth" | "balance" | "refusal" | "rate_limit" | "unsupported" | "other";
@@ -128,7 +147,12 @@ export interface ProtocolAdapter {
   docsUrl(modelId: string): string;
   /** Request fields the adapter sets itself; `provider_options` may not set them. */
   reservedOptions: readonly string[];
-  submit(request: ImageRequest, target: ModelTarget, http: HttpTransport): Promise<SubmittedJob>;
+  submit(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedJob>;
+  /**
+   * Asynchronous Protocols only: picks up a Job from the resume handle its `submit` gave, after the litevision that
+   * submitted it has gone. Without it, a Job lost with its process is reported as failed.
+   */
+  resume?(handle: ResumeHandle, target: ModelTarget, http: HttpTransport, context: JobContext): SubmittedJob;
   /**
    * Checks that a Provider's base URL and Credential work with this Protocol, for the settings page's
    * "test connection". Optional: the page reports "not supported yet" for a Protocol without it.
