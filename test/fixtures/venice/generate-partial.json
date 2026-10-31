@@ -1,0 +1,6 @@
+{
+  "id": "generate-image-1761833100002",
+  "images": ["iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="],
+  "content_policy_violation_count": 1,
+  "timing": { "inferenceDuration": 4120, "inferencePreprocessingTime": 35, "inferenceQueueTime": 210, "total": 4380 }
+}

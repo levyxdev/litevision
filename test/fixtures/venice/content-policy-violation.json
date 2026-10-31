@@ -1,0 +1,6 @@
+{
+  "error": "Your prompt violates the content policy of Venice.ai or the model provider",
+  "code": "CONTENT_POLICY_VIOLATION",
+  "suggested_prompt": "A watercolor painting of a red fox in a snowy forest.",
+  "retryable": false
+}

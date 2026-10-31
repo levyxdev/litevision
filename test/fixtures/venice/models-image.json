@@ -1,0 +1,81 @@
+{
+  "object": "list",
+  "type": "image",
+  "data": [
+    {
+      "created": 1752000000,
+      "id": "qwen-image-2",
+      "model_spec": {
+        "constraints": {
+          "aspectRatios": ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"],
+          "defaultAspectRatio": "1:1",
+          "promptCharacterLimit": 2048,
+          "steps": { "default": 8, "max": 8 },
+          "widthHeightDivisor": 1
+        },
+        "description": "Text-to-image model with strong text rendering.",
+        "name": "Qwen Image 2",
+        "modelSource": "https://huggingface.co/Qwen",
+        "offline": false,
+        "privacy": "private",
+        "pricing": { "generation": { "usd": 0.02, "diem": 0.02 } },
+        "traits": ["fastest"]
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "image"
+    },
+    {
+      "created": 1756000000,
+      "id": "nano-banana-pro",
+      "model_spec": {
+        "constraints": {
+          "aspectRatios": ["1:1", "3:2", "2:3", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4"],
+          "defaultAspectRatio": "1:1",
+          "defaultResolution": "1K",
+          "resolutions": ["1K", "2K", "4K"],
+          "promptCharacterLimit": 32768,
+          "steps": { "default": 1, "max": 1 },
+          "widthHeightDivisor": 1
+        },
+        "description": "Gemini image model with resolution tiers.",
+        "name": "Nano Banana Pro",
+        "modelSource": "https://deepmind.google/models/gemini-image/",
+        "offline": false,
+        "privacy": "anonymized",
+        "pricing": {
+          "resolutions": {
+            "1K": { "usd": 0.18, "diem": 0.18 },
+            "2K": { "usd": 0.18, "diem": 0.18 },
+            "4K": { "usd": 0.35, "diem": 0.35 }
+          }
+        },
+        "traits": ["highest_quality"]
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "image"
+    },
+    {
+      "created": 1727966436,
+      "id": "venice-sd35",
+      "model_spec": {
+        "constraints": {
+          "promptCharacterLimit": 1500,
+          "steps": { "default": 25, "max": 30 },
+          "widthHeightDivisor": 16
+        },
+        "description": "Stable Diffusion 3.5 sized in pixels.",
+        "name": "Venice SD35",
+        "modelSource": "https://huggingface.co/stabilityai/stable-diffusion-3.5-large",
+        "offline": false,
+        "privacy": "private",
+        "pricing": { "generation": { "usd": 0.01, "diem": 0.01 } },
+        "traits": ["default"]
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "image"
+    }
+  ]
+}

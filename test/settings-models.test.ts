@@ -141,7 +141,7 @@ describe("Models", () => {
 
   test("lists the Protocols a Model can use", async () => {
     const h = await start();
-    expect((await h.send("GET", "/api/protocols")).json()).toEqual({ protocols: expect.arrayContaining(["openai-images", "apimart", "gemini"]) });
+    expect((await h.send("GET", "/api/protocols")).json()).toEqual({ protocols: expect.arrayContaining(["openai-images", "apimart", "gemini", "venice"]) });
   });
 });
 
