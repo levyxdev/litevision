@@ -16,110 +16,143 @@ export function renderPage(nonce: string): string {
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #f7f7f8; --card: #fff; --text: #1d1d1f; --muted: #6b6b73; --border: #dcdce0;
-    --accent: #2f6fde; --danger: #c43d3d; --ok: #1f8a4c; --warn: #a86b00;
+    --bg: #fafafa; --surface: #fff; --field: #fff; --hover: #f4f4f5; --text: #18181b; --muted: #71717a; --border: #e4e4e7;
+    --accent: #2563eb; --focus: rgb(37 99 235 / 0.22); --danger: #dc2626; --ok: #15803d; --warn: #b45309;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #151517; --card: #1f1f22; --text: #ececf0; --muted: #a0a0aa; --border: #35353b;
-      --accent: #6f9cf0; --danger: #ec6b6b; --ok: #4cc283; --warn: #e0a640; }
+    :root { --bg: #0f0f11; --surface: #18181b; --field: #121214; --hover: #26262a; --text: #f4f4f5; --muted: #a1a1aa; --border: #2e2e33;
+      --accent: #3b82f6; --focus: rgb(59 130 246 / 0.35); --danger: #f87171; --ok: #4ade80; --warn: #fbbf24; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  h2 { font-size: 17px; margin: 32px 0 12px; }
-  h3 { font-size: 15px; margin: 0; }
-  p.lead, .muted { color: var(--muted); }
-  p.lead { margin: 0 0 8px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .row + .row { margin-top: 10px; }
-  .grow { flex: 1 1 220px; min-width: 0; }
-  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-  input, select, textarea, button { font: inherit; border-radius: 7px; }
-  input, select, textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
-  textarea { resize: vertical; min-height: 60px; }
-  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: #fff; }
-  .counter { font-size: 12px; color: var(--muted); text-align: right; }
-  .notes-history { font-size: 13px; }
-  button { padding: 7px 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; white-space: nowrap; }
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 20px 96px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  p { margin: 0; }
+  .muted { color: var(--muted); }
+  header p { color: var(--muted); }
+  section { margin-top: 44px; }
+  .section-head { margin-bottom: 14px; }
+  .section-head p { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .card { display: grid; gap: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; margin-bottom: 12px; }
+  .card-head { display: flex; align-items: center; gap: 10px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .field { min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+  .inline { display: flex; flex-wrap: wrap; gap: 8px; }
+  .inline > input, .inline > select { flex: 1 1 200px; width: auto; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .actions > select { width: auto; flex: 0 1 180px; }
+  .spacer { flex: 1; }
+  .empty { color: var(--muted); padding: 20px; border: 1px dashed var(--border); border-radius: 12px; text-align: center; margin-bottom: 12px; }
+
+  label { display: block; font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 6px; }
+  input, select, textarea, button { font: inherit; color: inherit; }
+  input, select, textarea { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--field); color: var(--text); }
+  textarea { height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+  input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.8; }
+  /* API keys are masked with CSS: a real key field would make the browser offer to save the key as a site login. */
+  .secret { -webkit-text-security: disc; }
+  .counter { font-size: 12px; color: var(--muted); text-align: right; margin-top: 4px; }
+
+  button { height: 34px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+    font-weight: 500; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.danger { color: var(--danger); }
-  button:disabled { opacity: 0.6; cursor: default; }
-  code { font-size: 13px; overflow-wrap: anywhere; }
+  button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+  button.danger { border-color: transparent; background: transparent; color: var(--danger); }
+  button.small { height: 28px; padding: 0 10px; font-size: 13px; }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  .chip { flex: none; font-size: 12px; font-weight: 500; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .chip.ok { color: var(--ok); border-color: currentColor; }
+  .chip.accent { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .chip.failed { color: var(--danger); border-color: currentColor; }
+  .chip.running { color: var(--warn); border-color: currentColor; }
   .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .result { font-size: 14px; margin-top: 10px; }
+
+  .result { font-size: 13px; }
+  .result:empty { display: none; }
+  .field > .result { margin-top: 8px; }
   .result.success { color: var(--ok); } .result.failure { color: var(--danger); } .result.unsupported { color: var(--warn); }
-  #status { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: calc(100% - 32px);
-    background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px; display: none; }
-  #status.error { background: var(--danger); color: #fff; }
-  .job-meta { font-size: 13px; color: var(--muted); }
-  .prompt { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-  .thumb { width: 112px; height: 112px; object-fit: cover; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); }
+  .note { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+
+  .job-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
+  .thumb { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); }
   .thumb.placeholder { display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px;
-    font-size: 12px; color: var(--muted); border-style: dashed; }
-  .rating { font-size: 14px; }
+    font-size: 11px; color: var(--muted); border-style: dashed; }
+  .actions.rate { display: grid; gap: 10px; }
+  .rating { font-size: 13px; }
   .rating.good { color: var(--ok); } .rating.bad { color: var(--danger); }
-  .outcome.failed { color: var(--danger); } .outcome.running { color: var(--warn); }
+
+  #status { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
+    background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none;
+    box-shadow: 0 6px 24px rgb(0 0 0 / 0.18); }
+  #status.error { background: var(--danger); color: #fff; }
 </style>
 </head>
 <body>
 <main>
-  <h1>litevision settings</h1>
-  <p class="lead">Credentials you enter here are saved on this computer only, in a file only you can read. They never pass through your Agent.</p>
+  <header>
+    <h1>litevision settings</h1>
+    <p>Credentials you enter here are saved on this computer only, in a file only you can read. They never pass through your Agent.</p>
+  </header>
 
   <section id="providers">
-    <h2>Providers</h2>
+    <div class="section-head"><h2>Providers</h2></div>
     <div id="provider-list"><p class="muted">Loading…</p></div>
 
     <form id="add-provider" class="card" autocomplete="off">
       <h3>Add a Provider</h3>
-      <div class="row">
-        <div class="grow"><label for="add-preset">Preset</label><select id="add-preset"></select></div>
-        <div class="grow"><label for="add-id">Name</label><input id="add-id" required spellcheck="false" placeholder="openai"></div>
+      <div class="fields">
+        <div class="field"><label for="add-preset">Preset</label><select id="add-preset"></select></div>
+        <div class="field"><label for="add-id">Name</label><input id="add-id" required spellcheck="false" placeholder="openai"></div>
+        <div class="field wide"><label for="add-base-url">Base URL</label><input id="add-base-url" required spellcheck="false" placeholder="https://relay.example/v1"></div>
+        <div class="field wide"><label for="add-credential">API key</label><input id="add-credential" class="secret" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore spellcheck="false" placeholder="Paste your API key"></div>
       </div>
-      <div class="row">
-        <div class="grow"><label for="add-base-url">Base URL</label><input id="add-base-url" required spellcheck="false" placeholder="https://relay.example/v1"></div>
-      </div>
-      <div class="row">
-        <div class="grow"><label for="add-credential">API key</label><input id="add-credential" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste your API key"></div>
-      </div>
-      <div class="row"><button class="primary" type="submit">Add Provider</button></div>
+      <div class="actions"><button class="primary" type="submit">Add Provider</button></div>
     </form>
   </section>
 
   <section id="models">
-    <h2>Models</h2>
-    <p class="muted">Your Agent picks a Model by its Alias. Model Notes tell it what each Model is good or bad at.</p>
+    <div class="section-head">
+      <h2>Models</h2>
+      <p>Your Agent picks a Model by its Alias. Model Notes tell it what each Model is good or bad at.</p>
+    </div>
     <div id="model-list"><p class="muted">Loading…</p></div>
 
     <form id="add-model" class="card" autocomplete="off">
       <h3>Add a Model</h3>
-      <div class="row">
-        <div class="grow"><label for="model-provider">Provider</label><select id="model-provider" required></select></div>
-        <div class="grow"><label for="model-protocol">Protocol</label><select id="model-protocol" required></select></div>
+      <div class="fields">
+        <div class="field"><label for="model-provider">Provider</label><select id="model-provider" required></select></div>
+        <div class="field"><label for="model-protocol">Protocol</label><select id="model-protocol" required></select></div>
+        <div class="field wide">
+          <label for="model-id">Model id</label>
+          <div class="inline"><input id="model-id" required spellcheck="false" list="model-ids" placeholder="gpt-image-1"><button id="fetch-models" type="button">Fetch model list</button></div>
+          <datalist id="model-ids"></datalist>
+          <div id="fetch-result" class="result"></div>
+        </div>
+        <div class="field wide"><label for="model-alias">Alias</label><input id="model-alias" required spellcheck="false" placeholder="gpt-image-cheap"></div>
+        <div class="field wide"><label for="model-notes">Model Notes</label><textarea id="model-notes" maxlength="${modelNotesMaxLength}" placeholder="photoreal, cheap, bad at Chinese text"></textarea></div>
       </div>
-      <div class="row">
-        <div class="grow"><label for="model-id">Model id</label><input id="model-id" required spellcheck="false" list="model-ids" placeholder="gpt-image-1"></div>
-        <button id="fetch-models" type="button">Fetch model list</button>
-      </div>
-      <datalist id="model-ids"></datalist>
-      <div id="fetch-result" class="result"></div>
-      <div class="row">
-        <div class="grow"><label for="model-alias">Alias</label><input id="model-alias" required spellcheck="false" placeholder="gpt-image-cheap"></div>
-      </div>
-      <div class="row">
-        <div class="grow"><label for="model-notes">Model Notes</label><textarea id="model-notes" maxlength="${modelNotesMaxLength}" placeholder="photoreal, cheap, bad at Chinese text"></textarea></div>
-      </div>
-      <div class="row"><button class="primary" type="submit">Add Model</button></div>
+      <div class="actions"><button class="primary" type="submit">Add Model</button></div>
     </form>
   </section>
 
   <section id="history">
-    <h2>Job history</h2>
-    <p class="muted">Newest first. Rate a Job to keep your verdict on it; rating it again replaces the earlier Rating.</p>
+    <div class="section-head">
+      <h2>Job history</h2>
+      <p>Newest first. Rate a Job to keep your verdict on it; rating it again replaces the earlier Rating.</p>
+    </div>
     <div id="job-list"><p class="muted">Loading…</p></div>
   </section>
 </main>
@@ -162,6 +195,25 @@ function el(tag, props, ...children) {
   return node;
 }
 
+let fieldCount = 0;
+/** A labelled control, with any buttons on the same line. */
+function field(text, control, ...buttons) {
+  control.id ||= "field-" + ++fieldCount;
+  return el("div", { className: "field" }, el("label", { htmlFor: control.id, textContent: text }),
+    buttons.length === 0 ? control : el("div", { className: "inline" }, control, ...buttons));
+}
+
+/** An API key input, masked with CSS (see .secret) and marked for 1Password, LastPass and Bitwarden to leave alone. */
+function secretInput(placeholder) {
+  const input = el("input", { className: "secret", autocomplete: "off", spellcheck: false, placeholder });
+  for (const name of ["data-1p-ignore", "data-lpignore", "data-bwignore"]) input.setAttribute(name, "true");
+  return input;
+}
+
+function emptyState(text) {
+  return el("p", { className: "empty", textContent: text });
+}
+
 let statusTimer;
 function showStatus(message, isError) {
   const status = document.getElementById("status");
@@ -199,8 +251,7 @@ function protocolSelect(selected) {
 
 function providerCard(provider) {
   const baseUrl = el("input", { value: provider.baseUrl, spellcheck: false });
-  const credential = el("input", { type: "password", autocomplete: "new-password", spellcheck: false,
-    placeholder: provider.credential ? "New API key to replace the saved one" : "Paste your API key" });
+  const credential = secretInput(provider.credential ? "New API key to replace the saved one" : "Paste your API key");
   const protocol = protocolSelect(protocolFor(provider));
   const result = el("div", { className: "result" });
 
@@ -217,7 +268,7 @@ function providerCard(provider) {
     await loadProviders();
   }, "API key saved.");
 
-  const removeKey = el("button", { type: "button", className: "danger", textContent: "Remove key", disabled: !provider.credential });
+  const removeKey = el("button", { type: "button", className: "danger", textContent: "Remove key" });
   removeKey.onclick = () => {
     if (!confirm("Remove the saved API key for " + provider.id + "?")) return;
     act(removeKey, async () => {
@@ -244,15 +295,16 @@ function providerCard(provider) {
     }, "Provider removed.");
   };
 
-  const keyText = provider.credential
-    ? el("span", { className: "key", textContent: "API key ••••" + provider.credential.last4 })
-    : el("span", { className: "muted", textContent: "No API key saved" });
+  const keyChip = provider.credential
+    ? el("span", { className: "chip ok key", textContent: "Key ••••" + provider.credential.last4 })
+    : el("span", { className: "chip", textContent: "No API key" });
 
   return el("div", { className: "card" },
-    el("div", { className: "row" }, el("h3", { className: "grow", textContent: provider.id }), keyText),
-    el("div", { className: "row" }, el("div", { className: "grow" }, baseUrl), saveUrl),
-    el("div", { className: "row" }, el("div", { className: "grow" }, credential), saveKey, removeKey),
-    el("div", { className: "row" }, el("div", { className: "grow" }, protocol), test, remove),
+    el("div", { className: "card-head" }, el("h3", { textContent: provider.id }), keyChip),
+    el("div", { className: "fields" },
+      el("div", { className: "wide" }, field("Base URL", baseUrl, saveUrl)),
+      el("div", { className: "wide" }, provider.credential ? field("API key", credential, saveKey, removeKey) : field("API key", credential, saveKey))),
+    el("div", { className: "actions" }, protocol, test, el("span", { className: "spacer" }), remove),
     result,
   );
 }
@@ -261,7 +313,7 @@ async function loadProviders() {
   const list = document.getElementById("provider-list");
   const { providers } = await api("GET", "/api/providers");
   list.replaceChildren(...(providers.length === 0
-    ? [el("p", { className: "muted", textContent: "No Providers yet. Add one below." })]
+    ? [emptyState("No Providers yet. Add one below.")]
     : providers.map(providerCard)));
   providerIds = providers.map((p) => p.id);
   const select = document.getElementById("model-provider");
@@ -283,7 +335,10 @@ function notesField(value) {
   const update = () => (counter.textContent = textarea.value.length + " / " + notesMax);
   textarea.oninput = update;
   update();
-  return { textarea, wrapper: el("div", { className: "grow" }, el("label", { textContent: "Model Notes" }), textarea, counter) };
+  const wrapper = field("Model Notes", textarea);
+  wrapper.classList.add("wide");
+  wrapper.append(counter);
+  return { textarea, wrapper };
 }
 
 /** "Last changed by the Agent, 30 Oct 2026, 10:00", plus an undo button when there is a previous version. */
@@ -292,20 +347,16 @@ function notesHistoryRow(model, path) {
   if (!history) return [];
   const who = history.changedBy === "Agent" ? "your Agent" : "you";
   const when = new Date(history.changedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-  const parts = [el("span", { className: "grow muted", textContent: "Model Notes last changed by " + who + ", " + when + "." })];
+  const parts = [el("span", { textContent: "Last changed by " + who + ", " + when + "." })];
   if (history.previous !== undefined) {
-    const undo = el("button", { type: "button", textContent: "Undo", title: "Back to: " + (history.previous || "(no Model Notes)") });
+    const undo = el("button", { type: "button", className: "small", textContent: "Undo", title: "Back to: " + (history.previous || "(no Model Notes)") });
     undo.onclick = () => act(undo, async () => {
       await api("POST", path + "/notes/undo");
       await loadModels();
     }, "Model Notes restored. Undo again to redo.");
     parts.push(undo);
   }
-  return [el("div", { className: "row notes-history" }, ...parts)];
-}
-
-function labelled(text, control) {
-  return el("div", { className: "grow" }, el("label", { textContent: text }), control);
+  return [el("div", { className: "note" }, ...parts)];
 }
 
 function modelCard(model) {
@@ -322,7 +373,7 @@ function modelCard(model) {
     await loadModels();
   }, "Model saved.");
 
-  const makeDefault = el("button", { type: "button", textContent: "Make default" });
+  const makeDefault = el("button", { type: "button", className: "small", textContent: "Make default" });
   makeDefault.onclick = () => act(makeDefault, async () => {
     await api("PUT", "/api/default-image-model", { alias: model.alias });
     await loadModels();
@@ -337,14 +388,14 @@ function modelCard(model) {
     }, "Model removed.");
   };
 
+  notes.wrapper.append(...notesHistoryRow(model, path));
+
   return el("div", { className: "card" },
-    el("div", { className: "row" }, el("h3", { className: "grow", textContent: model.alias }),
-      model.default ? el("span", { className: "badge", textContent: "Default" }) : makeDefault),
-    el("div", { className: "row" }, labelled("Alias", alias), labelled("Provider", provider)),
-    el("div", { className: "row" }, labelled("Model id", modelId), labelled("Protocol", protocol)),
-    el("div", { className: "row" }, notes.wrapper),
-    ...notesHistoryRow(model, path),
-    el("div", { className: "row" }, save, remove),
+    el("div", { className: "card-head" }, el("h3", { textContent: model.alias }),
+      model.default ? el("span", { className: "chip accent", textContent: "Default" }) : makeDefault),
+    el("div", { className: "fields" },
+      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), notes.wrapper),
+    el("div", { className: "actions" }, save, el("span", { className: "spacer" }), remove),
   );
 }
 
@@ -352,7 +403,7 @@ async function loadModels() {
   const list = document.getElementById("model-list");
   const { models } = await api("GET", "/api/models");
   list.replaceChildren(...(models.length === 0
-    ? [el("p", { className: "muted", textContent: providerIds.length === 0 ? "Add a Provider first, then add its Models below." : "No Models yet. Add one below." })]
+    ? [emptyState(providerIds.length === 0 ? "Add a Provider first, then add its Models below." : "No Models yet. Add one below.")]
     : models.map(modelCard)));
 }
 
@@ -454,11 +505,11 @@ function formatDuration(ms) {
 }
 
 /** The current Rating, and a one-line reason with Good and Bad buttons to rate the Job. Only completed Jobs can be rated. */
-function ratingRows(job) {
+function ratingRow(job) {
   if (job.outcome !== "completed") return [];
   const current = job.rating
-    ? el("span", { className: "grow rating " + job.rating.verdict, textContent: (job.rating.verdict === "good" ? "Good" : "Bad") + ": " + job.rating.reason })
-    : el("span", { className: "grow muted", textContent: "Not rated yet." });
+    ? el("span", { className: "rating " + job.rating.verdict, textContent: (job.rating.verdict === "good" ? "Good" : "Bad") + ": " + job.rating.reason })
+    : el("span", { className: "rating muted", textContent: "Not rated yet." });
   const reason = el("input", { maxLength: reasonMax, placeholder: "One-line reason, e.g. the text is misspelled" });
   const rateAs = (verdict, label) => {
     const button = el("button", { type: "button", textContent: label });
@@ -468,10 +519,7 @@ function ratingRows(job) {
     }, "Rating saved.");
     return button;
   };
-  return [
-    el("div", { className: "row" }, current),
-    el("div", { className: "row" }, el("div", { className: "grow" }, reason), rateAs("good", "Good"), rateAs("bad", "Bad")),
-  ];
+  return [el("div", { className: "actions rate" }, current, el("div", { className: "inline" }, reason, rateAs("good", "Good"), rateAs("bad", "Bad")))];
 }
 
 function jobCard(job) {
@@ -483,13 +531,14 @@ function jobCard(job) {
   if (job.error) details.push(el("p", { className: "result failure", textContent: job.error }));
   if (job.shortfall) details.push(el("p", { className: "result unsupported", textContent: job.shortfall }));
   return el("div", { className: "card" },
-    el("div", { className: "row job-meta" },
-      el("span", { className: "grow", textContent: job.model + " (" + job.modelId + " on " + job.provider + ") · " + when + " · " + formatDuration(job.durationMs) }),
-      el("span", { className: "outcome " + job.outcome, textContent: outcome })),
+    el("div", {},
+      el("div", { className: "card-head" }, el("h3", { textContent: job.model }),
+        el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome })),
+      el("p", { className: "job-meta", textContent: job.modelId + " on " + job.provider + " · " + when + " · " + formatDuration(job.durationMs) })),
     el("p", { className: "prompt", textContent: job.prompt }),
     ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map(thumbnail))]),
     ...details,
-    ...ratingRows(job),
+    ...ratingRow(job),
   );
 }
 
@@ -497,7 +546,7 @@ async function loadJobs() {
   const list = document.getElementById("job-list");
   const { jobs } = await api("GET", "/api/jobs");
   list.replaceChildren(...(jobs.length === 0
-    ? [el("p", { className: "muted", textContent: "No Jobs yet. Images your Agent generates will appear here." })]
+    ? [emptyState("No Jobs yet. Images your Agent generates will appear here.")]
     : jobs.map(jobCard)));
 }
 

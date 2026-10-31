@@ -31,6 +31,13 @@ describe("settings page access", () => {
     expect(response.headers["content-type"]).toStartWith("text/html");
     expect(response.text).toContain("Providers");
   });
+
+  test("has no password fields, so the browser does not offer to save an API key as a password", async () => {
+    const h = await start();
+    const response = await h.send("GET", new URL(h.server.url).pathname + new URL(h.server.url).search, { token: null });
+    // `type: "password"` and `autocomplete: "new-password"` both make browsers offer to save the key.
+    expect(response.text).not.toContain("password");
+  });
 });
 
 describe("idle shutdown", () => {
