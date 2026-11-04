@@ -88,6 +88,7 @@ export function renderPage(nonce: string): string {
   .prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
   .thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
   .thumb { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); }
+  .thumb.video { width: 192px; height: 108px; }
   .thumb.placeholder { display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px;
     font-size: 11px; color: var(--muted); border-style: dashed; }
   .actions.rate { display: grid; gap: 10px; }
@@ -135,6 +136,7 @@ export function renderPage(nonce: string): string {
       <div class="fields">
         <div class="field"><label for="model-provider">Provider</label><select id="model-provider" required></select></div>
         <div class="field"><label for="model-protocol">Protocol</label><select id="model-protocol" required></select></div>
+        <div class="field"><label for="model-modality">Makes</label><select id="model-modality" required><option value="image">Images</option><option value="video">Videos</option></select></div>
         <div class="field wide">
           <label for="model-id">Model id</label>
           <div class="inline"><input id="model-id" required spellcheck="false" list="model-ids" placeholder="gpt-image-1"><button id="fetch-models" type="button">Fetch model list</button></div>
@@ -364,20 +366,21 @@ function modelCard(model) {
   const provider = el("select", {}, ...options(providerIds.includes(model.provider) ? providerIds : [model.provider, ...providerIds], model.provider));
   const modelId = el("input", { value: model.modelId, spellcheck: false });
   const protocol = el("select", {}, ...options(protocols.includes(model.protocol) ? protocols : [model.protocol, ...protocols], model.protocol));
+  const modality = el("select", {}, ...options(["image", "video"], model.modality));
   const notes = notesField(model.notes);
   const path = "/api/models/" + encodeURIComponent(model.alias);
 
   const save = el("button", { type: "button", className: "primary", textContent: "Save" });
   save.onclick = () => act(save, async () => {
-    await api("PATCH", path, { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value, notes: notes.textarea.value });
+    await api("PATCH", path, { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value, modality: modality.value, notes: notes.textarea.value });
     await loadModels();
   }, "Model saved.");
 
   const makeDefault = el("button", { type: "button", className: "small", textContent: "Make default" });
   makeDefault.onclick = () => act(makeDefault, async () => {
-    await api("PUT", "/api/default-image-model", { alias: model.alias });
+    await api("PUT", "/api/default-" + model.modality + "-model", { alias: model.alias });
     await loadModels();
-  }, model.alias + " is now the default image Model.");
+  }, model.alias + " is now the default " + model.modality + " Model.");
 
   const remove = el("button", { type: "button", className: "danger", textContent: "Remove Model" });
   remove.onclick = () => {
@@ -392,9 +395,9 @@ function modelCard(model) {
 
   return el("div", { className: "card" },
     el("div", { className: "card-head" }, el("h3", { textContent: model.alias }),
-      model.default ? el("span", { className: "chip accent", textContent: "Default" }) : makeDefault),
+      model.default ? el("span", { className: "chip accent", textContent: "Default " + model.modality }) : makeDefault),
     el("div", { className: "fields" },
-      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), notes.wrapper),
+      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), field("Makes", modality), notes.wrapper),
     el("div", { className: "actions" }, save, el("span", { className: "spacer" }), remove),
   );
 }
@@ -416,6 +419,9 @@ function setUpAddModelForm() {
   const fetchButton = document.getElementById("fetch-models");
   const fetchResult = document.getElementById("fetch-result");
   const ids = document.getElementById("model-ids");
+  const modality = document.getElementById("model-modality");
+  // What the fetched model list says each model id makes, when the Provider says.
+  let knownModalities = {};
   protocol.replaceChildren(...options(protocols));
 
   // Suggest the Protocol a preset Provider's Models usually speak; the User can still change it.
@@ -423,16 +429,21 @@ function setUpAddModelForm() {
     const suggested = presets.find((p) => p.id === provider.value);
     if (suggested && protocols.includes(suggested.protocol)) protocol.value = suggested.protocol;
     ids.replaceChildren();
+    knownModalities = {};
     fetchResult.textContent = "";
   };
-  protocol.onchange = () => ids.replaceChildren();
+  protocol.onchange = () => {
+    ids.replaceChildren();
+    knownModalities = {};
+  };
 
   fetchButton.onclick = () => act(fetchButton, async () => {
     fetchResult.textContent = "Fetching…";
     fetchResult.className = "result";
     const outcome = await api("POST", "/api/providers/" + encodeURIComponent(provider.value) + "/model-ids", { protocol: protocol.value });
     if (outcome.result === "success") {
-      ids.replaceChildren(...outcome.modelIds.map((id) => el("option", { value: id })));
+      knownModalities = outcome.modalities || {};
+      ids.replaceChildren(...outcome.modelIds.map((id) => el("option", { value: id, label: knownModalities[id] ? id + " (" + knownModalities[id] + ")" : id })));
       fetchResult.textContent = outcome.modelIds.length + " model id(s) found. Pick one in the Model id field, or type your own.";
       fetchResult.className = "result success";
       modelId.focus();
@@ -446,13 +457,15 @@ function setUpAddModelForm() {
   let aliasEdited = false;
   alias.oninput = () => (aliasEdited = alias.value !== "");
   modelId.oninput = () => {
+    const known = knownModalities[modelId.value.trim()];
+    if (known) modality.value = known;
     if (!aliasEdited) alias.value = modelId.value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 64);
   };
 
   const form = document.getElementById("add-model");
   form.onsubmit = (event) => {
     event.preventDefault();
-    const body = { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value };
+    const body = { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value, modality: modality.value };
     if (notes.value.trim() !== "") body.notes = notes.value;
     act(form.querySelector("button[type=submit]"), async () => {
       await api("POST", "/api/models", body);
@@ -493,11 +506,14 @@ function setUpAddForm() {
   };
 }
 
-/** An image of a Job, or a placeholder once the file is gone. */
-function thumbnail(file) {
-  const img = el("img", { className: "thumb", src: file.thumbnail + "?token=" + encodeURIComponent(token), alt: file.path, title: file.path, loading: "lazy" });
-  img.onerror = () => img.replaceWith(el("div", { className: "thumb placeholder", title: file.path, textContent: "Image no longer on disk" }));
-  return img;
+/** An image or video of a Job, or a placeholder once the file is gone. */
+function thumbnail(job, file) {
+  const src = file.thumbnail + "?token=" + encodeURIComponent(token);
+  const media = job.modality === "video"
+    ? el("video", { className: "thumb video", src, title: file.path, controls: true, muted: true, preload: "metadata" })
+    : el("img", { className: "thumb", src, alt: file.path, title: file.path, loading: "lazy" });
+  media.onerror = () => media.replaceWith(el("div", { className: "thumb placeholder", title: file.path, textContent: "File no longer on disk" }));
+  return media;
 }
 
 function formatDuration(ms) {
@@ -525,18 +541,19 @@ function ratingRow(job) {
 function jobCard(job) {
   const when = new Date(job.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   const outcome = job.outcome === "completed"
-    ? job.files.length + " image(s)"
+    ? (job.modality === "video" ? "Video" : job.files.length + " image(s)")
     : job.outcome === "running" ? "Running…" : "Failed";
   const details = [];
   if (job.error) details.push(el("p", { className: "result failure", textContent: job.error }));
   if (job.shortfall) details.push(el("p", { className: "result unsupported", textContent: job.shortfall }));
+  if (job.mismatch) details.push(el("p", { className: "result unsupported", textContent: job.mismatch }));
   return el("div", { className: "card" },
     el("div", {},
       el("div", { className: "card-head" }, el("h3", { textContent: job.model }),
         el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome })),
       el("p", { className: "job-meta", textContent: job.modelId + " on " + job.provider + " · " + when + " · " + formatDuration(job.durationMs) })),
     el("p", { className: "prompt", textContent: job.prompt }),
-    ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map(thumbnail))]),
+    ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map((file) => thumbnail(job, file)))]),
     ...details,
     ...ratingRow(job),
   );

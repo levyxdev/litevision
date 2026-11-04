@@ -30,6 +30,10 @@ _Avoid_: API format, adapter (the adapter is the code that implements a Protocol
 One generation model reachable through one Provider, using one Protocol. The same upstream model offered by two Providers is two Models.
 _Avoid_: Engine
 
+**Modality**:
+The kind of media a Model generates: image or video. Every Model has exactly one.
+_Avoid_: Type, category, kind, media type
+
 **Alias**:
 The short, User-chosen name the Agent uses to pick a Model, e.g. `gpt-image-cheap`.
 _Avoid_: Nickname, model id (the model id is the Provider's own name for it)
@@ -43,6 +47,10 @@ _Avoid_: Task (APIMart's word for its own server-side job), request, run
 **Rating**:
 The User's explicit verdict on one Job: good or bad, plus a one-line reason. Recorded only when the User actually states it.
 _Avoid_: Feedback, review, score
+
+**Known-good Options**:
+The `provider_options` a Model is known to honour: sent by a completed Job whose result matched what was asked, as far as litevision can check (an image's aspect ratio, a video's duration), and that the User has not rated bad. Options last sent by a Job the User rated bad are _suspect_ instead, shown with the Rating's reason, until a Job rated good sends them again. So are options last sent by a Job whose result did not match, until a matching Job sends them again.
+_Avoid_: Working options, defaults, presets
 
 **Model Notes**:
 A short note about a Model that helps the Agent choose it, e.g. "photoreal, cheap, bad at Chinese text". The User and the Agent may both change it, but only to text the User has agreed to.

@@ -83,7 +83,7 @@ export async function startSettingsServer(options: SettingsServerOptions): Promi
       const nonce = randomBytes(16).toString("base64");
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
-        "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
+        "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; media-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
         ...commonHeaders,
       });
       response.end(renderPage(nonce));

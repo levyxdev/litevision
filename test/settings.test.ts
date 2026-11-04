@@ -166,7 +166,7 @@ describe("Providers", () => {
     expect((await h.send("GET", "/api/providers/openai")).json()).toEqual({ provider: { ...openai, credential: { last4: "0000" } } });
   });
 
-  test("lists presets for OpenAI, Gemini, Venice and APIMart with their base URLs", async () => {
+  test("lists presets for OpenAI, Gemini, Venice, APIMart and Together AI with their base URLs", async () => {
     const h = await start();
     const { presets } = (await h.send("GET", "/api/presets")).json();
     expect(presets.map((preset: { label: string; baseUrl: string }) => [preset.label, preset.baseUrl])).toEqual([
@@ -174,6 +174,7 @@ describe("Providers", () => {
       ["Gemini", "https://generativelanguage.googleapis.com/v1beta"],
       ["Venice", "https://api.venice.ai/api/v1"],
       ["APIMart", "https://api.apimart.ai/v1"],
+      ["Together AI", "https://api.together.ai"],
     ]);
   });
 

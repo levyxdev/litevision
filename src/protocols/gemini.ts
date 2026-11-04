@@ -195,7 +195,8 @@ export const gemini: ProtocolAdapter = {
 
   // Gemini's `/models` says nothing about image sizes or limits, so there is no `fetchModelInfo` (ADR 0004).
 
-  docsUrl: () => "https://ai.google.dev/api/interactions-api",
+  // The image generation guide documents `image_size` and the other response format fields `provider_options` may set.
+  docsUrl: () => "https://ai.google.dev/gemini-api/docs/image-generation",
 
   reservedOptions: ["model", "input"],
 

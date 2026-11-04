@@ -1,8 +1,8 @@
 # litevision
 
-Let an AI agent generate images through models you already pay for.
+Let an AI agent generate images and videos through models you already pay for.
 
-litevision is a local [MCP](https://modelcontextprotocol.io) server. You configure your own Providers (OpenAI, Gemini, Venice, APIMart, or any compatible relay) once, in a settings page on your own machine. Your Agent (Claude Code, Codex, …) then generates images with them and gets back file paths. Your API keys never pass through the conversation.
+litevision is a local [MCP](https://modelcontextprotocol.io) server. You configure your own Providers (OpenAI, Gemini, Venice, APIMart, Together AI, or any compatible relay) once, in a settings page on your own machine. Your Agent (Claude Code, Codex, …) then generates images and videos with them and gets back file paths. Your API keys never pass through the conversation.
 
 ## Install
 
@@ -35,7 +35,7 @@ npx -y litevision settings
 The page listens on `127.0.0.1` only, behind a one-time token, and shuts down after a few idle minutes. On it you:
 
 1. **Add a Provider**: a name, a base URL, and its API key (the Credential). "Test connection" checks the key.
-2. **Add Models**: an Alias your Agent will use (e.g. `gpt-image-cheap`), the Provider's model id, and the Protocol it speaks:
+2. **Add Models**: an Alias your Agent will use (e.g. `gpt-image-cheap`), the Provider's model id, the Protocol it speaks, and whether it makes images or videos (filled in for you when the Provider's model list says):
 
    | Protocol | For |
    | --- | --- |
@@ -43,19 +43,21 @@ The page listens on `127.0.0.1` only, behind a one-time token, and shuts down af
    | `gemini` | Google's Gemini API (Interactions API) |
    | `venice` | Venice |
    | `apimart` | APIMart |
+   | `together` | Together AI, images and videos. Models Together passes through to their makers (FLUX, Google, Qwen, …) work only once you turn on "Passthrough models" in Together's organization settings, which sends your prompts for them to those makers. |
 
-3. **Pick a default image Model** and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
+3. **Pick a default image Model** (and a default video Model) and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
 
-The page also shows the Job history, with the images and any Ratings you gave.
+The page also shows the Job history, with the images and videos and any Ratings you gave.
 
 ## Tools
 
 | Tool | What it does |
 | --- | --- |
-| `generate_image` | Generates images from a prompt, optionally with reference images, an aspect ratio and Provider-specific `provider_options`. Saves them and returns the file paths. |
-| `get_job` | Waits for, or reports on, a Job that was still running when `generate_image` returned. |
-| `list_models` | Lists the configured Models with their capabilities and Model Notes; for one Model, also its docs link, parameter schema and options that already worked. |
-| `rate_job` | Records your verdict on a result (good or bad, plus a reason) when you state one. |
+| `generate_image` | Generates images from a prompt, optionally with reference images, an aspect ratio and Provider-specific `provider_options`. Saves them and returns the file paths, with the size each image actually came out at. |
+| `generate_video` | Generates a video from a prompt, optionally with a first and last frame, reference images, an aspect ratio, a duration and a resolution. Saves it and returns the file path, with its actual size and length. |
+| `get_job` | Waits for, or reports on, a Job that was still running when `generate_image` or `generate_video` returned. |
+| `list_models` | Lists the configured Models with their Modality, capabilities, Model Notes, docs link and Known-good Options (the `provider_options` that worked); for one Model, also their values, options made suspect by a bad Rating or a result that did not match, and the Provider's parameter schema. |
+| `rate_job` | Records your verdict on a result (good or bad, plus a reason) when you state one. A bad Rating makes the options that Job used suspect until a good one uses them again. |
 | `update_model_notes` | Replaces a Model's Notes, only with text you agreed to. You can undo it in the settings page. |
 | `open_settings` | Opens the settings page. |
 
@@ -65,7 +67,7 @@ The page also shows the Job history, with the images and any Ratings you gave.
 | --- | --- |
 | Providers, Models (`config.json`) and Credentials (`credentials.json`, mode 600) | `~/.config/litevision/` |
 | Job history (`jobs.jsonl`) and cached Model capabilities | `~/.local/share/litevision/` |
-| Generated images, unless the Agent passes `output_path` | `~/litevision/outputs/<date>/` |
+| Generated images and videos, unless the Agent passes `output_path` | `~/litevision/outputs/<date>/` |
 
 ## Develop
 

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Dirs } from "./dirs.ts";
+import { modalities, type Modality } from "./protocols/protocol.ts";
 
 export const providerSchema = z.object({
   id: z.string().min(1),
@@ -31,6 +32,8 @@ export const modelSchema = z.object({
   provider: z.string().min(1),
   modelId: z.string().min(1),
   protocol: z.string().min(1),
+  /** What the Model generates (ADR 0005); Models saved before videos existed are image Models. */
+  modality: z.enum(modalities).default("image"),
   notes: z.string().optional(),
   notesHistory: notesHistorySchema.optional(),
 });
@@ -39,6 +42,7 @@ const configSchema = z.object({
   providers: z.array(providerSchema).default([]),
   models: z.array(modelSchema).default([]),
   defaultImageModel: z.string().optional(),
+  defaultVideoModel: z.string().optional(),
 });
 
 export const credentialsSchema = z.record(z.string(), z.object({ apiKey: z.string().min(1) }));
@@ -96,25 +100,37 @@ export interface ResolvedModel {
   provider: Provider;
 }
 
-/** The default image Model's Alias, when one is set and that Model exists. */
-export function defaultModelAlias(config: Config): string | undefined {
-  const wanted = config.defaultImageModel;
-  return config.models.some((model) => model.alias === wanted) ? wanted : undefined;
+/** Where the Config keeps each Modality's default Model. */
+export const defaultKey = { image: "defaultImageModel", video: "defaultVideoModel" } as const;
+
+/** The default Model's Alias for a Modality, when one is set and that Model exists with that Modality. */
+export function defaultModelAlias(config: Config, modality: Modality = "image"): string | undefined {
+  const wanted = config[defaultKey[modality]];
+  return config.models.some((model) => model.alias === wanted && model.modality === modality) ? wanted : undefined;
 }
 
-/** Picks the Model for a Job: the named Alias, else the default image Model. */
-export function resolveModel(config: Config, alias: string | undefined): ResolvedModel {
-  if (config.models.length === 0) throw needsSettings("litevision has no image Model configured yet.");
-
-  const known = config.models.map((model) => model.alias).join(", ");
-  const wanted = alias ?? config.defaultImageModel;
-  if (wanted === undefined) {
-    throw needsSettings(`No default image Model is set. Pass \`model\` with one of: ${known}. Or:`);
-  }
+/** Picks the Model for a Job: the named Alias, else the default Model of the wanted Modality. */
+export function resolveModel(config: Config, alias: string | undefined, modality: Modality = "image"): ResolvedModel {
+  const ofModality = config.models.filter((model) => model.modality === modality);
+  const wanted = alias ?? config[defaultKey[modality]];
   const model = config.models.find((candidate) => candidate.alias === wanted);
+  // Naming a Model of the other Modality gets pointed at the right tool, even when none of this Modality exist.
+  if (ofModality.length === 0 && (alias === undefined || model === undefined)) throw needsSettings(`litevision has no ${modality} Model configured yet.`);
+
+  const known = ofModality.map((candidate) => candidate.alias).join(", ");
+  if (wanted === undefined) {
+    throw needsSettings(`No default ${modality} Model is set. Pass \`model\` with one of: ${known}. Or:`);
+  }
   if (model === undefined) {
-    if (alias === undefined) throw needsSettings(`The default image Model "${wanted}" does not exist. Known Aliases: ${known}.`);
-    throw new ConfigError(`Unknown Model Alias "${wanted}". Known Aliases: ${known}.`);
+    if (alias === undefined) throw needsSettings(`The default ${modality} Model "${wanted}" does not exist. Known Aliases: ${known}.`);
+    throw new ConfigError(`Unknown Model Alias "${wanted}". Known ${modality} Model Aliases: ${known}.`);
+  }
+  if (model.modality !== modality) {
+    if (alias === undefined) throw needsSettings(`The default ${modality} Model "${wanted}" makes ${model.modality}s. Pass \`model\` with one of: ${known}. Or:`);
+    const tool = model.modality === "video" ? "generate_video" : "generate_image";
+    throw new ConfigError(
+      `Model "${model.alias}" generates ${model.modality}s, not ${modality}s. Use \`${tool}\` for it${ofModality.length === 0 ? "" : `, or one of these ${modality} Models: ${known}`}.`,
+    );
   }
   const provider = config.providers.find((candidate) => candidate.id === model.provider);
   if (provider === undefined) {

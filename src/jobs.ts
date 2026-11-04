@@ -4,16 +4,18 @@ import { join } from "node:path";
 import { ConfigError, loadConfig, needsSettings, requireCredential, type ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 import { appendHistory, readJob, type JobRecord } from "./history.ts";
-import { imageTypeOf } from "./images.ts";
 import type { HttpTransport } from "./http.ts";
-import type { NormalisedRequest } from "./protocols/capabilities.ts";
+import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
+import { ratioOf, type NormalisedRequest, type NormalisedVideoRequest } from "./protocols/capabilities.ts";
 import { providerError, providerLabel } from "./protocols/errors.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
 import {
+  formatSize,
   ProviderError,
-  type GeneratedImage,
+  type GeneratedFile,
   type JobContext,
   type JobImages,
+  type JobVideo,
   type ProtocolAdapter,
   type ProviderErrorKind,
 } from "./protocols/protocol.ts";
@@ -34,12 +36,19 @@ export interface JobRunnerDeps {
   pollIntervalMs?: number;
 }
 
-export interface JobSpec extends ResolvedModel {
+interface SpecBase extends ResolvedModel {
   adapter: ProtocolAdapter;
   credential: string;
-  normalised: NormalisedRequest;
-  /** Absolute folder to save into; omitted, images go under a dated folder in `dirs.output`. */
+  /** Absolute folder to save into; omitted, results go under a dated folder in `dirs.output`. */
   outputDir?: string;
+}
+
+export interface JobSpec extends SpecBase {
+  normalised: NormalisedRequest;
+}
+
+export interface VideoJobSpec extends SpecBase {
+  normalised: NormalisedVideoRequest;
 }
 
 export interface CompletedJob {
@@ -47,6 +56,10 @@ export interface CompletedJob {
   files: string[];
   /** Why fewer files than requested were saved; omitted when none are missing. Safe to show the Agent. */
   shortfall?: string;
+  /** What each saved file turned out to be, in the order of `files`; `null` where litevision could not tell. */
+  observed: Array<MediaFacts | null>;
+  /** How the result differs from the request (ADR 0006); omitted when it matched as far as litevision can tell. */
+  mismatch?: string;
 }
 
 /** Where a Job stands once the wait limit has passed or it has finished. A failed Job is thrown as {@link JobFailedError}. */
@@ -71,11 +84,11 @@ class JobAbandoned extends Error {
 }
 
 /** What a Job's records share; the rest of a record says where the Job stands. */
-type JobBase = Omit<JobRecord, "durationMs" | "files" | "outcome" | "resume" | "cost" | "shortfall" | "error">;
+type JobBase = Omit<JobRecord, "durationMs" | "files" | "outcome" | "resume" | "cost" | "shortfall" | "observed" | "mismatch" | "error">;
 
-type JobProgress = Partial<Pick<JobRecord, "files" | "resume" | "cost" | "shortfall" | "error">>;
+type JobProgress = Partial<Pick<JobRecord, "files" | "resume" | "cost" | "shortfall" | "observed" | "mismatch" | "error">>;
 
-const lostMessage = "litevision stopped before this Job finished, so its result is lost; generate the images again.";
+const lostMessage = "litevision stopped before this Job finished, so its result is lost; start it again.";
 
 /**
  * Runs Jobs for every Protocol: submit, wait, poll, download, save, and the Job history. A Job outlives the tool call
@@ -95,33 +108,18 @@ export class JobRunner {
     this.pollIntervalMs = deps.pollIntervalMs ?? defaultPollIntervalMs;
   }
 
-  /** Starts a Job and waits for it up to the wait limit. */
+  /** Starts an image Job and waits for it up to the wait limit. */
   async start(spec: JobSpec): Promise<JobState> {
     const { request } = spec.normalised;
-    const base: JobBase = {
-      type: "job",
-      id: randomUUID(),
-      createdAt: this.deps.now().toISOString(),
-      model: spec.model.alias,
-      provider: spec.provider.id,
-      protocol: spec.model.protocol,
-      modelId: spec.model.modelId,
-      prompt: request.prompt,
-      parameters: {
-        n: request.n,
-        aspectRatio: spec.normalised.requestedAspectRatio,
-        size: request.size,
-        references: request.references.map((reference) => reference.path),
-        ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
-        providerOptions: request.providerOptions,
-      },
-    };
-    const target = {
-      providerId: spec.provider.id,
-      baseUrl: spec.provider.baseUrl,
-      modelId: spec.model.modelId,
-      credential: spec.credential,
-    };
+    const base = this.baseFor(spec, "image", request.prompt, {
+      n: request.n,
+      aspectRatio: spec.normalised.requestedAspectRatio,
+      size: request.size,
+      references: request.references.map((reference) => reference.path),
+      ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
+      providerOptions: request.providerOptions,
+    });
+    const target = targetOf(spec);
     // Recorded before the Provider is called, so a Job lost with this process is never silently forgotten.
     await this.append(base, "running");
     const job = this.track(base, spec.credential, async (context) => {
@@ -130,6 +128,51 @@ export class JobRunner {
       return submitted.wait();
     });
     return this.waitFor(base.model, base.id, this.register(base.id, job));
+  }
+
+  /** Starts a video Job and waits for it up to the wait limit. */
+  async startVideo(spec: VideoJobSpec): Promise<JobState> {
+    const { request } = spec.normalised;
+    const submitVideo = spec.adapter.submitVideo;
+    if (submitVideo === undefined) {
+      throw new ConfigError(`Model "${spec.model.alias}" uses Protocol "${spec.model.protocol}", which litevision cannot make videos with.`);
+    }
+    const base = this.baseFor(spec, "video", request.prompt, {
+      n: 1,
+      aspectRatio: spec.normalised.requestedAspectRatio,
+      size: request.size,
+      references: request.references.map((reference) => reference.path),
+      seconds: request.seconds,
+      ...(request.resolution === undefined ? {} : { resolution: request.resolution }),
+      ...(spec.normalised.followsFirstFrame ? { followsFirstFrame: true as const } : {}),
+      ...(request.firstFrame === undefined ? {} : { firstFrame: request.firstFrame.path }),
+      ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame.path }),
+      ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
+      providerOptions: request.providerOptions,
+    });
+    const target = targetOf(spec);
+    await this.append(base, "running");
+    const job = this.track(base, spec.credential, async (context) => {
+      const submitted = await submitVideo.call(spec.adapter, request, target, this.deps.http, context);
+      await this.append(base, "running", { resume: submitted.resumeHandle });
+      return videoAsImages(await submitted.wait());
+    });
+    return this.waitFor(base.model, base.id, this.register(base.id, job));
+  }
+
+  private baseFor(spec: SpecBase, modality: JobBase["modality"], prompt: string, parameters: JobBase["parameters"]): JobBase {
+    return {
+      type: "job",
+      id: randomUUID(),
+      createdAt: this.deps.now().toISOString(),
+      model: spec.model.alias,
+      provider: spec.provider.id,
+      protocol: spec.model.protocol,
+      modelId: spec.model.modelId,
+      modality,
+      prompt,
+      parameters,
+    };
   }
 
   /**
@@ -149,7 +192,9 @@ export class JobRunner {
           id,
           model: record.model,
           files: record.files,
+          observed: record.observed ?? record.files.map(() => null),
           ...(record.shortfall === undefined ? {} : { shortfall: record.shortfall }),
+          ...(record.mismatch === undefined ? {} : { mismatch: record.mismatch }),
         };
       }
       if (record.outcome === "failed") {
@@ -213,7 +258,8 @@ export class JobRunner {
     const handle = record.resume;
     const base = baseOf(record);
     const adapter = adapterForProtocol(record.protocol);
-    const resume = adapter?.resume;
+    const video = record.modality === "video";
+    const resume = video ? adapter?.resumeVideo : adapter?.resume;
     if (handle === undefined || adapter === undefined || resume === undefined) {
       await this.append(base, "failed", { error: { kind: "other", message: lostMessage } });
       throw new JobFailedError(record.id, "other", lostMessage);
@@ -224,7 +270,12 @@ export class JobRunner {
     }
     const credential = await requireCredential(this.deps.dirs, provider);
     const target = { providerId: provider.id, baseUrl: provider.baseUrl, modelId: record.modelId, credential };
-    return this.track(base, credential, (context) => resume.call(adapter, handle, target, this.deps.http, context).wait());
+    if (video) {
+      const resumeVideo = adapter.resumeVideo!;
+      return this.track(base, credential, async (context) => videoAsImages(await resumeVideo.call(adapter, handle, target, this.deps.http, context).wait()));
+    }
+    const resumeImages = adapter.resume!;
+    return this.track(base, credential, (context) => resumeImages.call(adapter, handle, target, this.deps.http, context).wait());
   }
 
   /** Runs a Job to its end: saves what it brought back and records how it went. */
@@ -237,19 +288,27 @@ export class JobRunner {
       if (this.closed) throw new JobAbandoned();
       const startedAt = new Date(base.createdAt);
       const folder = base.parameters.outputPath ?? join(this.deps.dirs.output, localDate(startedAt));
-      const saved = await saveImages(this.deps.http, folder, base.id, startedAt, result.images, base.provider);
+      const saved = await saveFiles(this.deps.http, folder, base.id, startedAt, result.images, base.provider);
       const reasons = [result.shortfall, ...saved.failures.map((failure) => failure.message)].filter((reason) => reason !== undefined);
       if (saved.files.length === 0) {
-        throw saved.failures[0] ?? providerError("other", base.provider, reasons[0] ?? "it returned no images.");
+        throw saved.failures[0] ?? providerError("other", base.provider, reasons[0] ?? "it returned nothing.");
       }
+      const observed = saved.facts;
+      const mismatch = mismatchOf(base.parameters, observed);
       const shortfall =
         saved.files.length >= n
           ? undefined
           : safe(
               `Got ${saved.files.length} of ${n} images from ${providerLabel(base.provider)}.${reasons.length === 0 ? "" : ` ${reasons.join(" ")}`}`,
             );
-      await this.append(base, "completed", { files: saved.files, shortfall, cost: result.cost });
-      return { id: base.id, files: saved.files, ...(shortfall === undefined ? {} : { shortfall }) };
+      await this.append(base, "completed", { files: saved.files, shortfall, cost: result.cost, observed, mismatch });
+      return {
+        id: base.id,
+        files: saved.files,
+        observed,
+        ...(shortfall === undefined ? {} : { shortfall }),
+        ...(mismatch === undefined ? {} : { mismatch }),
+      };
     } catch (error) {
       if (error instanceof JobAbandoned || this.closed) throw new JobAbandoned();
       const kind = error instanceof ProviderError ? error.kind : "other";
@@ -273,27 +332,75 @@ export class JobRunner {
 }
 
 function baseOf(record: JobRecord): JobBase {
-  const { type, id, createdAt, model, provider, protocol, modelId, prompt, parameters } = record;
-  return { type, id, createdAt, model, provider, protocol, modelId, prompt, parameters };
+  const { type, id, createdAt, model, provider, protocol, modelId, modality, prompt, parameters } = record;
+  return { type, id, createdAt, model, provider, protocol, modelId, ...(modality === undefined ? {} : { modality }), prompt, parameters };
+}
+
+function targetOf(spec: SpecBase) {
+  return { providerId: spec.provider.id, baseUrl: spec.provider.baseUrl, modelId: spec.model.modelId, credential: spec.credential };
+}
+
+/** A video Job is saved like an image Job with one result. */
+function videoAsImages(result: JobVideo): JobImages {
+  return { images: [result.video], ...(result.cost === undefined ? {} : { cost: result.cost }) };
+}
+
+/** A result whose shape is more than 5% off the requested one; small differences come from rounding to a Model's grid. */
+const aspectTolerance = Math.log(1.05);
+
+/** Half a second either way: containers round a clip's length to whole frames. */
+const durationToleranceSeconds = 0.5;
+
+/**
+ * How the saved files differ from what was requested, as far as their headers tell (ADR 0006). Pixel counts are not
+ * compared, since `provider_options` such as a resolution tier are meant to change them; the shape and length are.
+ */
+/**
+ * The shape a result should have: `width` and `height` from `provider_options` when the Agent set both (video Models
+ * leave them open), else the ratio asked for, not the size table's rounding of it (Kontext answers 16:9 with 1392x752).
+ */
+function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; asked: string } {
+  const { width, height } = parameters.providerOptions;
+  if (typeof width === "number" && typeof height === "number" && width > 0 && height > 0) {
+    return { ratio: width / height, asked: `${width}x${height} in provider_options` };
+  }
+  return { ratio: ratioOf(parameters.size.aspectRatio), asked: `${parameters.size.aspectRatio} (${formatSize(parameters.size)})` };
+}
+
+function mismatchOf(parameters: JobRecord["parameters"], observed: Array<MediaFacts | null>): string | undefined {
+  const { seconds, followsFirstFrame } = parameters;
+  const expected = expectedShape(parameters);
+  const problems = new Set<string>();
+  for (const facts of observed) {
+    if (facts === null) continue;
+    if (!followsFirstFrame && Math.abs(Math.log(facts.width / facts.height / expected.ratio)) > aspectTolerance) {
+      problems.add(`asked for ${expected.asked}, got ${facts.width}x${facts.height}`);
+    }
+    if (seconds !== undefined && facts.seconds !== undefined && Math.abs(facts.seconds - seconds) > durationToleranceSeconds) {
+      problems.add(`asked for ${seconds} s, got ${facts.seconds} s`);
+    }
+  }
+  return problems.size === 0 ? undefined : [...problems].join("; ");
 }
 
 function redact(text: string, credential: string): string {
   return text.split(credential).join("[redacted]");
 }
 
-async function saveImages(
+async function saveFiles(
   http: HttpTransport,
   folder: string,
   jobId: string,
   startedAt: Date,
-  images: GeneratedImage[],
+  results: GeneratedFile[],
   providerId: string,
-): Promise<{ files: string[]; failures: ProviderError[] }> {
+): Promise<{ files: string[]; facts: Array<MediaFacts | null>; failures: ProviderError[] }> {
   await mkdir(folder, { recursive: true });
   const base = `${localTime(startedAt)}-${jobId.slice(0, 8)}`;
   const files: string[] = [];
+  const facts: Array<MediaFacts | null> = [];
   const failures: ProviderError[] = [];
-  for (const [index, image] of images.entries()) {
+  for (const [index, image] of results.entries()) {
     let bytes: Uint8Array;
     try {
       bytes = "bytes" in image ? image.bytes : await download(http, image.url, providerId);
@@ -303,12 +410,13 @@ async function saveImages(
       failures.push(error);
       continue;
     }
-    const suffix = images.length === 1 ? "" : `-${index + 1}`;
-    const file = join(folder, `${base}${suffix}.${imageTypeOf(bytes)?.extension ?? "bin"}`);
+    const suffix = results.length === 1 ? "" : `-${index + 1}`;
+    const file = join(folder, `${base}${suffix}.${fileTypeOf(bytes)?.extension ?? "bin"}`);
     await writeFile(file, bytes);
     files.push(file);
+    facts.push(mediaFactsOf(bytes) ?? null);
   }
-  return { files, failures };
+  return { files, facts, failures };
 }
 
 async function download(http: HttpTransport, url: string, providerId: string): Promise<Uint8Array> {

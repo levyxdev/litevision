@@ -1,7 +1,8 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Dirs } from "./dirs.ts";
-import type { AspectRatio, ImageSize, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
+import type { MediaFacts } from "./media.ts";
+import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
 
 /**
  * The Job history, `jobs.jsonl`: append-only, one JSON record per line. A Job gets several records over its life
@@ -10,8 +11,9 @@ import type { AspectRatio, ImageSize, ProviderErrorKind, ResumeHandle } from "./
  * Every read of the history goes through this module.
  */
 
-/** The `generate_image` parameters of a Job, as recorded in the Job history. */
+/** The `generate_image` or `generate_video` parameters of a Job, as recorded in the Job history. */
 export interface JobParameters {
+  /** Always 1 for a video Job. */
   n: number;
   /** What the Agent asked for. */
   aspectRatio: AspectRatio;
@@ -19,6 +21,15 @@ export interface JobParameters {
   size: ImageSize;
   /** Absolute paths of the reference images. */
   references: string[];
+  /** Video Jobs only: the length requested from the Provider, in seconds. */
+  seconds?: number;
+  /** Video Jobs only: the resolution tier requested, when the Model takes one by name. */
+  resolution?: string;
+  /** Video Jobs only: true when the first frame decides the video's shape, so it is not checked (ADR 0006). */
+  followsFirstFrame?: true;
+  /** Video Jobs only: absolute paths of the first and last frames, when given. */
+  firstFrame?: string;
+  lastFrame?: string;
   /** Absolute folder the Agent asked to save into, when it gave one. */
   outputPath?: string;
   providerOptions: Record<string, unknown>;
@@ -33,6 +44,8 @@ export interface JobRecord {
   provider: string;
   protocol: string;
   modelId: string;
+  /** Absent for Jobs recorded before videos existed, which are all image Jobs. */
+  modality?: Modality;
   prompt: string;
   parameters: JobParameters;
   /** So far, while the Job is running. */
@@ -45,6 +58,10 @@ export interface JobRecord {
   cost?: number;
   /** Why a completed Job has fewer files than `parameters.n`. */
   shortfall?: string;
+  /** What each saved file turned out to be, in the order of `files`; a file litevision could not read is `null`. */
+  observed?: Array<MediaFacts | null>;
+  /** How the result differs from what was requested (ADR 0006); absent when it matched as far as litevision can tell. */
+  mismatch?: string;
   error?: { kind: ProviderErrorKind; message: string };
 }
 
@@ -188,16 +205,56 @@ export interface ModelKey {
   modelId: string;
 }
 
+/** One `provider_options` key whose latest value is in doubt, and why. */
+export interface SuspectOption {
+  value: unknown;
+  /** Why it is suspect: the User rated a Job that sent it bad, or the latest Job that sent it did not match. */
+  cause: "rating" | "mismatch";
+  /** The Rating's reason in the User's words, or how the result differed from the request. */
+  reason: string;
+  jobId: string;
+}
+
+/** What the Job history says about a Model's `provider_options` (ADR 0006). */
+export interface OptionsRecord {
+  /** Known-good Options: each key with the value it most recently sent from a Job that matched its request. */
+  knownGood: Record<string, unknown>;
+  /** Keys whose latest value the User rated bad and has not rated good since, or whose latest Job did not match. */
+  suspect: Record<string, SuspectOption>;
+}
+
 /**
- * The `provider_options` known to work with a Model: every key a completed Job sent, with the value it most recently
- * sent. "Works" means the Provider accepted it and returned images; whether it changed the result is not known.
+ * Known-good and suspect `provider_options` for a Model, oldest Job first (ADR 0006). Each key's latest value counts.
+ * A value the User rated bad stays suspect, whenever it is sent again, until the User rates a Job that sent it good:
+ * no Job without a Rating clears the User's verdict, matching or not. Otherwise a value is suspect when its latest Job
+ * did not match its request, and Known-good when it did.
  */
-export function knownGoodOptions(jobs: JobRecord[], model: ModelKey): Record<string, unknown> {
-  const options: Record<string, unknown> = {};
-  for (const job of jobs) {
+export function optionsRecord(jobs: RatedJob[], model: ModelKey): OptionsRecord {
+  const state = new Map<string, { value: unknown; suspect?: SuspectOption }>();
+  /** Per key, the values the User rated bad and not good since, by their JSON. */
+  const ratedBad = new Map<string, Map<string, SuspectOption>>();
+  const ordered = [...jobs].sort((a, b) => Date.parse(a.job.createdAt) - Date.parse(b.job.createdAt));
+  for (const { job, rating } of ordered) {
     if (job.outcome !== "completed") continue;
     if (job.provider !== model.provider || job.protocol !== model.protocol || job.modelId !== model.modelId) continue;
-    Object.assign(options, job.parameters?.providerOptions);
+    for (const [key, value] of Object.entries(job.parameters?.providerOptions ?? {})) {
+      const asJson = JSON.stringify(value);
+      const badValues = ratedBad.get(key) ?? new Map<string, SuspectOption>();
+      ratedBad.set(key, badValues);
+      if (rating?.verdict === "bad") badValues.set(asJson, { value, cause: "rating", reason: rating.reason, jobId: job.id });
+      if (rating?.verdict === "good") badValues.delete(asJson);
+
+      const verdict = badValues.get(asJson);
+      if (verdict !== undefined) state.set(key, { value, suspect: verdict });
+      else if (job.mismatch !== undefined && rating?.verdict !== "good") {
+        state.set(key, { value, suspect: { value, cause: "mismatch", reason: job.mismatch, jobId: job.id } });
+      } else state.set(key, { value });
+    }
   }
-  return options;
+  const record: OptionsRecord = { knownGood: {}, suspect: {} };
+  for (const [key, { value, suspect }] of state) {
+    if (suspect === undefined) record.knownGood[key] = value;
+    else record.suspect[key] = suspect;
+  }
+  return record;
 }

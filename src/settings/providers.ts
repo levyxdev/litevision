@@ -33,6 +33,7 @@ export const providerPresets: ProviderPreset[] = [
   { id: "gemini", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", protocol: "gemini" },
   { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", protocol: "venice" },
   { id: "apimart", label: "APIMart", baseUrl: "https://api.apimart.ai/v1", protocol: "apimart" },
+  { id: "together", label: "Together AI", baseUrl: "https://api.together.ai", protocol: "together" },
 ];
 
 /** A short User-chosen name, such as a Provider id or an Alias. `what` names it in the error, e.g. "A Provider id". */

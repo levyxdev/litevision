@@ -59,7 +59,7 @@ export function updateNotesAsAgent(dirs: Dirs, alias: string, text: string, at: 
     const parsed = z.array(modelSchema).safeParse(models);
     if (!parsed.success) throw needsSettings(`The Models in config.json are invalid: ${z.prettifyError(parsed.error)}`);
     const stored = models as Array<z.infer<typeof modelSchema>>;
-    if (stored.length === 0) throw needsSettings("litevision has no image Model configured yet.");
+    if (stored.length === 0) throw needsSettings("litevision has no Model configured yet.");
 
     const model = stored.find((candidate) => candidate.alias === alias);
     if (model === undefined) {

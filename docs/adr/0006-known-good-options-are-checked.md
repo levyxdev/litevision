@@ -1,0 +1,13 @@
+# Known-good Options are checked against the result, and a mismatch or a bad Rating makes them suspect
+
+Providers often ignore a `provider_options` key they do not recognise and still return a result, so "the Job completed" says little about whether an option worked. An Agent that trusted such a record would keep sending a misspelt resolution parameter forever, and one that trusted nothing would look the docs up and guess again on every Job. litevision therefore checks what it can: it reads every saved image's pixel size from its header, and reads a video's size and duration from its MP4 header, because the Provider's answer may carry neither. A result whose aspect ratio or duration differs from the request is reported to the Agent ("asked for 16:9, got 1:1"), with the Model's docs link, and that Job's options become suspect rather than Known-good, until a Job whose result matches sends them again. The aspect ratio is compared with the ratio asked for, not the pixel size litevision sent, because Models round it their own way (FLUX.1 Kontext answers 16:9 with 1392x752); a video made from a first frame with no aspect ratio asked for takes the frame's shape, so its shape is not checked. The observed size is always reported, so an Agent that asked for a higher resolution through `provider_options` can see whether it got one. Options litevision cannot check count once their Job completes, unless the User rates it bad: then they are suspect, shown with the Rating's reason, until a Job rated good sends them again; a later matching Job without a Rating does not clear the User's verdict. Most Ratings arrive through `rate_job` while the User talks to the Agent, not in the settings page, so both count the same.
+
+The Agent sees Known-good Options without asking: `list_models` names them for every Model, and a Provider's rejection of a request carries the docs link and the Known-good Options for that Model. Docs links point at the page for the Model's family where the adapter knows one, and at the Provider's API reference otherwise; the Agent reads them only when no Known-good Options cover what it needs, or when a result says an option did not take effect.
+
+This replaces the consequence in ADR 0004 that a known-good option "only means the Provider accepted it".
+
+## Considered Options
+
+- **Count every completed Job's options**, as before: rejected because a silently ignored option is recorded as working, which is the failure this ADR is for.
+- **Require a good Rating before options count**: rejected because the User rarely rates, so almost nothing would ever count.
+- **Compare exact pixel sizes**: rejected because an option such as a resolution tier is meant to change them; aspect ratio and duration are what the request fixes.

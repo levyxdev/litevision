@@ -4,6 +4,10 @@ import type { HttpTransport } from "../http.ts";
 export const aspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
 export type AspectRatio = (typeof aspectRatios)[number];
 
+/** What a Model generates (ADR 0005). */
+export const modalities = ["image", "video"] as const;
+export type Modality = (typeof modalities)[number];
+
 /** One aspect ratio a Model supports, and the concrete size it produces. */
 export interface ImageSize {
   aspectRatio: AspectRatio;
@@ -63,6 +67,42 @@ export interface ImageRequest {
   model: ModelDescription;
 }
 
+/** What one video Model can do, as declared by its Protocol adapter. */
+export interface VideoCapabilities {
+  /**
+   * The resolution tiers, the default first, each with every aspect ratio it supports and the size it makes there;
+   * never empty. A tier has a `name` (e.g. `720P`) when the Model takes it by name; a Model sized only in pixels has a
+   * single tier without one.
+   */
+  resolutions: Array<{ name?: string; sizes: ImageSize[] }>;
+  /** Every clip length in whole seconds the Model can make, shortest first; never empty. */
+  durations: number[];
+  /** Used when the Agent asks for no particular length; one of `durations`. */
+  defaultDuration: number;
+  /** Whether the Model can start from a given image, and end on one. */
+  firstFrame: boolean;
+  lastFrame: boolean;
+  /** How many reference images (characters, objects, style) one Job may take; 0 when the Model cannot take any. */
+  maxReferences: number;
+}
+
+/** A video generation request in litevision's own terms, already checked against the Model's VideoCapabilities. */
+export interface VideoRequest {
+  prompt: string;
+  /** One of the sizes of the chosen resolution tier. */
+  size: ImageSize;
+  /** The chosen tier's name; omitted when the tier has none. */
+  resolution?: string;
+  /** One of the Model's `durations`. */
+  seconds: number;
+  firstFrame?: ReferenceImage;
+  lastFrame?: ReferenceImage;
+  /** At most the Model's `maxReferences`. */
+  references: ReferenceImage[];
+  /** Merged into the Provider request untouched. Never contains an adapter's `reservedVideoOptions`. */
+  providerOptions: Record<string, unknown>;
+}
+
 /** Everything an adapter needs to reach one Model. */
 export interface ModelTarget {
   providerId: string;
@@ -71,8 +111,25 @@ export interface ModelTarget {
   credential: string;
 }
 
-/** One result image: either its bytes, or a link the Job runner downloads straight away. */
-export type GeneratedImage = { bytes: Uint8Array } | { url: string };
+/** One result file: either its bytes, or a link the Job runner downloads straight away. */
+export type GeneratedFile = { bytes: Uint8Array } | { url: string };
+
+/** One result image. */
+export type GeneratedImage = GeneratedFile;
+
+/** What a video Job brought back: one video. */
+export interface JobVideo {
+  video: GeneratedFile;
+  /** What the Provider says the Job cost, in its own unit; omitted when it does not say. */
+  cost?: number;
+}
+
+/** A video Job a Provider has accepted; video Jobs are always asynchronous. */
+export interface SubmittedVideoJob {
+  wait(): Promise<JobVideo>;
+  /** Recorded as soon as the Provider accepts the Job, for `resumeVideo`. */
+  resumeHandle: ResumeHandle;
+}
 
 /** What a Job brought back. Fewer images than requested is still a result, as long as there is at least one. */
 export interface JobImages {
@@ -130,8 +187,13 @@ export interface ConnectionResult {
   message: string;
 }
 
-/** A Provider's model list, for the settings page. A failure message is plain language and never contains the Credential. */
-export type ModelIdsResult = { ok: true; modelIds: string[] } | { ok: false; message: string };
+/**
+ * A Provider's model list, for the settings page. `modalities` gives each model id's Modality when the Provider says;
+ * a failure message is plain language and never contains the Credential.
+ */
+export type ModelIdsResult =
+  | { ok: true; modelIds: string[]; modalities?: Record<string, Modality> }
+  | { ok: false; message: string };
 
 /** What a Provider itself reports about one of its Models. */
 export interface ProviderModelInfo {
@@ -153,11 +215,25 @@ export interface ProtocolAdapter {
    * Resolves to undefined when the Provider knows nothing about the model id; a failure is thrown.
    */
   fetchModelInfo?(target: ModelTarget, http: HttpTransport): Promise<ProviderModelInfo | undefined>;
-  /** Where the Agent can read which `provider_options` a Model accepts. */
-  docsUrl(modelId: string): string;
+  /**
+   * Where the Agent can read which `provider_options` a Model accepts: the page for the Model's family where the
+   * adapter knows one, else the Provider's API reference (ADR 0006).
+   */
+  docsUrl(modelId: string, modality?: Modality): string;
   /** Request fields the adapter sets itself; `provider_options` may not set them. */
   reservedOptions: readonly string[];
   submit(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedJob>;
+  /**
+   * Video Protocols only (ADR 0005): what a video Model with this model id can do. Unknown model ids get the
+   * Protocol's most permissive guess, so the Provider's own error says what it does not support.
+   */
+  builtInVideoCapabilities?(modelId: string): VideoCapabilities;
+  /** Video Protocols only: request fields the adapter sets itself for a video Job. */
+  reservedVideoOptions?: readonly string[];
+  /** Video Protocols only: submits a video Job. */
+  submitVideo?(request: VideoRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedVideoJob>;
+  /** Video Protocols only: picks a video Job up from the resume handle `submitVideo` gave. */
+  resumeVideo?(handle: ResumeHandle, target: ModelTarget, http: HttpTransport, context: JobContext): SubmittedVideoJob;
   /**
    * Asynchronous Protocols only: picks up a Job from the resume handle its `submit` gave, after the litevision that
    * submitted it has gone. Without it, a Job lost with its process is reported as failed.
