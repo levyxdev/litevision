@@ -9,6 +9,15 @@ function jpegOfSize(width: number, height: number): Uint8Array {
   return new Uint8Array([0xff, 0xd8, ...app0, ...sof0]);
 }
 
+/** A JPEG whose EXIF says to show it turned a quarter (orientation 6), as phones save portrait photos. */
+function rotatedJpegOfSize(width: number, height: number): Uint8Array {
+  const tiff = [...Buffer.from("MM"), 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0];
+  const exif = [...Buffer.from("Exif\0\0"), ...tiff];
+  const app1 = [0xff, 0xe1, (exif.length + 2) >> 8, (exif.length + 2) & 0xff, ...exif];
+  const jpeg = jpegOfSize(width, height);
+  return new Uint8Array([...jpeg.subarray(0, 2), ...app1, ...jpeg.subarray(2)]);
+}
+
 /** A WebP with an extended (VP8X) header, sizes stored minus one in 24 bits. */
 function webpOfSize(width: number, height: number): Uint8Array {
   const bytes = Buffer.alloc(30);
@@ -26,6 +35,10 @@ describe("reading what a result file is", () => {
     expect(mediaFactsOf(pngOfSize(1344, 768))).toEqual({ width: 1344, height: 768 });
     expect(mediaFactsOf(jpegOfSize(1024, 768))).toEqual({ width: 1024, height: 768 });
     expect(mediaFactsOf(webpOfSize(1920, 1080))).toEqual({ width: 1920, height: 1080 });
+  });
+
+  test("reads a JPEG's size as shown, after its EXIF orientation", () => {
+    expect(mediaFactsOf(rotatedJpegOfSize(4032, 3024))).toEqual({ width: 3024, height: 4032 });
   });
 
   test("reads an MP4's size and length, and names it a video", () => {

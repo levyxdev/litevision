@@ -25,7 +25,7 @@ export interface JobParameters {
   seconds?: number;
   /** Video Jobs only: the resolution tier requested, when the Model takes one by name. */
   resolution?: string;
-  /** Video Jobs only: true when the Agent gave no aspect ratio, so the video takes the first frame's shape. */
+  /** Video Jobs only: true when the first frame decides the video's shape, so it is not checked (ADR 0006). */
   followsFirstFrame?: true;
   /** Video Jobs only: absolute paths of the first and last frames, when given. */
   firstFrame?: string;
@@ -205,10 +205,10 @@ export interface ModelKey {
   modelId: string;
 }
 
-/** One `provider_options` key a Job the User rated bad last sent, and why the User rated it so. */
+/** One `provider_options` key whose latest value is in doubt, and why. */
 export interface SuspectOption {
   value: unknown;
-  /** Why it is suspect: the User rated its Job bad, or its Job's result did not match the request. */
+  /** Why it is suspect: the User rated a Job that sent it bad, or the latest Job that sent it did not match. */
   cause: "rating" | "mismatch";
   /** The Rating's reason in the User's words, or how the result differed from the request. */
   reason: string;
@@ -219,37 +219,36 @@ export interface SuspectOption {
 export interface OptionsRecord {
   /** Known-good Options: each key with the value it most recently sent from a Job that matched its request. */
   knownGood: Record<string, unknown>;
-  /** Keys whose value was last sent by a Job the User rated bad or whose result did not match, and not cleared since. */
+  /** Keys whose latest value the User rated bad and has not rated good since, or whose latest Job did not match. */
   suspect: Record<string, SuspectOption>;
 }
 
 /**
- * Known-good and suspect `provider_options` for a Model, oldest Job first (ADR 0006). A Job the User rated bad, or
- * whose result did not match its request, makes the values it sent suspect. A good Rating clears that. A matching Job
- * without a Rating counts as good, and clears a suspicion of the value it repeated only when that suspicion came from
- * a mismatch: it is evidence against a mismatch, not against the User's verdict.
+ * Known-good and suspect `provider_options` for a Model, oldest Job first (ADR 0006). Each key's latest value counts.
+ * A value the User rated bad stays suspect, whenever it is sent again, until the User rates a Job that sent it good:
+ * no Job without a Rating clears the User's verdict, matching or not. Otherwise a value is suspect when its latest Job
+ * did not match its request, and Known-good when it did.
  */
 export function optionsRecord(jobs: RatedJob[], model: ModelKey): OptionsRecord {
   const state = new Map<string, { value: unknown; suspect?: SuspectOption }>();
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  /** Per key, the values the User rated bad and not good since, by their JSON. */
+  const ratedBad = new Map<string, Map<string, SuspectOption>>();
   const ordered = [...jobs].sort((a, b) => Date.parse(a.job.createdAt) - Date.parse(b.job.createdAt));
   for (const { job, rating } of ordered) {
     if (job.outcome !== "completed") continue;
     if (job.provider !== model.provider || job.protocol !== model.protocol || job.modelId !== model.modelId) continue;
     for (const [key, value] of Object.entries(job.parameters?.providerOptions ?? {})) {
-      const previous = state.get(key);
-      if (rating?.verdict === "bad") {
-        state.set(key, { value, suspect: { value, cause: "rating", reason: rating.reason, jobId: job.id } });
-      } else if (job.mismatch !== undefined) {
+      const asJson = JSON.stringify(value);
+      const badValues = ratedBad.get(key) ?? new Map<string, SuspectOption>();
+      ratedBad.set(key, badValues);
+      if (rating?.verdict === "bad") badValues.set(asJson, { value, cause: "rating", reason: rating.reason, jobId: job.id });
+      if (rating?.verdict === "good") badValues.delete(asJson);
+
+      const verdict = badValues.get(asJson);
+      if (verdict !== undefined) state.set(key, { value, suspect: verdict });
+      else if (job.mismatch !== undefined && rating?.verdict !== "good") {
         state.set(key, { value, suspect: { value, cause: "mismatch", reason: job.mismatch, jobId: job.id } });
-      } else if (
-        rating?.verdict === "good" ||
-        previous?.suspect === undefined ||
-        previous.suspect.cause === "mismatch" ||
-        !same(previous.value, value)
-      ) {
-        state.set(key, { value });
-      }
+      } else state.set(key, { value });
     }
   }
   const record: OptionsRecord = { knownGood: {}, suspect: {} };

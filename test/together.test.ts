@@ -193,6 +193,18 @@ describe("generate_image with the together Protocol", () => {
     expect(text).toContain("https://docs.together.ai/docs/inference/images/parameters");
   });
 
+  test("a prompt Together refuses on content grounds stays a refusal, though Together names the field", async () => {
+    const refused = () =>
+      Response.json(
+        { error: { message: "prompt was flagged by the safety filter", type: "invalid_request_error", param: "prompt", code: null } },
+        { status: 400 },
+      );
+    harness = await startHarness(togetherSetup({ [imagesUrl]: refused }));
+    const text = textOf(await generate());
+    expect(text).toContain("content grounds");
+    expect(text).not.toContain("Docs for this Model's provider_options");
+  });
+
   test("an image whose shape differs from the request is reported, and its options are not Known-good", async () => {
     harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1024, 1024) }));
     const result = await generate({ aspect_ratio: "16:9", provider_options: { aspect: "wide" } });
@@ -216,6 +228,25 @@ describe("generate_image with the together Protocol", () => {
 });
 
 describe("Known-good Options and Ratings", () => {
+  test("only a good Rating clears the User's bad Rating, whatever matching or mismatched Jobs send in between", async () => {
+    let size = [1024, 576];
+    harness = await startHarness(togetherSetup({ [imagesUrl]: (request) => imageOfSize(size[0]!, size[1]!)(request) }));
+    const rated = ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30, style: "a" } }));
+    ok(await call("rate_job", { job_id: rated.job_id, verdict: "bad", reason: "muddy colours" }));
+    size = [1024, 1024];
+    ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30 } }));
+    size = [1024, 576];
+    ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30, style: "b" } }));
+    ok(await generate({ aspect_ratio: "16:9", provider_options: { style: "a" } }));
+
+    const sdxl = ok(await call("list_models", { model: "sdxl" })).models[0];
+    expect(sdxl.known_good_options).toEqual({});
+    expect(sdxl.suspect_options).toEqual({
+      steps: { value: 30, reason: "muddy colours", job_id: rated.job_id, cause: "rating" },
+      style: { value: "a", reason: "muddy colours", job_id: rated.job_id, cause: "rating" },
+    });
+  });
+
   test("a result that does not match its request makes Known-good Options it sent suspect, until a matching result sends them again", async () => {
     let size = [1024, 576];
     harness = await startHarness(togetherSetup({ [imagesUrl]: (request) => imageOfSize(size[0]!, size[1]!)(request) }));
@@ -366,6 +397,22 @@ describe("generate_video with the together Protocol", () => {
     expect(again).toContain("Known-good Options:");
   });
 
+  test("a video from a first frame at an aspect ratio the Model cannot take follows the frame, which is not then a mismatch", async () => {
+    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 5) }));
+    const frame = join(harness.cwd, "portrait.png");
+    await writeFile(frame, pngOfSize(720, 1280));
+    const output = ok(await video({ model: "seedance", aspect_ratio: "9:16", first_frame: frame }));
+    expect(output.aspect_ratio_adjusted).toBe(true);
+    expect(output.mismatch).toBeUndefined();
+  });
+
+  test("a video's shape is checked against width and height set in provider_options", async () => {
+    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 5) }));
+    const output = ok(await video({ model: "veo", provider_options: { width: 720, height: 1280 } }));
+    expect((await bodyOf(videosUrl))).toMatchObject({ width: 720, height: 1280 });
+    expect(output.mismatch).toBeUndefined();
+  });
+
   test("without an aspect ratio, a video from a first frame takes the frame's shape, which is not then a mismatch", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 5) }));
     const frame = join(harness.cwd, "portrait.png");
@@ -434,6 +481,23 @@ describe("Modality", () => {
     });
     expect(wan.video_capabilities.resolutions.map((tier: { resolution: string }) => tier.resolution)).toEqual(["1080P", "720P"]);
     expect(textOf(result)).toContain("wan (default video): video Model Wan-AI/wan2.7-t2v");
+  });
+
+  test("a default video Model that makes images sends the User to the settings page", async () => {
+    harness = await startHarness({
+      ...togetherSetup(),
+      config: {
+        providers: [{ id: "together-ai", baseUrl: root }],
+        models: [
+          { alias: "sdxl", provider: "together-ai", modelId: "stabilityai/stable-diffusion-xl-base-1.0", protocol: "together" },
+          { alias: "wan", provider: "together-ai", modelId: "Wan-AI/wan2.7-t2v", protocol: "together", modality: "video" },
+        ],
+        defaultVideoModel: "sdxl",
+      },
+    });
+    const text = textOf(await video());
+    expect(text).toContain("open_settings");
+    expect(text).toContain("wan");
   });
 
   test("with no video Model configured, generate_video sends the User to the settings page", async () => {

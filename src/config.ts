@@ -126,6 +126,7 @@ export function resolveModel(config: Config, alias: string | undefined, modality
     throw new ConfigError(`Unknown Model Alias "${wanted}". Known ${modality} Model Aliases: ${known}.`);
   }
   if (model.modality !== modality) {
+    if (alias === undefined) throw needsSettings(`The default ${modality} Model "${wanted}" makes ${model.modality}s. Pass \`model\` with one of: ${known}. Or:`);
     const tool = model.modality === "video" ? "generate_video" : "generate_image";
     throw new ConfigError(
       `Model "${model.alias}" generates ${model.modality}s, not ${modality}s. Use \`${tool}\` for it${ofModality.length === 0 ? "" : `, or one of these ${modality} Models: ${known}`}.`,

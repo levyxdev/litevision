@@ -4,7 +4,7 @@ import type { HttpTransport } from "../http.ts";
 export const aspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
 export type AspectRatio = (typeof aspectRatios)[number];
 
-/** The kind of media a Model generates. */
+/** What a Model generates (ADR 0005). */
 export const modalities = ["image", "video"] as const;
 export type Modality = (typeof modalities)[number];
 

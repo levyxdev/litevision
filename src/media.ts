@@ -58,18 +58,41 @@ function ascii(bytes: Uint8Array, start: number, end: number): string {
 }
 
 /** The first start-of-frame marker carries the size. */
+/** A JPEG's size as shown: phones store portrait photos landscape and say so in EXIF, so a quarter turn swaps the sides. */
 function jpegSize(bytes: Uint8Array, view: DataView): MediaFacts | undefined {
   let offset = 2;
+  let turned = false;
   while (offset + 9 < bytes.length) {
     if (bytes[offset] !== 0xff) return undefined;
     const marker = bytes[offset + 1]!;
+    if (marker === 0xe1 && ascii(bytes, offset + 4, offset + 10) === "Exif\0\0") turned = exifTurnsQuarter(view, offset + 10);
     // SOF0–SOF15, except DHT (C4), JPG (C8) and DAC (CC), which share the range.
     if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-      return { width: view.getUint16(offset + 7), height: view.getUint16(offset + 5) };
+      const width = view.getUint16(offset + 7);
+      const height = view.getUint16(offset + 5);
+      return turned ? { width: height, height: width } : { width, height };
     }
     offset += 2 + view.getUint16(offset + 2);
   }
   return undefined;
+}
+
+/** Whether the EXIF block at `tiff` says to show the image turned a quarter: Orientation (tag 0x0112) 5 to 8. */
+function exifTurnsQuarter(view: DataView, tiff: number): boolean {
+  try {
+    const little = view.getUint16(tiff) === 0x4949; // "II"
+    const ifd = tiff + view.getUint32(tiff + 4, little);
+    const entries = view.getUint16(ifd, little);
+    for (let index = 0; index < entries; index++) {
+      const entry = ifd + 2 + index * 12;
+      if (view.getUint16(entry, little) !== 0x0112) continue;
+      const orientation = view.getUint16(entry + 8, little);
+      return orientation >= 5 && orientation <= 8;
+    }
+  } catch {
+    // A truncated EXIF block says nothing about orientation.
+  }
+  return false;
 }
 
 function webpSize(bytes: Uint8Array, view: DataView): MediaFacts | undefined {

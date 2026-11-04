@@ -355,14 +355,26 @@ const durationToleranceSeconds = 0.5;
  * How the saved files differ from what was requested, as far as their headers tell (ADR 0006). Pixel counts are not
  * compared, since `provider_options` such as a resolution tier are meant to change them; the shape and length are.
  */
+/**
+ * The shape a result should have: `width` and `height` from `provider_options` when the Agent set both (video Models
+ * leave them open), else the ratio asked for, not the size table's rounding of it (Kontext answers 16:9 with 1392x752).
+ */
+function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; asked: string } {
+  const { width, height } = parameters.providerOptions;
+  if (typeof width === "number" && typeof height === "number" && width > 0 && height > 0) {
+    return { ratio: width / height, asked: `${width}x${height} in provider_options` };
+  }
+  return { ratio: ratioOf(parameters.size.aspectRatio), asked: `${parameters.size.aspectRatio} (${formatSize(parameters.size)})` };
+}
+
 function mismatchOf(parameters: JobRecord["parameters"], observed: Array<MediaFacts | null>): string | undefined {
-  const { size, seconds, followsFirstFrame } = parameters;
+  const { seconds, followsFirstFrame } = parameters;
+  const expected = expectedShape(parameters);
   const problems = new Set<string>();
   for (const facts of observed) {
     if (facts === null) continue;
-    // Against the ratio asked for, not the size table's rounding of it: Kontext answers 16:9 with 1392x752, not 1344x768.
-    if (!followsFirstFrame && Math.abs(Math.log(facts.width / facts.height / ratioOf(size.aspectRatio))) > aspectTolerance) {
-      problems.add(`asked for ${size.aspectRatio} (${formatSize(size)}), got ${facts.width}x${facts.height}`);
+    if (!followsFirstFrame && Math.abs(Math.log(facts.width / facts.height / expected.ratio)) > aspectTolerance) {
+      problems.add(`asked for ${expected.asked}, got ${facts.width}x${facts.height}`);
     }
     if (seconds !== undefined && facts.seconds !== undefined && Math.abs(facts.seconds - seconds) > durationToleranceSeconds) {
       problems.add(`asked for ${seconds} s, got ${facts.seconds} s`);

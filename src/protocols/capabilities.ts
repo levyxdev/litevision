@@ -129,7 +129,10 @@ export interface NormalisedVideoRequest {
   request: VideoRequest;
   requestedAspectRatio: AspectRatio;
   aspectRatioAdjusted: boolean;
-  /** True when the Agent gave no aspect ratio, so the size follows the first frame's shape. */
+  /**
+   * True when a first frame decides the video's shape: the Agent gave no aspect ratio, or one the Model cannot take
+   * (Seedance takes no shape at all and follows the frame).
+   */
   followsFirstFrame: boolean;
   /** What the Agent asked for; omitted when it left the length to the Model. */
   requestedDuration?: number;
@@ -230,7 +233,7 @@ export async function normaliseVideoRequest(
     },
     requestedAspectRatio: frameFacts === undefined ? (parameters.aspectRatio ?? "16:9") : size.aspectRatio,
     aspectRatioAdjusted: adjusted,
-    followsFirstFrame: frameFacts !== undefined,
+    followsFirstFrame: frameFacts !== undefined || (firstFrame !== undefined && adjusted),
     ...(parameters.duration === undefined ? {} : { requestedDuration: parameters.duration }),
     durationAdjusted: parameters.duration !== undefined && seconds !== parameters.duration,
   };

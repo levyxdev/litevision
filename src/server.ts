@@ -229,10 +229,6 @@ function optionsOf(ratedJobs: RatedJob[], model: Model): OptionsRecord {
   return optionsRecord(ratedJobs, { provider: model.provider, protocol: model.protocol, modelId: model.modelId });
 }
 
-/**
- * Where the Agent should look when a Provider rejected a request or a result did not match it: the docs link, and the
- * options that worked before (ADR 0006).
- */
 /** The docs link and recorded options for the Model a Job ran on, read from the Job history. */
 async function jobDocs(dirs: Dirs, jobId: string): Promise<{ docsUrl: string; options: OptionsRecord } | undefined> {
   const job = await readJob(dirs, jobId);
@@ -247,6 +243,10 @@ function suspectWhy(suspect: SuspectOption): string {
     : `whose result did not match the request: ${suspect.reason}`;
 }
 
+/**
+ * Where the Agent should look when a Provider rejected a request or a result did not match it: the docs link, and the
+ * Known-good Options (ADR 0006).
+ */
 function optionsHint(docsUrl: string, record: OptionsRecord): string {
   const good = Object.keys(record.knownGood).length === 0 ? "none recorded yet" : JSON.stringify(record.knownGood);
   const suspect = Object.entries(record.suspect)
@@ -549,7 +549,10 @@ export function createServer(deps: ServerDeps): McpServer {
     async ({ job_id }) => {
       try {
         const job = await jobs.get(job_id);
-        const docsUrl = (await jobDocs(deps.dirs, job_id))?.docsUrl ?? "the Model's docs link in `list_models`";
+        const docsUrl =
+          job.status === "completed" && job.mismatch !== undefined
+            ? ((await jobDocs(deps.dirs, job_id))?.docsUrl ?? "the Model's docs link in `list_models`")
+            : "";
         const text =
           job.status === "running"
             ? jobText(job)

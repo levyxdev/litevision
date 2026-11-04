@@ -321,9 +321,11 @@ async function errorOf(response: Response, providerId: string): Promise<Provider
   const error = parsed.success ? parsed.data.error : undefined;
   if (error?.code === passthroughBlocked) return passthroughError(providerId);
   const plain = body === undefined ? text.trim().slice(0, 300) : "";
-  // Together names the field it rejected, so a field named e.g. `safety_tolerance` is a request problem, not a refusal.
+  // Together names the field it rejected. Its name says nothing about the problem, so classify without it: a field
+  // named `safety_tolerance` is a request problem, but a prompt "flagged by the safety filter" is still a refusal.
   if (error?.param && response.status === 400 && error.message !== undefined) {
-    return providerError("unsupported", providerId, `HTTP 400: ${error.message}`);
+    const kind = classifyProviderError({ status: 400, codes: [error.code, error.type], message: error.message.split(error.param).join("") });
+    return providerError(kind === "other" ? "unsupported" : kind, providerId, `HTTP 400: ${error.message}`);
   }
   return httpProviderError(providerId, {
     status: response.status,
