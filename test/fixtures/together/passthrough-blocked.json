@@ -1,0 +1,9 @@
+{
+  "id": "55ed263d-aws_uw1",
+  "error": {
+    "message": "This model sends your prompts to a third-party provider, and your organization has not enabled third-party data sharing. Enable it at https://api.together.ai/settings/privacy, or choose a model served by Together.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "third_party_data_sharing_blocked"
+  }
+}

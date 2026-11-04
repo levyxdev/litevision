@@ -243,7 +243,7 @@ describe("Gemini errors", () => {
 });
 
 describe("list_models with a gemini Model", () => {
-  test("reports the built-in capabilities and the Interactions docs", async () => {
+  test("reports the built-in capabilities and the image generation docs", async () => {
     harness = await startHarness(geminiSetup());
     const result = await harness.client.callTool({ name: "list_models", arguments: { model: "nano-banana" } });
 
@@ -252,7 +252,7 @@ describe("list_models with a gemini Model", () => {
     expect(models[0]).toMatchObject({
       alias: "nano-banana",
       protocol: "gemini",
-      docs_url: "https://ai.google.dev/api/interactions-api",
+      docs_url: "https://ai.google.dev/gemini-api/docs/image-generation",
       capabilities: {
         aspect_ratios: [
           { aspect_ratio: "1:1", size: "1024x1024" },

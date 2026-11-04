@@ -18,7 +18,7 @@ const openai = { id: "openai", baseUrl: "https://api.openai.com/v1" };
 const relay = { id: "relay", baseUrl: "https://relay.example/v1" };
 const withProviders = { config: { providers: [openai, relay] }, credentials: { openai: { apiKey } } };
 
-const gptImage = { alias: "gpt-image", provider: "openai", modelId: "gpt-image-1", protocol: "openai-images" };
+const gptImage = { alias: "gpt-image", provider: "openai", modelId: "gpt-image-1", protocol: "openai-images", modality: "image" };
 
 const firstChange = new Date("2026-10-30T10:00:00.000Z");
 const secondChange = new Date("2026-10-30T11:30:00.000Z");
@@ -43,6 +43,7 @@ describe("Models", () => {
     expect((await h.send("GET", "/api/models")).json()).toEqual({
       models: [{ ...gptImage, ...notes, default: false }],
       defaultImageModel: null,
+      defaultVideoModel: null,
     });
   });
 
@@ -86,6 +87,7 @@ describe("Models", () => {
     expect((await h.send("GET", "/api/models")).json()).toEqual({
       models: [{ ...gptImage, notes: "", default: true }],
       defaultImageModel: "gpt-image",
+      defaultVideoModel: null,
     });
 
     expect((await h.send("PUT", "/api/default-image-model", { body: { alias: "missing" } })).status).toBe(404);
@@ -106,7 +108,7 @@ describe("Models", () => {
       body: { alias: "gpt-image-cheap", provider: "relay", modelId: "gpt-image-1-mini", notes: "cheap drafts" },
     });
     expect(response.status).toBe(200);
-    const edited = { alias: "gpt-image-cheap", provider: "relay", modelId: "gpt-image-1-mini", protocol: "openai-images" };
+    const edited = { alias: "gpt-image-cheap", provider: "relay", modelId: "gpt-image-1-mini", protocol: "openai-images", modality: "image" };
     const notesHistory = { changedBy: "User", changedAt: firstChange.toISOString(), previous: "" };
     expect(response.json()).toEqual({ model: { ...edited, notes: "cheap drafts", notesHistory, default: true } });
     expect(await h.readConfig()).toEqual({

@@ -1,0 +1,9 @@
+{
+  "id": "c2a9d7d5-aws_uw1",
+  "error": {
+    "message": "invalid reference image at index 0",
+    "type": "invalid_request_error",
+    "param": "reference_images[0]",
+    "code": null
+  }
+}

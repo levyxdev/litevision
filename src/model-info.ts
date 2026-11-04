@@ -6,7 +6,7 @@ import { serialised, writeFileAtomic } from "./config-store.ts";
 import type { Dirs } from "./dirs.ts";
 import type { HttpTransport } from "./http.ts";
 import { adapterFor } from "./protocols/index.ts";
-import { aspectRatios, type ImageCapabilities, type ProviderModelInfo } from "./protocols/protocol.ts";
+import { aspectRatios, type ImageCapabilities, type ProviderModelInfo, type VideoCapabilities } from "./protocols/protocol.ts";
 
 /**
  * What litevision knows about one Model: its capabilities, asked of the Provider where its Protocol can, and cached
@@ -28,6 +28,21 @@ export interface ModelInfo {
   docsUrl: string;
   /** The Provider's own description of the Model's parameters, when it publishes one. */
   parameterSchema?: unknown;
+}
+
+/** What litevision knows about one video Model: the adapter's own table, since no Provider describes its video Models yet. */
+export interface VideoModelInfo {
+  capabilities: VideoCapabilities;
+  docsUrl: string;
+}
+
+/** Everything known about a video Model. Throws a ConfigError when its Protocol makes no videos. */
+export function videoModelInfo({ model }: ResolvedModel): VideoModelInfo {
+  const adapter = adapterFor(model);
+  if (adapter.builtInVideoCapabilities === undefined || adapter.submitVideo === undefined) {
+    throw new ConfigError(`Model "${model.alias}" is a video Model, but its Protocol "${model.protocol}" makes no videos in litevision.`);
+  }
+  return { capabilities: adapter.builtInVideoCapabilities(model.modelId), docsUrl: adapter.docsUrl(model.modelId, "video") };
 }
 
 /** A day: Providers change their Models rarely, and the settings page refreshes whenever the User touches one. */
@@ -72,7 +87,7 @@ export async function modelInfo(deps: ModelInfoDeps, resolved: ResolvedModel, op
   const builtIn: ModelInfo = {
     capabilities: adapter.builtInCapabilities(resolved.model.modelId),
     source: "built-in",
-    docsUrl: adapter.docsUrl(resolved.model.modelId),
+    docsUrl: adapter.docsUrl(resolved.model.modelId, "image"),
   };
   const fetchModelInfo = adapter.fetchModelInfo;
   if (fetchModelInfo === undefined) return builtIn;

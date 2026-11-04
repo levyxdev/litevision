@@ -202,11 +202,15 @@ describe("list_models with `model`", () => {
     expect(textOf(result)).toContain("https://docs.relay.example/models/fox-1");
   });
 
-  test("without `model`, leaves the schema and known-good options out", async () => {
+  test("without `model`, leaves the schema out but still gives the Known-good Options, naming them in the text", async () => {
     harness = await startHarness(relaySetup({ [capabilitiesUrl]: reportCapabilities }));
-    const [model] = ((await listModels()).structuredContent as { models: Array<Record<string, unknown>> }).models;
+    expect((await generate({ provider_options: { style: "noir" } })).isError).toBeFalsy();
+    const result = await listModels();
+    const [model] = (result.structuredContent as { models: Array<Record<string, unknown>> }).models;
     expect(model).not.toHaveProperty("parameter_schema");
-    expect(model).not.toHaveProperty("known_good_options");
+    expect(model!.known_good_options).toEqual({ style: "noir" });
+    expect(textOf(result)).toContain("Known-good Options: style.");
+    expect(textOf(result)).not.toContain('"noir"');
   });
 
   test("an unknown Alias errors and lists the known ones", async () => {

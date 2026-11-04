@@ -1,0 +1,9 @@
+{
+  "id": "p7wFVyL-2kFHot-a552377bb9333ccc",
+  "error": {
+    "message": "Unable to access model nope/not-a-model. Please visit https://api.together.ai/models to view the list of supported models.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "model_not_available"
+  }
+}

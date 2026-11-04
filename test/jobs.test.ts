@@ -68,7 +68,7 @@ describe("the wait limit", () => {
 
     expect(job.isError).toBe(true);
     expect(textOf(job)).toContain(`Job ${job_id} failed`);
-    expect(textOf(job)).toContain("generate the images again");
+    expect(textOf(job)).toContain("start it again");
     expect((await readHistory(harness))[0]).toMatchObject({ id: job_id, outcome: "failed", error: { kind: "other" } });
   });
 });

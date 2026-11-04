@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { modelNotesMaxLength, modelSchema, type NotesHistory } from "../config.ts";
+import { defaultKey, modelNotesMaxLength, modelSchema, type NotesHistory } from "../config.ts";
 import { isPlainObject, readConfigObject, updateConfig, type ConfigObject } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
 import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
+import { modalities, type Modality } from "../protocols/protocol.ts";
 import { SettingsError, shortName } from "./providers.ts";
 
 /** A Model as the page sees it. */
@@ -12,10 +13,11 @@ export interface ModelView {
   provider: string;
   modelId: string;
   protocol: string;
+  modality: Modality;
   notes: string;
   /** Who changed the Model Notes last and when, and the previous version to undo to. Absent until they first change. */
   notesHistory?: NotesHistory;
-  /** True for the default image Model. */
+  /** True for the default Model of its Modality. */
   default: boolean;
 }
 
@@ -30,19 +32,26 @@ export const addModelInput = z.object({
   protocol: z
     .string()
     .refine((value) => supportedProtocols().includes(value), { error: () => `Choose a supported Protocol: ${supportedProtocols().join(", ")}.` }),
+  modality: z.enum(modalities, { error: () => "Choose whether the Model makes images or videos." }).default("image"),
   notes: notes.optional(),
 });
 
-export const updateModelInput = addModelInput.partial();
+export const updateModelInput = addModelInput.omit({ modality: true }).partial().extend({ modality: addModelInput.shape.modality.unwrap().optional() });
 
-type StoredModel = z.infer<typeof modelSchema> & Record<string, unknown>;
+/** As stored: `modality` may be missing from Models saved before videos existed. */
+type StoredModel = Omit<z.infer<typeof modelSchema>, "modality"> & { modality?: Modality } & Record<string, unknown>;
 
 const storedModels = z.array(modelSchema);
 
-export async function listModels(dirs: Dirs): Promise<{ models: ModelView[]; defaultImageModel: string | null }> {
+export async function listModels(
+  dirs: Dirs,
+): Promise<{ models: ModelView[]; defaultImageModel: string | null; defaultVideoModel: string | null }> {
   const config = await readConfigObject(dirs);
-  const defaultImageModel = typeof config.defaultImageModel === "string" ? config.defaultImageModel : null;
-  return { models: modelsOf(config).map((model) => view(model, defaultImageModel)), defaultImageModel };
+  const defaults = {
+    defaultImageModel: typeof config.defaultImageModel === "string" ? config.defaultImageModel : null,
+    defaultVideoModel: typeof config.defaultVideoModel === "string" ? config.defaultVideoModel : null,
+  };
+  return { models: modelsOf(config).map((model) => view(model, defaults)), ...defaults };
 }
 
 async function getModel(dirs: Dirs, wanted: string): Promise<ModelView> {
@@ -57,7 +66,13 @@ export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>,
     const models = modelsOf(config);
     requireFreeAlias(models, input.alias);
     requireProvider(config, input.provider);
-    const stored: StoredModel = { alias: input.alias, provider: input.provider, modelId: input.modelId, protocol: input.protocol };
+    const stored: StoredModel = {
+      alias: input.alias,
+      provider: input.provider,
+      modelId: input.modelId,
+      protocol: input.protocol,
+      modality: input.modality,
+    };
     if (input.notes) {
       stored.notes = input.notes;
       stored.notesHistory = { changedBy: "User", changedAt: at.toISOString() };
@@ -68,7 +83,7 @@ export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>,
 }
 
 /**
- * Changes any of a Model's fields. Renaming the default image Model keeps it the default.
+ * Changes any of a Model's fields. Renaming a default Model keeps it the default; changing its Modality does not.
  * Changed Model Notes are recorded as the User's, keeping the previous version.
  */
 export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typeof updateModelInput>, at: Date): Promise<ModelView> {
@@ -79,7 +94,11 @@ export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typ
     if (input.alias !== undefined && input.alias !== wanted) {
       requireFreeAlias(models, input.alias);
       model.alias = input.alias;
-      if (config.defaultImageModel === wanted) config.defaultImageModel = input.alias;
+      for (const key of Object.values(defaultKey)) if (config[key] === wanted) config[key] = input.alias;
+    }
+    if (input.modality !== undefined && input.modality !== modalityOf(model)) {
+      if (config[defaultKey[modalityOf(model)]] === model.alias) delete config[defaultKey[modalityOf(model)]];
+      model.modality = input.modality;
     }
     if (input.provider !== undefined) {
       requireProvider(config, input.provider);
@@ -102,29 +121,34 @@ export async function undoModelNotes(dirs: Dirs, wanted: string, at: Date): Prom
   return getModel(dirs, wanted);
 }
 
-/** Removes a Model; if it was the default image Model, no default is left. */
+/** Removes a Model; if it was a default Model, no default is left for its Modality. */
 export async function removeModel(dirs: Dirs, wanted: string): Promise<void> {
   await updateConfig(dirs, (config) => {
     const models = modelsOf(config);
     if (!models.some((model) => model.alias === wanted)) throw notFound(wanted);
     config.models = models.filter((model) => model.alias !== wanted);
-    if (config.defaultImageModel === wanted) delete config.defaultImageModel;
+    for (const key of Object.values(defaultKey)) if (config[key] === wanted) delete config[key];
   });
 }
 
 export const setDefaultInput = z.object({ alias: z.string().nullable() });
 
-/** Makes a Model the default image Model, or, with `null`, leaves no default. */
-export async function setDefaultImageModel(dirs: Dirs, wanted: string | null): Promise<{ defaultImageModel: string | null }> {
+/** Makes a Model the default Model of its Modality, or, with `null`, leaves that Modality no default. */
+export async function setDefaultModel(dirs: Dirs, modality: Modality, wanted: string | null): Promise<{ alias: string | null }> {
+  const key = defaultKey[modality];
   await updateConfig(dirs, (config) => {
     if (wanted === null) {
-      delete config.defaultImageModel;
+      delete config[key];
       return;
     }
-    if (!modelsOf(config).some((model) => model.alias === wanted)) throw notFound(wanted);
-    config.defaultImageModel = wanted;
+    const model = modelsOf(config).find((candidate) => candidate.alias === wanted);
+    if (model === undefined) throw notFound(wanted);
+    if (modalityOf(model) !== modality) {
+      throw new SettingsError(400, `"${wanted}" is ${modalityOf(model) === "image" ? "an image" : "a video"} Model, so it cannot be the default ${modality} Model.`);
+    }
+    config[key] = wanted;
   });
-  return { defaultImageModel: wanted };
+  return { alias: wanted };
 }
 
 function requireFreeAlias(models: StoredModel[], wanted: string): void {
@@ -148,15 +172,22 @@ function modelsOf(config: ConfigObject): StoredModel[] {
   return config.models as StoredModel[];
 }
 
-function view(model: StoredModel, defaultImageModel: string | null): ModelView {
+/** Models saved before videos existed have no `modality` and are image Models. */
+function modalityOf(model: StoredModel): Modality {
+  return model.modality ?? "image";
+}
+
+function view(model: StoredModel, defaults: { defaultImageModel: string | null; defaultVideoModel: string | null }): ModelView {
+  const modality = modalityOf(model);
   return {
     alias: model.alias,
     provider: model.provider,
     modelId: model.modelId,
     protocol: model.protocol,
+    modality,
     notes: model.notes ?? "",
     ...(model.notesHistory && { notesHistory: model.notesHistory }),
-    default: model.alias === defaultImageModel,
+    default: model.alias === (modality === "video" ? defaults.defaultVideoModel : defaults.defaultImageModel),
   };
 }
 

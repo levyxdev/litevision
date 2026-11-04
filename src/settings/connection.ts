@@ -1,7 +1,7 @@
 import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
 import { adapterForProtocol } from "../protocols/index.ts";
-import type { ProtocolAdapter, ProviderTarget } from "../protocols/protocol.ts";
+import type { Modality, ProtocolAdapter, ProviderTarget } from "../protocols/protocol.ts";
 import { getProvider, savedCredential } from "./providers.ts";
 
 /** What the page shows after "test connection". The message never contains the Credential. */
@@ -11,7 +11,9 @@ export interface ConnectionTestResult {
 }
 
 /** What the page gets when it fetches a Provider's model ids. A message never contains the Credential. */
-export type ModelIdsResponse = { result: "success"; modelIds: string[] } | { result: "failure" | "unsupported"; message: string };
+export type ModelIdsResponse =
+  | { result: "success"; modelIds: string[]; modalities?: Record<string, Modality> }
+  | { result: "failure" | "unsupported"; message: string };
 
 /** Tests a saved Provider with one Protocol's `testConnection`, through the injected HTTP transport. */
 export async function testConnection(dirs: Dirs, http: HttpTransport, providerId: string, protocol: string): Promise<ConnectionTestResult> {
@@ -42,7 +44,7 @@ export async function fetchModelIds(dirs: Dirs, http: HttpTransport, providerId:
   let message: string;
   try {
     const list = await call.run(http);
-    if (list.ok) return { result: "success", modelIds: list.modelIds };
+    if (list.ok) return { result: "success", modelIds: list.modelIds, ...(list.modalities === undefined ? {} : { modalities: list.modalities }) };
     message = list.message;
   } catch (error) {
     message = unreachable(providerId, error);

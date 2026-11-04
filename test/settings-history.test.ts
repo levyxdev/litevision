@@ -69,6 +69,7 @@ describe("Job history", () => {
       prompt: "prompt of fox",
       durationMs: 12_300,
       outcome: "completed",
+      modality: "image",
       files: [
         { path: foxFiles[0], thumbnail: "/api/jobs/fox/files/0" },
         { path: foxFiles[1], thumbnail: "/api/jobs/fox/files/1" },

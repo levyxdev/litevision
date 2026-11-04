@@ -12,4 +12,4 @@ The same lookup gives the Agent what it needs to use `provider_options` on its o
 
 ## Consequences
 
-`generate_image` and `list_models` may wait a few seconds for a Provider whose cached answer is stale; the wait is capped and falls back rather than failing. A "known-good" option only means the Provider accepted it and returned images, not that it changed the result.
+`generate_image` and `list_models` may wait a few seconds for a Provider whose cached answer is stale; the wait is capped and falls back rather than failing. A "known-good" option only means the Provider accepted it and returned images, not that it changed the result. (Superseded by ADR 0006: Known-good Options are now checked against the result and lose their standing on a bad Rating.)

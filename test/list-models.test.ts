@@ -30,15 +30,19 @@ describe("list_models", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({
       default_model: "gpt-image",
+      default_video_model: null,
       models: [
         {
           alias: "gpt-image",
           provider: "openai",
           protocol: "openai-images",
           model_id: "gpt-image-1",
+          modality: "image",
           default: true,
           notes: "photoreal, legible text",
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
+          known_good_options: {},
+          suspect_options: {},
           capabilities: {
             aspect_ratios: [
               { aspect_ratio: "1:1", size: "1024x1024" },
@@ -55,9 +59,12 @@ describe("list_models", () => {
           provider: "relay",
           protocol: "openai-images",
           model_id: "dall-e-3",
+          modality: "image",
           default: false,
           notes: "",
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
+          known_good_options: {},
+          suspect_options: {},
           capabilities: {
             aspect_ratios: [
               { aspect_ratio: "1:1", size: "1024x1024" },
@@ -72,7 +79,7 @@ describe("list_models", () => {
       ],
     });
     const text = textOf(result);
-    expect(text).toContain("gpt-image (default)");
+    expect(text).toContain("gpt-image (default image)");
     expect(text).toContain("photoreal, legible text");
     expect(text).toContain("no reference images");
   });

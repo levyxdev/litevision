@@ -11,7 +11,9 @@
     "openai",
     "gemini",
     "venice",
-    "apimart"
+    "apimart",
+    "together-ai",
+    "video-generation"
   ],
   "homepage": "https://github.com/levyxdev/litevision#readme",
   "repository": {

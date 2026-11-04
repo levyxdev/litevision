@@ -130,6 +130,7 @@ describe("generate_image", () => {
       provider: "openai",
       protocol: "openai-images",
       modelId: "gpt-image-1",
+      modality: "image",
       prompt: "a red fox",
       parameters: {
         n: 1,
@@ -142,7 +143,7 @@ describe("generate_image", () => {
     // Append-only: one record when the Job starts, one when it ends.
     expect(await readHistoryLines(harness)).toEqual([
       { ...job, durationMs: 0, files: [], outcome: "running" },
-      { ...job, durationMs: 2500, files: output.files, outcome: "completed" },
+      { ...job, durationMs: 2500, files: output.files, outcome: "completed", observed: [{ width: 1, height: 1 }] },
     ]);
   });
 

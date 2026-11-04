@@ -1,0 +1,132 @@
+[
+  {
+    "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "object": "model",
+    "created": 1792377574,
+    "type": "chat",
+    "display_name": "DeepSeek V4.1 Flash 1017",
+    "organization": "DeepSeek",
+    "context_length": 1048576,
+    "pricing": {
+      "hourly": 0,
+      "input": 0.3,
+      "output": 1.2,
+      "base": 0,
+      "finetune": 0,
+      "cached_input": 0.006,
+      "image_pixel": 0,
+      "transcribe": 0,
+      "image": 0,
+      "video": 0
+    }
+  },
+  {
+    "id": "black-forest-labs/FLUX.2-pro",
+    "object": "model",
+    "created": 1764070232,
+    "type": "image",
+    "display_name": "FLUX.2 [pro]",
+    "organization": "Black Forest Labs",
+    "pricing": {
+      "hourly": 0,
+      "input": 0,
+      "output": 0,
+      "base": 0,
+      "finetune": 0,
+      "image_pixel": 0,
+      "transcribe": 0,
+      "image": {
+        "example_price": 0.03,
+        "example_description": "per text-to-image image"
+      },
+      "video": 0
+    }
+  },
+  {
+    "id": "stabilityai/stable-diffusion-xl-base-1.0",
+    "object": "model",
+    "created": 1759884771,
+    "type": "image",
+    "display_name": "SD XL",
+    "organization": "stabilityai",
+    "pricing": {
+      "hourly": 0,
+      "input": 0,
+      "output": 0,
+      "base": 0,
+      "finetune": 0,
+      "image_pixel": 0,
+      "transcribe": 0,
+      "image": {
+        "example_price": 0.0019,
+        "example_description": "720x1280"
+      },
+      "video": 0
+    }
+  },
+  {
+    "id": "Wan-AI/wan2.7-t2v",
+    "object": "model",
+    "created": 1775245808,
+    "type": "video",
+    "display_name": "Wan 2.7 T2V",
+    "organization": "Wan-AI",
+    "pricing": {
+      "hourly": 0,
+      "input": 0,
+      "output": 0,
+      "base": 0,
+      "finetune": 0,
+      "image_pixel": 0,
+      "transcribe": 0,
+      "image": 0,
+      "video": {
+        "example_price": 0.1,
+        "example_description": "per 5 seconds of video"
+      }
+    }
+  },
+  {
+    "id": "ByteDance/Seedance-2.5",
+    "object": "model",
+    "created": 1786388202,
+    "type": "video",
+    "display_name": "ByteDance Seedance 2.5",
+    "organization": "ByteDance",
+    "pricing": {
+      "hourly": 0,
+      "input": 0,
+      "output": 0,
+      "base": 0,
+      "finetune": 0,
+      "image_pixel": 0,
+      "transcribe": 0,
+      "image": 0,
+      "video": {
+        "example_price": 0.115,
+        "example_description": "480P: $0.115/sec & 720P: from $0.249/sec"
+      }
+    }
+  },
+  {
+    "id": "hexgrad/Kokoro-82M",
+    "object": "model",
+    "created": 1773163054,
+    "type": "audio",
+    "display_name": "Kokoro 82M",
+    "organization": "Hexgrad",
+    "link": "https://huggingface.co/hexgrad/Kokoro-82M",
+    "license": "apache2",
+    "pricing": {
+      "hourly": 0,
+      "input": 4,
+      "output": 0,
+      "base": 0,
+      "finetune": 0,
+      "image_pixel": 0,
+      "transcribe": 0,
+      "image": 0,
+      "video": 0
+    }
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "id": "97c6d7f6-aws_uw1",
+  "error": {
+    "message": "Invalid API key provided. You can find your API key at https://api.together.ai/settings/api-keys.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "invalid_api_key"
+  }
+}

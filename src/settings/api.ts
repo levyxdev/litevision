@@ -11,7 +11,7 @@ import {
   addModelInput,
   listModels,
   removeModel,
-  setDefaultImageModel,
+  setDefaultModel,
   setDefaultInput,
   undoModelNotes,
   updateModel,
@@ -155,7 +155,16 @@ const routes: Route[] = [
   {
     method: "PUT",
     path: "/api/default-image-model",
-    handler: async ({ dirs, body }) => ({ body: await setDefaultImageModel(dirs, parse(setDefaultInput, body).alias) }),
+    handler: async ({ dirs, body }) => ({
+      body: { defaultImageModel: (await setDefaultModel(dirs, "image", parse(setDefaultInput, body).alias)).alias },
+    }),
+  },
+  {
+    method: "PUT",
+    path: "/api/default-video-model",
+    handler: async ({ dirs, body }) => ({
+      body: { defaultVideoModel: (await setDefaultModel(dirs, "video", parse(setDefaultInput, body).alias)).alias },
+    }),
   },
   {
     method: "GET",
