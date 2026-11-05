@@ -410,9 +410,16 @@ function modelCard(model) {
   );
 }
 
+// The saved Models, so the fetched model list can say which model ids are already added.
+let savedModels = [];
+// Redraws the fetched model list; set by setUpAddModelForm.
+let showModelIds = () => {};
+
 async function loadModels() {
   const list = document.getElementById("model-list");
   const { models } = await api("GET", "/api/models");
+  savedModels = models;
+  showModelIds();
   list.replaceChildren(...(models.length === 0
     ? [emptyState(providerIds.length === 0 ? "Add a Provider first, then add its Models below." : "No Models yet. Add one below.")]
     : models.map(modelCard)));
@@ -428,34 +435,56 @@ function setUpAddModelForm() {
   const fetchResult = document.getElementById("fetch-result");
   const ids = document.getElementById("model-ids");
   const modality = document.getElementById("model-modality");
-  // What the fetched model list says each model id makes, when the Provider says.
+  // The model ids the last fetch found, and what each one makes when the Provider says.
+  let fetchedIds = [];
   let knownModalities = {};
   protocol.replaceChildren(...options(protocols));
+
+  const forgetModelIds = () => {
+    fetchedIds = [];
+    knownModalities = {};
+    showModelIds();
+  };
+
+  // Lists the fetched model ids that make what Makes says (and those the Provider says nothing about),
+  // marking the ones already added as a Model on this Provider.
+  showModelIds = () => {
+    const shown = fetchedIds.filter((id) => (knownModalities[id] ?? modality.value) === modality.value);
+    ids.replaceChildren(...shown.map((id) => {
+      const aliases = savedModels.filter((m) => m.provider === provider.value && m.modelId === id).map((m) => m.alias);
+      return el("option", aliases.length === 0 ? { value: id } : { value: id, label: "Already added as " + aliases.join(", ") });
+    }));
+    if (fetchedIds.length === 0) return;
+    const hidden = fetchedIds.length - shown.length;
+    const other = modality.value === "image" ? "video" : "image";
+    fetchResult.textContent = shown.length + (hidden === 0 ? "" : " " + modality.value) + " model id(s) found"
+      + (hidden === 0 ? "" : ", and " + hidden + " " + other + " model id(s) hidden until Makes says " + (other === "image" ? "Images" : "Videos"))
+      + ". Pick one in the Model id field, or type your own.";
+  };
 
   // Suggest the Protocol a preset Provider's Models usually speak; the User can still change it.
   provider.onchange = () => {
     const suggested = presets.find((p) => p.id === provider.value);
     if (suggested && protocols.includes(suggested.protocol)) protocol.value = suggested.protocol;
-    ids.replaceChildren();
-    knownModalities = {};
+    forgetModelIds();
     fetchResult.textContent = "";
   };
-  protocol.onchange = () => {
-    ids.replaceChildren();
-    knownModalities = {};
-  };
+  protocol.onchange = forgetModelIds;
+  modality.onchange = () => showModelIds();
 
   fetchButton.onclick = () => act(fetchButton, async () => {
     fetchResult.textContent = "Fetching…";
     fetchResult.className = "result";
     const outcome = await api("POST", "/api/providers/" + encodeURIComponent(provider.value) + "/model-ids", { protocol: protocol.value });
     if (outcome.result === "success") {
+      fetchedIds = outcome.modelIds;
       knownModalities = outcome.modalities || {};
-      ids.replaceChildren(...outcome.modelIds.map((id) => el("option", { value: id, label: knownModalities[id] ? id + " (" + knownModalities[id] + ")" : id })));
-      fetchResult.textContent = outcome.modelIds.length + " model id(s) found. Pick one in the Model id field, or type your own.";
       fetchResult.className = "result success";
+      showModelIds();
+      if (fetchedIds.length === 0) fetchResult.textContent = "No model ids found. Type the model id.";
       modelId.focus();
     } else {
+      forgetModelIds();
       fetchResult.textContent = outcome.message;
       fetchResult.className = "result " + outcome.result;
     }
@@ -466,7 +495,10 @@ function setUpAddModelForm() {
   alias.oninput = () => (aliasEdited = alias.value !== "");
   modelId.oninput = () => {
     const known = knownModalities[modelId.value.trim()];
-    if (known) modality.value = known;
+    if (known && known !== modality.value) {
+      modality.value = known;
+      showModelIds();
+    }
     if (!aliasEdited) alias.value = modelId.value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 64);
   };
 
