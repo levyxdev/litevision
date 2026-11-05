@@ -67,24 +67,17 @@ export interface ServerDeps {
   retryDelayMs?: number;
 }
 
-export const instructions = `litevision generates images and videos through Models the User has configured with their own Providers. Each Model makes one Modality: image Models work with \`generate_image\`, video Models with \`generate_video\`.
+export const instructions = `litevision generates images and videos through Models the User has configured with their own Providers. Before writing a prompt, use the litevision Skill. If you do not have it, mention once that the User can install it with \`npx skills add levyxdev/litevision\`.
 
-- Use the Model the User names (pass its Alias as \`model\`).
-- When the User names none, omit \`model\` to use the default Model of that Modality, unless the request needs something the default lacks (e.g. legible Chinese text, reference images, an aspect ratio, a first frame). Then call \`list_models\` and choose by each Model's capabilities and Model Notes.
 - Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
-- \`generate_image\` and \`generate_video\` return file paths, not media data. Tell the User where the files are.
-- A Job that takes longer than two minutes keeps running in the background (videos often do): the tool then returns its Job id with status "running". Tell the User it is still running, and call \`get_job\` with that Job id to wait for it again and get the files.
-- \`generate_comparison\` starts a Comparison: up to 4 Jobs at once, so it costs as much as all of them. Start a Comparison only when the User asks for one or agrees to it.
-- Ask for an aspect ratio (and for a video, a duration), not pixel sizes. If the Model does not support it, the closest supported one is used; when the result says it was adjusted, tell the User what was used.
-- Every result says what litevision actually got (pixel size, and a video's length). If it says the result does not match the request, tell the User, and check the Model's docs before trying again.
-- If a tool says a Model cannot do something (reference images, that many images, a first frame), the error lists what the Model supports: choose another Model or change the request.
-- Pass \`output_path\` when the files belong in the User's project (e.g. its assets folder); otherwise omit it.
-- For Provider-specific \`provider_options\`: first reuse the Model's Known-good Options, which \`list_models\` shows. Only when none cover what you need, read the Model's docs link (\`list_models\` with \`model\` also gives the Provider's parameter schema when it publishes one). Read the docs again when a result does not match the request, when the Provider rejects an option (its error carries the docs link), or when options are marked suspect because a result that used them did not match or the User rated it bad. litevision passes \`provider_options\` through unchecked.
-- If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs link and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
-- If fewer images came back than you asked for, the result says why. Tell the User.
-- When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. When the verdict is about one result of a Job with several ("the second one is great"), pass \`result\`, its number from 1 in the order of the Job's files; omit it when the verdict is about the whole Job. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
-- When the User chooses among a Comparison's results ("I'll take the second one"), call \`pick_result\` with the Comparison id, the chosen Job's id and, when that Job made several results, the result's number. Call it only when the User actually chooses; never pick for them. A Pick is not a Rating: if the User also says what they think of a result, call \`rate_job\` as well.
-- Model Notes say what each Model is good or bad at. When the User learns something worth keeping, or a Model's recent Ratings and Picks (\`list_models\` with \`model\`) say something its Model Notes do not, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
+- Use the Model the User names. When they name none, omit \`model\` for the default, unless the request needs something the default lacks; then choose with \`list_models\`.
+- For \`provider_options\`, reuse the Model's Known-good Options. For any other option, or one marked suspect, read the Model's docs and parameter schema first (\`list_models\` with \`model\`).
+- If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
+- Tell the User where the files are, and pass on whatever a result says was adjusted, did not match the request, or came back short.
+- \`generate_comparison\` costs as much as all its Jobs. Start a Comparison only when the User asks for one or agrees to it.
+- When the User says what they think of a result, call \`rate_job\` with their verdict and a one-line reason in their words; when it is about one result of a Job with several, pass \`result\`. Never invent a verdict, and never rate a result yourself.
+- When the User chooses among a Comparison's results, call \`pick_result\`, only when the User actually chooses. A Pick is not a Rating: if they also give a verdict, call \`rate_job\` too.
+- Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
 
 /** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
 const recentRatingsShown = 5;
