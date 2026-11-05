@@ -214,3 +214,88 @@ describe("thumbnails", () => {
     expect((await h.send("GET", "/api/jobs/gone/files/0")).status).toBe(404);
   });
 });
+
+describe("Comparisons in the Job history (ADR 0009)", () => {
+  const pickedAt = ratedAt.toISOString();
+
+  /**
+   * Comparison `cmp`: `left` (two images) and `right`, with a Job started on its own between them, and one before and
+   * after. `failed` is a third Job of the Comparison that saved nothing.
+   */
+  async function startWithComparison(extra: Array<Record<string, unknown>> = []): Promise<SettingsHarness> {
+    const h = (harness = await startSettingsHarness({ now: () => ratedAt }));
+    const lines = [
+      jobRecord("early", "2026-10-30T07:00:00.000Z"),
+      jobRecord("left", "2026-10-30T08:00:00.000Z", { comparison: "cmp", files: ["/out/left-1.png", "/out/left-2.png"] }),
+      jobRecord("between", "2026-10-30T08:00:00.500Z"),
+      jobRecord("right", "2026-10-30T08:00:01.000Z", { comparison: "cmp", model: "dall-e", modelId: "dall-e-3", files: ["/out/right-1.png"] }),
+      jobRecord("failed", "2026-10-30T08:00:00.200Z", { comparison: "cmp", outcome: "failed", error: { kind: "auth", message: "no" } }),
+      jobRecord("late", "2026-10-30T09:00:00.000Z"),
+      ...extra,
+    ];
+    await mkdir(h.dirs.data, { recursive: true });
+    await writeFile(join(h.dirs.data, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    return h;
+  }
+
+  const listed = async (h: SettingsHarness) => (await h.send("GET", "/api/jobs")).json().jobs as Array<Record<string, any>>;
+
+  test("lists a Comparison's Jobs together, in the order they started, where its newest Job is", async () => {
+    const h = await startWithComparison();
+    const jobs = await listed(h);
+
+    expect(jobs.map((job) => job.id)).toEqual(["late", "left", "failed", "right", "between", "early"]);
+    for (const job of jobs.slice(1, 4)) expect(job.comparison).toEqual({ id: "cmp", pick: null });
+    expect(jobs[0]).not.toHaveProperty("comparison");
+    expect(jobs[4]).not.toHaveProperty("comparison");
+  });
+
+  test("picking from the page records the same structured Pick record as pick_result, and the listing shows it", async () => {
+    const h = await startWithComparison();
+
+    const response = await h.send("POST", "/api/comparisons/cmp/pick", { body: { jobId: "left", result: 2 } });
+
+    expect(response.status).toBe(200);
+    expect(response.json()).toEqual({ pick: { jobId: "left", result: 2, pickedAt } });
+    expect((await readHistoryLines(h)).at(-1)).toEqual({ type: "pick", comparison: "cmp", jobId: "left", result: 2, pickedAt });
+    const jobs = await listed(h);
+    for (const id of ["left", "failed", "right"]) {
+      expect(jobs.find((job) => job.id === id)!.comparison).toEqual({ id: "cmp", pick: { jobId: "left", result: 2, pickedAt } });
+    }
+    // A Pick is not a Rating.
+    expect(jobs.find((job) => job.id === "left")!.rating).toBeNull();
+  });
+
+  test("a later Pick supersedes the earlier one in the listing", async () => {
+    const h = await startWithComparison([{ type: "pick", comparison: "cmp", jobId: "left", pickedAt: "2026-10-30T08:30:00.000Z" }]);
+
+    expect((await listed(h)).find((job) => job.id === "right")!.comparison.pick).toEqual({ jobId: "left", pickedAt: "2026-10-30T08:30:00.000Z" });
+    expect((await h.send("POST", "/api/comparisons/cmp/pick", { body: { jobId: "right" } })).status).toBe(200);
+    expect((await listed(h)).find((job) => job.id === "left")!.comparison.pick).toEqual({ jobId: "right", pickedAt });
+  });
+
+  test("an unknown Comparison is 404, a Job outside it or a result it lacks is 400, a failed Job is 409, and nothing is recorded", async () => {
+    const h = await startWithComparison();
+    const before = (await readHistoryLines(h)).length;
+
+    expect((await h.send("POST", "/api/comparisons/nope/pick", { body: { jobId: "left" } })).status).toBe(404);
+    const outside = await h.send("POST", "/api/comparisons/cmp/pick", { body: { jobId: "between" } });
+    expect(outside.status).toBe(400);
+    expect(outside.json().error).toContain("not part of Comparison cmp");
+    expect((await h.send("POST", "/api/comparisons/cmp/pick", { body: { jobId: "left", result: 3 } })).status).toBe(400);
+    expect((await h.send("POST", "/api/comparisons/cmp/pick", { body: { jobId: "left", result: 0 } })).status).toBe(400);
+    expect((await h.send("POST", "/api/comparisons/cmp/pick", { body: {} })).status).toBe(400);
+    expect((await h.send("POST", "/api/comparisons/cmp/pick", { body: { jobId: "failed" } })).status).toBe(409);
+    expect((await h.send("POST", "/api/comparisons/cmp/pick", { body: { jobId: "left" }, origin: "https://evil.example" })).status).toBe(403);
+
+    expect((await readHistoryLines(h)).length).toBe(before);
+  });
+
+  test("the page groups a Comparison and posts Picks", async () => {
+    harness = await startSettingsHarness();
+    const page = (await harness.send("GET", "/")).text;
+    expect(page).toContain("/api/comparisons/");
+    expect(page).toContain("/pick");
+    expect(page).toContain("Comparison");
+  });
+});

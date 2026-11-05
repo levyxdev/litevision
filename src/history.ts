@@ -8,7 +8,7 @@ import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle 
  * The Job history, `jobs.jsonl`: append-only, one JSON record per line. A Job gets several records over its life
  * (running when it starts, running again once an asynchronous Provider accepts it, then completed or failed); the
  * latest one for an id is what it is now. Ratings are lines of their own: the latest for a Job, or for one result of it,
- * is its Rating now.
+ * is its Rating now. So are Picks: the latest for a Comparison is its Pick now (ADR 0009).
  * Every read of the history goes through this module.
  */
 
@@ -89,11 +89,28 @@ export interface RatingRecord {
   ratedAt: string;
 }
 
-/** A Job as it is now, with its current Ratings. */
+/**
+ * One Pick line of `jobs.jsonl`: the result the User chose within a Comparison (ADR 0009). A later one for the same
+ * Comparison supersedes it. A Pick is a relative preference, not a Rating: it says nothing about Known-good Options.
+ */
+export interface PickRecord {
+  type: "pick";
+  /** The Comparison's id, as its Jobs record it in `comparison`. */
+  comparison: string;
+  /** The picked Job, one of the Comparison's. */
+  jobId: string;
+  /** Which result of that Job, from 1 in the order of its files; absent when the User picked the Job as a whole. */
+  result?: number;
+  pickedAt: string;
+}
+
+/** A Job as it is now, with its current Ratings and, for a Job of a Comparison, the Comparison's current Pick. */
 export interface RatedJob {
   job: JobRecord;
   /** At most one for the whole Job and one for each result, in the order they were recorded. */
   ratings: RatingRecord[];
+  /** The current Pick of the Comparison the Job was started in, whichever of its Jobs was picked; absent until there is one. */
+  pick?: PickRecord;
 }
 
 /** The current Rating of the whole Job, or of one result when `result` is given. */
@@ -112,9 +129,20 @@ export class RatingError extends Error {
   }
 }
 
+/** Why a Pick was not recorded. Its message is safe to show the Agent and the User. */
+export class PickError extends Error {
+  constructor(
+    readonly kind: "unknown-comparison" | "not-in-comparison" | "not-completed" | "invalid",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PickError";
+  }
+}
+
 const historyPath = (dirs: Dirs) => join(dirs.data, "jobs.jsonl");
 
-export async function appendHistory(dirs: Dirs, record: JobRecord | RatingRecord): Promise<void> {
+export async function appendHistory(dirs: Dirs, record: JobRecord | RatingRecord | PickRecord): Promise<void> {
   await mkdir(dirs.data, { recursive: true });
   await appendFile(historyPath(dirs), `${JSON.stringify(record)}\n`);
 }
@@ -129,11 +157,14 @@ export async function readJob(dirs: Dirs, id: string): Promise<JobRecord | undef
   return (await readJobs(dirs)).find((job) => job.id === id);
 }
 
-/** Every Job with its current Ratings, most recently started first. */
+/** Every Job with its current Ratings and its Comparison's current Pick, most recently started first. */
 export async function readRatedJobs(dirs: Dirs): Promise<RatedJob[]> {
-  const { jobs, ratings } = await readRecords(dirs);
+  const { jobs, ratings, picks } = await readRecords(dirs);
   return jobs
-    .map((job) => ({ job, ratings: [...(ratings.get(job.id)?.values() ?? [])] }))
+    .map((job) => {
+      const pick = job.comparison === undefined ? undefined : picks.get(job.comparison);
+      return { job, ratings: [...(ratings.get(job.id)?.values() ?? [])], ...(pick === undefined ? {} : { pick }) };
+    })
     .sort((a, b) => Date.parse(b.job.createdAt) - Date.parse(a.job.createdAt));
 }
 
@@ -178,19 +209,61 @@ export async function rateJob(
 }
 
 /**
- * One pass over `jobs.jsonl`: the latest record of each Job, and per Job its latest Rating of the whole Job and of each
- * result, keyed by result number (0 for the whole Job) in the order they were recorded.
+ * Records the User's Pick within a Comparison: one of its Jobs, or with `result` one result of it. Only a completed Job
+ * can be picked. Throws {@link PickError} when the Comparison is unknown, the Job is not one of its Jobs, the Job has
+ * not completed, or it has no such result.
  */
-async function readRecords(dirs: Dirs): Promise<{ jobs: JobRecord[]; ratings: Map<string, Map<number, RatingRecord>> }> {
+export async function pickResult(
+  dirs: Dirs,
+  pick: { comparison: string; jobId: string; result?: number },
+  now: Date,
+): Promise<PickRecord> {
+  const ofComparison = (await readJobs(dirs)).filter((job) => job.comparison === pick.comparison);
+  if (ofComparison.length === 0) throw new PickError("unknown-comparison", `litevision has no Comparison "${pick.comparison}".`);
+  const job = ofComparison.find((candidate) => candidate.id === pick.jobId);
+  if (job === undefined) {
+    const ids = ofComparison.map((candidate) => candidate.id).join(", ");
+    throw new PickError("not-in-comparison", `Job "${pick.jobId}" is not part of Comparison ${pick.comparison}, whose Jobs are ${ids}.`);
+  }
+  if (job.outcome === "running") {
+    throw new PickError("not-completed", `Job ${job.id} is still running; it can be picked once it has completed.`);
+  }
+  if (job.outcome === "failed") {
+    throw new PickError("not-completed", `Job ${job.id} failed and saved nothing, so there is nothing to pick.`);
+  }
+  const { result } = pick;
+  if (result !== undefined && !(Number.isInteger(result) && result >= 1 && result <= job.files.length)) {
+    const count = job.files.length === 1 ? "1 result" : `${job.files.length} results`;
+    throw new PickError("invalid", `Job ${job.id} has ${count}, numbered from 1 in the order of its files.`);
+  }
+  const record: PickRecord = {
+    type: "pick",
+    comparison: pick.comparison,
+    jobId: job.id,
+    ...(result === undefined ? {} : { result }),
+    pickedAt: now.toISOString(),
+  };
+  await appendHistory(dirs, record);
+  return record;
+}
+
+/**
+ * One pass over `jobs.jsonl`: the latest record of each Job; per Job its latest Rating of the whole Job and of each
+ * result, keyed by result number (0 for the whole Job) in the order they were recorded; and each Comparison's latest Pick.
+ */
+async function readRecords(
+  dirs: Dirs,
+): Promise<{ jobs: JobRecord[]; ratings: Map<string, Map<number, RatingRecord>>; picks: Map<string, PickRecord> }> {
   let text: string;
   try {
     text = await readFile(historyPath(dirs), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { jobs: [], ratings: new Map() };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { jobs: [], ratings: new Map(), picks: new Map() };
     throw error;
   }
   const jobs = new Map<string, JobRecord>();
   const ratings = new Map<string, Map<number, RatingRecord>>();
+  const picks = new Map<string, PickRecord>();
   for (const line of text.split("\n")) {
     if (line.trim() === "") continue;
     let record: unknown;
@@ -207,12 +280,16 @@ async function readRecords(dirs: Dirs): Promise<{ jobs: JobRecord[]; ratings: Ma
       ofJob.set(record.result ?? 0, record);
       continue;
     }
+    if (isPickRecord(record)) {
+      picks.set(record.comparison, record);
+      continue;
+    }
     if (!isJobRecord(record)) continue;
     // Re-inserting moves the Job to where its latest record is, so a Job is ordered by when it last changed.
     jobs.delete(record.id);
     jobs.set(record.id, record);
   }
-  return { jobs: [...jobs.values()], ratings };
+  return { jobs: [...jobs.values()], ratings, picks };
 }
 
 function isJobRecord(value: unknown): value is JobRecord {
@@ -229,6 +306,19 @@ function isRatingRecord(value: unknown): value is RatingRecord {
     typeof record.jobId === "string" &&
     verdicts.includes(record.verdict as Verdict) &&
     typeof record.reason === "string" &&
+    (record.result === undefined || (Number.isInteger(record.result) && record.result >= 1))
+  );
+}
+
+function isPickRecord(value: unknown): value is PickRecord {
+  const record = value as Partial<PickRecord> | null;
+  return (
+    typeof record === "object" &&
+    record !== null &&
+    record.type === "pick" &&
+    typeof record.comparison === "string" &&
+    typeof record.jobId === "string" &&
+    typeof record.pickedAt === "string" &&
     (record.result === undefined || (Number.isInteger(record.result) && record.result >= 1))
   );
 }
@@ -259,6 +349,31 @@ export function recentRatings(jobs: RatedJob[], model: ModelKey, limit: number):
     .filter(({ job }) => ranOn(job, model))
     .flatMap(({ job, ratings }) => ratings.map((rating) => ({ rating, job })))
     .sort((a, b) => Date.parse(b.rating.ratedAt) - Date.parse(a.rating.ratedAt))
+    .slice(0, limit);
+}
+
+/** A Comparison's current Pick, seen from one Job of it: the Job a Model ran, and the Job the User picked. */
+export interface PickWithJob {
+  pick: PickRecord;
+  /** The Model's Job in the Comparison; it was picked when `pick.jobId` is its id. */
+  job: JobRecord;
+  /** The picked Job, when the history still has it. */
+  picked?: JobRecord;
+}
+
+/**
+ * The current Picks of the Comparisons a Model most recently took part in, newest Pick first, at most `limit`: one for
+ * each of the Model's Jobs in them, picked or not (ADR 0009). The Model is followed as in {@link recentRatings}.
+ */
+export function recentPicks(jobs: RatedJob[], model: ModelKey, limit: number): PickWithJob[] {
+  const byId = new Map(jobs.map(({ job }) => [job.id, job]));
+  return jobs
+    .flatMap(({ job, pick }) => {
+      if (pick === undefined || !ranOn(job, model)) return [];
+      const picked = byId.get(pick.jobId);
+      return [{ pick, job, ...(picked === undefined ? {} : { picked }) }];
+    })
+    .sort((a, b) => Date.parse(b.pick.pickedAt) - Date.parse(a.pick.pickedAt))
     .slice(0, limit);
 }
 
