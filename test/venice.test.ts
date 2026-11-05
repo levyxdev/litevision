@@ -222,6 +222,20 @@ describe("Venice errors map to the typed errors", () => {
   }
 });
 
+describe("a rejected option", () => {
+  test("a 400 naming a provider_options key is a rejected option, with what Venice said and the docs link", async () => {
+    harness = await startHarness(veniceSetup({ [generateUrl]: recorded("venice/invalid-request.json", 400) }));
+    const result = await generate({ provider_options: { cfg_scale: 50 } });
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('Provider "venice" rejected an option');
+    expect(text).toContain("cfg_scale: Number must be less than or equal to 20");
+    expect(text).toContain("https://docs.venice.ai");
+    expect((await readHistory(harness))[0]).toMatchObject({ outcome: "failed", error: { kind: "rejected_option" } });
+  });
+});
+
 describe("reference-image editing with a Venice edit Model", () => {
   test("one reference goes to /image/edit as base64, with litevision's defaults", async () => {
     harness = await startHarness(veniceSetup({ [editUrl]: pngResponse }));

@@ -233,6 +233,18 @@ describe("Gemini errors", () => {
     expect(record).toMatchObject({ outcome: "failed", files: [], error: { kind } });
   });
 
+  test("a 400 naming a provider_options key is a rejected option, with what Gemini said and the docs link", async () => {
+    harness = await startHarness(geminiSetup({ [interactionsUrl]: recorded("gemini/invalid-argument.json", 400) }));
+    const result = await generate({ provider_options: { response_format: { image_size: "8K" } } });
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('Provider "gemini" rejected an option');
+    expect(text).toContain("is not one of 1K, 2K, 4K");
+    expect(text).toContain("https://ai.google.dev/gemini-api/docs/image-generation");
+    expect((await readHistory(harness))[0]).toMatchObject({ outcome: "failed", error: { kind: "rejected_option" } });
+  });
+
   test("a refusal on every one of n Interactions fails the Job as a refusal", async () => {
     harness = await startHarness(geminiSetup({ [interactionsUrl]: recorded("gemini/interaction-blocked.json") }));
     const result = await generate({ n: 2 });

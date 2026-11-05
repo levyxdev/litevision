@@ -22,6 +22,8 @@ export interface HarnessOptions {
   waitLimitMs?: number;
   /** How often asynchronous Protocols poll their Provider; tests keep it short. */
   pollIntervalMs?: number;
+  /** The delay before retrying a request the Provider never processed; 1 ms unless a test sets it. */
+  retryDelayMs?: number;
 }
 
 export interface Harness {
@@ -62,6 +64,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       settingsIdleMs: options.settingsIdleMs,
       waitLimitMs: options.waitLimitMs,
       pollIntervalMs: options.pollIntervalMs,
+      retryDelayMs: options.retryDelayMs ?? 1,
     });
     const client = new Client({ name: "test", version: "0.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

@@ -1,0 +1,9 @@
+{
+  "details": {
+    "_errors": [],
+    "cfg_scale": {
+      "_errors": ["Number must be less than or equal to 20"]
+    }
+  },
+  "error": "Invalid request"
+}

@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
-import { httpProviderError, providerError, sendToProvider } from "./errors.ts";
+import { httpProviderError, providerError } from "./errors.ts";
 import { multipartBody } from "./multipart.ts";
+import { sendToProvider } from "./send.ts";
 import {
   formatSize,
   ProviderError,
@@ -23,6 +24,7 @@ const errorSchema = z.object({
     message: z.string().optional(),
     code: z.string().nullish(),
     type: z.string().nullish(),
+    param: z.string().nullish(),
   }),
 });
 
@@ -95,9 +97,9 @@ export const openaiImages: ProtocolAdapter = {
 
   reservedOptions: ["model", "prompt", "n", "size", "image", "image[]"],
 
-  async submit(request, target, http) {
+  async submit(request, target, http, context) {
     const { url, init } = buildRequest(request, target);
-    const response = await sendToProvider(http, target.providerId, url, init);
+    const response = await sendToProvider(http, target.providerId, url, init, { context });
 
     const body: unknown = await response.json().catch(() => undefined);
     if (!response.ok) {
@@ -107,6 +109,8 @@ export const openaiImages: ProtocolAdapter = {
         status: response.status,
         codes: [error?.code, error?.type],
         message: error?.message ?? (response.statusText || undefined),
+        param: error?.param,
+        options: Object.keys(request.providerOptions),
       });
     }
 

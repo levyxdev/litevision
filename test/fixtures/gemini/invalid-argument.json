@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "Invalid value at 'response_format.image_size': \"8K\" is not one of 1K, 2K, 4K."
+  }
+}

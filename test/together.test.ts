@@ -180,7 +180,7 @@ describe("generate_image with the together Protocol", () => {
     expect(text).toContain('Known-good Options: {"steps":30}');
   });
 
-  test("Together naming the parameter it rejects is a request problem with the docs link, even when the name says safety", async () => {
+  test("Together naming the parameter it rejects is a rejected option with the docs link, even when the name says safety", async () => {
     const rejected = () =>
       Response.json(
         { error: { message: "safety_tolerance must be between 0 and 6", type: "invalid_request_error", param: "safety_tolerance", code: null } },
@@ -188,8 +188,9 @@ describe("generate_image with the together Protocol", () => {
       );
     harness = await startHarness(togetherSetup({ [imagesUrl]: rejected }));
     const text = textOf(await generate({ provider_options: { safety_tolerance: 9 } }));
-    expect(text).toContain("does not support this request");
+    expect(text).toContain("rejected an option");
     expect(text).not.toContain("content grounds");
+    expect((await readHistory(harness))[0]).toMatchObject({ error: { kind: "rejected_option" } });
     expect(text).toContain("https://docs.together.ai/docs/inference/images/parameters");
   });
 
@@ -370,6 +371,18 @@ describe("generate_video with the together Protocol", () => {
         { input_image: tinyPngDataUrl, frame: "last" },
       ],
     });
+  });
+
+  test("a status check Together's gateway failed is retried without submitting the video again", async () => {
+    let calls = 0;
+    const flaky: Route = (request) =>
+      calls++ === 0 ? new Response("upstream connect error", { status: 504 }) : recorded("together/video-completed.json")(request);
+    harness = await startHarness(togetherSetup({ [videoStatusUrl]: flaky }));
+    ok(await video());
+
+    const sentTo = (url: string) => harness!.requests.filter((request) => `${request.method} ${request.url}` === url);
+    expect(sentTo(videosUrl)).toHaveLength(1);
+    expect(sentTo(videoStatusUrl)).toHaveLength(2);
   });
 
   test("a frame the Model cannot take is refused before calling Together", async () => {

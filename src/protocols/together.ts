@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
-import { classifyProviderError, httpProviderError, providerError, providerLabel, sendToProvider } from "./errors.ts";
+import { classifyProviderError, httpProviderError, providerError, providerLabel } from "./errors.ts";
 import {
   ProviderError,
   type AspectRatio,
@@ -18,6 +18,7 @@ import {
   type SubmittedVideoJob,
   type VideoCapabilities,
 } from "./protocol.ts";
+import { sendToProvider } from "./send.ts";
 
 /**
  * Together AI (https://docs.together.ai): images are synchronous at `/v1/images/generations`, videos are asynchronous
@@ -308,8 +309,11 @@ function passthroughError(providerId: string): ProviderError {
   );
 }
 
-/** Together answers errors as JSON on images and as plain text on some video routes; both are read. */
-async function errorOf(response: Response, providerId: string): Promise<ProviderError> {
+/**
+ * Together answers errors as JSON on images and as plain text on some video routes; both are read. `options` are the
+ * `provider_options` keys the request sent, so a rejection naming one is reported as a rejected option.
+ */
+async function errorOf(response: Response, providerId: string, options: readonly string[] = []): Promise<ProviderError> {
   const text = await response.text().catch(() => "");
   let body: unknown;
   try {
@@ -321,31 +325,32 @@ async function errorOf(response: Response, providerId: string): Promise<Provider
   const error = parsed.success ? parsed.data.error : undefined;
   if (error?.code === passthroughBlocked) return passthroughError(providerId);
   const plain = body === undefined ? text.trim().slice(0, 300) : "";
-  // Together names the field it rejected. Its name says nothing about the problem, so classify without it: a field
-  // named `safety_tolerance` is a request problem, but a prompt "flagged by the safety filter" is still a refusal.
-  if (error?.param && response.status === 400 && error.message !== undefined) {
-    const kind = classifyProviderError({ status: 400, codes: [error.code, error.type], message: error.message.split(error.param).join("") });
-    return providerError(kind === "other" ? "unsupported" : kind, providerId, `HTTP 400: ${error.message}`);
-  }
   return httpProviderError(providerId, {
     status: response.status,
     codes: [error?.code, error?.type],
     message: error?.message ?? (plain || response.statusText || undefined),
+    param: error?.param,
+    options,
   });
 }
 
-async function postJson(url: string, body: Record<string, unknown>, target: ModelTarget, http: HttpTransport): Promise<unknown> {
-  const response = await sendToProvider(http, target.providerId, url, {
+async function postJson(
+  url: string,
+  body: Record<string, unknown>,
+  providerOptions: Record<string, unknown>,
+  target: ModelTarget,
+  http: HttpTransport,
+  context: JobContext,
+): Promise<unknown> {
+  const init = {
     method: "POST",
     headers: { ...authorization(target.credential), "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
-  if (!response.ok) throw await errorOf(response, target.providerId);
+  };
+  const response = await sendToProvider(http, target.providerId, url, init, { context });
+  if (!response.ok) throw await errorOf(response, target.providerId, Object.keys(providerOptions));
   return response.json().catch(() => undefined);
 }
-
-/** How many failed status checks in a row are put down to a passing outage before the Job is given up. */
-const toleratedPollFailures = 5;
 
 /** Polls one of Together's videos until it is made or has failed. */
 function waitForVideo(videoId: string, target: ModelTarget, http: HttpTransport, context: JobContext): SubmittedVideoJob {
@@ -353,33 +358,21 @@ function waitForVideo(videoId: string, target: ModelTarget, http: HttpTransport,
   return {
     resumeHandle: { videoId },
     async wait(): Promise<JobVideo> {
-      let failures = 0;
       for (;;) {
-        let response: Response | undefined;
-        try {
-          response = await sendToProvider(http, target.providerId, url, { headers: authorization(target.credential) });
-        } catch (error) {
-          if (++failures > toleratedPollFailures) throw error;
+        // A failed check is retried without submitting the video again.
+        const response = await sendToProvider(http, target.providerId, url, { headers: authorization(target.credential) }, { context, poll: true });
+        if (!response.ok) throw await errorOf(response, target.providerId);
+        const parsed = videoSchema.safeParse(await response.json().catch(() => undefined));
+        if (!parsed.success) throw providerError("other", target.providerId, `its status for video ${videoId} could not be read.`);
+        const job = parsed.data;
+        if (job.status === "completed") {
+          const link = job.outputs?.video_url;
+          if (link === undefined) throw providerError("other", target.providerId, `video ${videoId} completed without a link to it.`);
+          return { video: { url: link }, ...(job.outputs?.cost === undefined ? {} : { cost: job.outputs.cost }) };
         }
-        if (response !== undefined && !response.ok) {
-          const transient = response.status >= 500 || response.status === 429;
-          if (!transient || ++failures > toleratedPollFailures) throw await errorOf(response, target.providerId);
-          response = undefined;
-        }
-        if (response !== undefined) {
-          failures = 0;
-          const parsed = videoSchema.safeParse(await response.json().catch(() => undefined));
-          if (!parsed.success) throw providerError("other", target.providerId, `its status for video ${videoId} could not be read.`);
-          const job = parsed.data;
-          if (job.status === "completed") {
-            const link = job.outputs?.video_url;
-            if (link === undefined) throw providerError("other", target.providerId, `video ${videoId} completed without a link to it.`);
-            return { video: { url: link }, ...(job.outputs?.cost === undefined ? {} : { cost: job.outputs.cost }) };
-          }
-          if (job.status === "failed") throw videoFailure(job.error ?? undefined, target.providerId, videoId);
-          if (job.status === "cancelled") throw providerError("other", target.providerId, `video ${videoId} was cancelled.`);
-          // "queued" or "in_progress".
-        }
+        if (job.status === "failed") throw videoFailure(job.error ?? undefined, target.providerId, videoId);
+        if (job.status === "cancelled") throw providerError("other", target.providerId, `video ${videoId} was cancelled.`);
+        // "queued" or "in_progress".
         await context.pause();
       }
     },
@@ -428,7 +421,7 @@ export const together: ProtocolAdapter = {
   // `width` and `height` stay open, for video models litevision has no table for.
   reservedVideoOptions: ["model", "prompt", "seconds", "resolution", "ratio", "media"],
 
-  async submit(request, target, http) {
+  async submit(request, target, http, context) {
     const family = imageFamily(target.modelId);
     const { size, references } = request;
     const body = {
@@ -445,7 +438,7 @@ export const together: ProtocolAdapter = {
           : { reference_images: references.map(dataUrl) }),
       ...request.providerOptions,
     };
-    const parsed = imagesSchema.safeParse(await postJson(`${rootOf(target)}/v1/images/generations`, body, target, http));
+    const parsed = imagesSchema.safeParse(await postJson(`${rootOf(target)}/v1/images/generations`, body, request.providerOptions, target, http, context));
     if (!parsed.success) throw providerError("other", target.providerId, "its response could not be read as Together images.");
     const images = parsed.data.data.map((item): GeneratedImage => {
       if (item.b64_json) return { bytes: Buffer.from(item.b64_json, "base64") };
@@ -483,7 +476,7 @@ export const together: ProtocolAdapter = {
       ...(Object.keys(media).length === 0 ? {} : { media }),
       ...request.providerOptions,
     };
-    const parsed = videoSchema.safeParse(await postJson(`${rootOf(target)}/v2/videos`, body, target, http));
+    const parsed = videoSchema.safeParse(await postJson(`${rootOf(target)}/v2/videos`, body, request.providerOptions, target, http, context));
     if (!parsed.success) throw providerError("other", target.providerId, "its answer to the submission had no video id.");
     if (parsed.data.status === "failed") throw videoFailure(parsed.data.error ?? undefined, target.providerId, parsed.data.id);
     return waitForVideo(parsed.data.id, target, http, context);

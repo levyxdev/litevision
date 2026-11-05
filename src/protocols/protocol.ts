@@ -160,9 +160,15 @@ export interface JobContext {
    * propagate, so the Job is left to be resumed rather than recorded as failed.
    */
   pause(): Promise<void>;
+  /**
+   * Resolves after the delay before retry number `retry` (1 for the first), longer for each, which the Job runner
+   * sets. Rejects when litevision shuts down, like `pause`.
+   */
+  backoff(retry: number): Promise<void>;
 }
 
-export type ProviderErrorKind = "auth" | "balance" | "refusal" | "rate_limit" | "unsupported" | "other";
+/** `rejected_option`: the Provider answered 400 or 422 naming a parameter of the request, which the Agent can fix. */
+export type ProviderErrorKind = "auth" | "balance" | "refusal" | "rate_limit" | "unsupported" | "rejected_option" | "other";
 
 /** A failure reported by, or while reaching, a Provider. Its message names the Provider. */
 export class ProviderError extends Error {
