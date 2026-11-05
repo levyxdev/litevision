@@ -41,6 +41,8 @@ interface SpecBase extends ResolvedModel {
   credential: string;
   /** Absolute folder to save into; omitted, results go under a dated folder in `dirs.output`. */
   outputDir?: string;
+  /** The Comparison this Job belongs to (ADR 0009), when it is one of several started together. */
+  comparison?: string;
 }
 
 export interface JobSpec extends SpecBase {
@@ -172,6 +174,7 @@ export class JobRunner {
       modality,
       prompt,
       parameters,
+      ...(spec.comparison === undefined ? {} : { comparison: spec.comparison }),
     };
   }
 
@@ -332,8 +335,8 @@ export class JobRunner {
 }
 
 function baseOf(record: JobRecord): JobBase {
-  const { type, id, createdAt, model, provider, protocol, modelId, modality, prompt, parameters } = record;
-  return { type, id, createdAt, model, provider, protocol, modelId, ...(modality === undefined ? {} : { modality }), prompt, parameters };
+  const { type, id, createdAt, model, provider, protocol, modelId, modality, prompt, parameters, comparison } = record;
+  return { type, id, createdAt, model, provider, protocol, modelId, ...(modality === undefined ? {} : { modality }), prompt, parameters, ...(comparison === undefined ? {} : { comparison }) };
 }
 
 function targetOf(spec: SpecBase) {
