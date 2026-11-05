@@ -13,3 +13,5 @@ The same lookup gives the Agent what it needs to use `provider_options` on its o
 ## Consequences
 
 `generate_image` and `list_models` may wait a few seconds for a Provider whose cached answer is stale; the wait is capped and falls back rather than failing. A "known-good" option only means the Provider accepted it and returned images, not that it changed the result. (Superseded by ADR 0006: Known-good Options are now checked against the result, and become suspect when it does not match or the User rates it bad.)
+
+(Partly superseded by ADR 0010: capabilities no longer limit a request. What litevision knows about a Model is a Parameter Guide shown to the Agent, and the Provider's live answer still wins over the built-in one.)
