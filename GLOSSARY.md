@@ -44,9 +44,17 @@ _Avoid_: Nickname, model id (the model id is the Provider's own name for it)
 One generation request sent to one Model, from submission until its results are saved locally. Every generation is a Job, even when the Provider answers immediately.
 _Avoid_: Task (APIMart's word for its own server-side job), request, run
 
+**Comparison**:
+A set of Jobs started together for one request so the User can pick among their results. Its Jobs may differ in prompt, in Model, or both, but all share one Modality. Started only when the User asks for it or agrees to it.
+_Avoid_: Batch, group, candidate set
+
 **Rating**:
-The User's explicit verdict on one Job: good or bad, plus a one-line reason. Recorded only when the User actually states it.
+The User's explicit verdict on one Job, or on one result of it: good or bad, plus a one-line reason. Recorded only when the User actually states it.
 _Avoid_: Feedback, review, score
+
+**Pick**:
+The result the User chose within a Comparison. A relative preference, not a Rating: the picked result is not thereby good, nor the others bad. Recorded only when the User actually chooses.
+_Avoid_: Choice, winner, vote
 
 **Known-good Options**:
 The `provider_options` a Model is known to honour: sent by a completed Job whose result matched what was asked, as far as litevision can check (an image's aspect ratio, a video's duration), and that the User has not rated bad. Options last sent by a Job the User rated bad are _suspect_ instead, shown with the Rating's reason, until a Job rated good sends them again. So are options last sent by a Job whose result did not match, until a matching Job sends them again.
