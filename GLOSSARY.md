@@ -38,6 +38,10 @@ _Avoid_: Type, category, kind, media type
 The short, User-chosen name the Agent uses to pick a Model, e.g. `gpt-image-cheap`.
 _Avoid_: Nickname, model id (the model id is the Provider's own name for it)
 
+**Parameter Guide**:
+What litevision knows in advance about the request parameters of a Model's family, gathered from the Provider's docs: each parameter's allowed values, its default, how it changes the price, where it is documented and when that was last checked. It informs the Agent; litevision never refuses a request because of it. Where the Provider describes its Models itself, the Provider's answer wins.
+_Avoid_: Capabilities (they suggest limits litevision enforces), parameter schema (the Provider's own description of its parameters)
+
 ## Generation
 
 **Job**:
@@ -59,6 +63,10 @@ _Avoid_: Choice, winner, vote
 **Known-good Options**:
 The `provider_options` a Model is known to honour: sent by a completed Job whose result matched what was asked, as far as litevision can check (an image's aspect ratio, a video's duration), and that the User has not rated bad. Options last sent by a Job the User rated bad are _suspect_ instead, shown with the Rating's reason, until a Job rated good sends them again. So are options last sent by a Job whose result did not match, until a matching Job sends them again.
 _Avoid_: Working options, defaults, presets
+
+**Standing Options**:
+The `provider_options` the User has set for a Model, sent with every Job of that Model. Whatever the Agent passes for a Job overrides them. Set only by the User, unlike Known-good Options, which litevision learns from past Jobs.
+_Avoid_: Default options, presets
 
 **Model Notes**:
 A short note about a Model that helps the Agent choose it, e.g. "photoreal, cheap, bad at Chinese text". The User and the Agent may both change it, but only to text the User has agreed to.

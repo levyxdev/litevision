@@ -11,3 +11,5 @@ This replaces the consequence in ADR 0004 that a known-good option "only means t
 - **Count every completed Job's options**, as before: rejected because a silently ignored option is recorded as working, which is the failure this ADR is for.
 - **Require a good Rating before options count**: rejected because the User rarely rates, so almost nothing would ever count.
 - **Compare exact pixel sizes**: rejected because an option such as a resolution tier is meant to change them; aspect ratio and duration are what the request fixes.
+
+(Partly superseded by ADR 0010: results are checked against what the final request asked for, as read through the Parameter Guide, not against a size litevision chose.)
