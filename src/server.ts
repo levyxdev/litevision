@@ -57,7 +57,7 @@ export const instructions = `litevision generates images and videos through Mode
 - Pass \`output_path\` when the files belong in the User's project (e.g. its assets folder); otherwise omit it.
 - For Provider-specific \`provider_options\`: first reuse the Model's Known-good Options, which \`list_models\` shows. Only when none cover what you need, read the Model's docs link (\`list_models\` with \`model\` also gives the Provider's parameter schema when it publishes one). Read the docs again when a result does not match the request, when the Provider rejects an option (its error carries the docs link), or when options are marked suspect because a result that used them did not match or the User rated it bad. litevision passes \`provider_options\` through unchecked.
 - If fewer images came back than you asked for, the result says why. Tell the User.
-- When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
+- When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. When the verdict is about one result of a Job with several ("the second one is great"), pass \`result\`, its number from 1 in the order of the Job's files; omit it when the verdict is about the whole Job. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
 - Model Notes say what each Model is good or bad at. When the User learns something worth keeping, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
 
 /** The structured form of one Model in `list_models`. */
@@ -572,9 +572,15 @@ export function createServer(deps: ServerDeps): McpServer {
     "rate_job",
     {
       description:
-        "Record the User's Rating of a completed Job: good or bad, plus a one-line reason. Call it only when the User has actually said what they think of the result; never invent a verdict. A later Rating of the same Job replaces the earlier one.",
+        "Record the User's Rating of a completed Job, or of one result of it: good or bad, plus a one-line reason. Call it only when the User has actually said what they think of the result; never invent a verdict. A later Rating of the same Job and result replaces the earlier one; a Rating of the whole Job and one of a single result stand side by side.",
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `get_job` returned."),
+        result: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Which result the verdict is about, from 1 in the order of the Job's files. Omit when it is about the whole Job."),
         verdict: z.enum(verdicts).describe("The User's verdict."),
         reason: z
           .string()
@@ -583,17 +589,25 @@ export function createServer(deps: ServerDeps): McpServer {
       },
       outputSchema: {
         job_id: z.string(),
+        result: z.number().optional().describe("The result rated; absent for a Rating of the whole Job."),
         verdict: z.enum(verdicts),
         reason: z.string().describe("The reason as recorded, on one line."),
         rated_at: z.string().describe("When the Rating was recorded, ISO 8601."),
       },
     },
-    async ({ job_id, verdict, reason }) => {
+    async ({ job_id, result, verdict, reason }) => {
       try {
-        const rating = await rateJob(deps.dirs, { jobId: job_id, verdict, reason }, now());
-        const output = { job_id: rating.jobId, verdict: rating.verdict, reason: rating.reason, rated_at: rating.ratedAt };
+        const rating = await rateJob(deps.dirs, { jobId: job_id, result, verdict, reason }, now());
+        const output = {
+          job_id: rating.jobId,
+          ...(rating.result === undefined ? {} : { result: rating.result }),
+          verdict: rating.verdict,
+          reason: rating.reason,
+          rated_at: rating.ratedAt,
+        };
+        const subject = rating.result === undefined ? `Job ${rating.jobId}` : `result ${rating.result} of Job ${rating.jobId}`;
         return {
-          content: [{ type: "text", text: `Recorded a ${rating.verdict} Rating on Job ${rating.jobId}: ${rating.reason}` }],
+          content: [{ type: "text", text: `Recorded a ${rating.verdict} Rating on ${subject}: ${rating.reason}` }],
           structuredContent: output,
         };
       } catch (error) {

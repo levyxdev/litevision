@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Dirs } from "../dirs.ts";
-import { rateJob, RatingError, ratingReasonMaxLength, readJob, readRatedJobs, verdicts, type RatingRecord } from "../history.ts";
+import { rateJob, RatingError, ratingOf, ratingReasonMaxLength, readJob, readRatedJobs, verdicts, type RatingRecord } from "../history.ts";
 import { fileTypeOf } from "../media.ts";
 import type { Modality } from "../protocols/protocol.ts";
 import { SettingsError } from "./providers.ts";
@@ -9,6 +9,8 @@ import { SettingsError } from "./providers.ts";
 /** The settings page's Job history area: Jobs newest first, their images or videos and Ratings, and rating from the page. */
 
 export const rateJobInput = z.object({
+  /** Which result, from 1 in the order of the Job's files; absent to rate the whole Job. */
+  result: z.number({ message: "Choose a result by its number." }).int("Choose a result by its number.").positive("Choose a result by its number.").optional(),
   verdict: z.enum(verdicts, { message: "Choose good or bad." }),
   reason: z.string().max(ratingReasonMaxLength, `Keep the reason to at most ${ratingReasonMaxLength} characters.`),
 });
@@ -30,8 +32,9 @@ export interface ListedJob {
   outcome: "running" | "completed" | "failed";
   /** Image Jobs make images, video Jobs one video. */
   modality: Modality;
-  /** `thumbnail` is the path the settings server serves the file at; the page adds its token to it. */
-  files: Array<{ path: string; thumbnail: string }>;
+  /** `thumbnail` is the path the settings server serves the file at; the page adds its token to it. `rating` is this result's own. */
+  files: Array<{ path: string; thumbnail: string; rating: ListedRating | null }>;
+  /** The whole Job's Rating. */
   rating: ListedRating | null;
   /** Why a failed Job failed. */
   error?: string;
@@ -42,22 +45,33 @@ export interface ListedJob {
 }
 
 export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
-  return (await readRatedJobs(dirs)).map(({ job, rating }) => ({
-    id: job.id,
-    createdAt: job.createdAt,
-    model: job.model,
-    modelId: job.modelId,
-    provider: job.provider,
-    prompt: job.prompt,
-    durationMs: job.durationMs,
-    outcome: job.outcome,
-    modality: job.modality ?? "image",
-    files: job.files.map((path, index) => ({ path, thumbnail: `/api/jobs/${encodeURIComponent(job.id)}/files/${index}` })),
-    rating: rating === undefined ? null : listedRating(rating),
-    ...(job.error === undefined ? {} : { error: job.error.message }),
-    ...(job.shortfall === undefined ? {} : { shortfall: job.shortfall }),
-    ...(job.mismatch === undefined ? {} : { mismatch: `The result does not match the request: ${job.mismatch}.` }),
-  }));
+  return (await readRatedJobs(dirs)).map((rated) => {
+    const { job } = rated;
+    const listedRatingOf = (result?: number) => {
+      const current = ratingOf(rated, result);
+      return current === undefined ? null : listedRating(current);
+    };
+    return {
+      id: job.id,
+      createdAt: job.createdAt,
+      model: job.model,
+      modelId: job.modelId,
+      provider: job.provider,
+      prompt: job.prompt,
+      durationMs: job.durationMs,
+      outcome: job.outcome,
+      modality: job.modality ?? "image",
+      files: job.files.map((path, index) => ({
+        path,
+        thumbnail: `/api/jobs/${encodeURIComponent(job.id)}/files/${index}`,
+        rating: listedRatingOf(index + 1),
+      })),
+      rating: listedRatingOf(),
+      ...(job.error === undefined ? {} : { error: job.error.message }),
+      ...(job.shortfall === undefined ? {} : { shortfall: job.shortfall }),
+      ...(job.mismatch === undefined ? {} : { mismatch: `The result does not match the request: ${job.mismatch}.` }),
+    };
+  });
 }
 
 export async function rateJobFromPage(dirs: Dirs, jobId: string, input: z.infer<typeof rateJobInput>, now: Date): Promise<ListedRating> {

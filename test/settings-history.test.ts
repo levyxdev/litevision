@@ -71,8 +71,8 @@ describe("Job history", () => {
       outcome: "completed",
       modality: "image",
       files: [
-        { path: foxFiles[0], thumbnail: "/api/jobs/fox/files/0" },
-        { path: foxFiles[1], thumbnail: "/api/jobs/fox/files/1" },
+        { path: foxFiles[0], thumbnail: "/api/jobs/fox/files/0", rating: null },
+        { path: foxFiles[1], thumbnail: "/api/jobs/fox/files/1", rating: null },
       ],
       // The later Rating supersedes the earlier one.
       rating: { verdict: "bad", reason: "the tail is missing", ratedAt: "2026-10-30T09:10:00.000Z" },
@@ -106,6 +106,44 @@ describe("rating from the page", () => {
 
     const { jobs } = (await h.send("GET", "/api/jobs")).json();
     expect(jobs.find((job: { id: string }) => job.id === "fox").rating).toEqual(rating);
+  });
+
+  test("rates one result, which the listing shows on that file beside the whole Job's Rating", async () => {
+    const { h } = await start();
+    const response = await h.send("POST", "/api/jobs/fox/rating", { body: { result: 2, verdict: "good", reason: "the second one is great" } });
+
+    expect(response.status).toBe(200);
+    const rating = { verdict: "good", reason: "the second one is great", ratedAt: ratedAt.toISOString() };
+    expect(response.json()).toEqual({ rating });
+    expect((await readHistoryLines(h)).at(-1)).toEqual({ type: "rating", jobId: "fox", result: 2, ...rating });
+
+    const { jobs } = (await h.send("GET", "/api/jobs")).json();
+    const fox = jobs.find((job: { id: string }) => job.id === "fox");
+    expect(fox.files.map((file: { rating: unknown }) => file.rating)).toEqual([null, rating]);
+    // The whole Job's Rating is untouched by a Rating of one result.
+    expect(fox.rating).toEqual({ verdict: "bad", reason: "the tail is missing", ratedAt: "2026-10-30T09:10:00.000Z" });
+  });
+
+  test("a later Rating of the same result supersedes the earlier one in the listing", async () => {
+    const { h } = await start();
+    await h.send("POST", "/api/jobs/fox/rating", { body: { result: 1, verdict: "good", reason: "nice" } });
+    await h.send("POST", "/api/jobs/fox/rating", { body: { result: 1, verdict: "bad", reason: "six legs" } });
+
+    const { jobs } = (await h.send("GET", "/api/jobs")).json();
+    const fox = jobs.find((job: { id: string }) => job.id === "fox");
+    expect(fox.files.map((file: { rating: { reason: string } | null }) => file.rating?.reason ?? null)).toEqual(["six legs", null]);
+  });
+
+  test("a result outside the Job's files is rejected, and nothing is recorded", async () => {
+    const { h } = await start();
+    const before = (await readHistoryLines(h)).length;
+
+    const response = await h.send("POST", "/api/jobs/fox/rating", { body: { result: 3, verdict: "good", reason: "nice" } });
+    expect(response.status).toBe(400);
+    expect(response.json().error).toContain("2 results");
+    expect((await h.send("POST", "/api/jobs/fox/rating", { body: { result: 1.5, verdict: "good", reason: "nice" } })).status).toBe(400);
+
+    expect((await readHistoryLines(h)).length).toBe(before);
   });
 
   test("an unknown Job is 404, a failed or running Job is 409, and nothing is recorded", async () => {

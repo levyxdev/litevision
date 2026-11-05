@@ -151,6 +151,108 @@ describe("rate_job", () => {
     expect(instructions).toContain("rate_job");
     expect(instructions).toMatch(/never invent/i);
   });
+
+  test("the server instructions say to pass `result` when the verdict is about one result", async () => {
+    harness = await startHarness();
+    const instructions = harness.client.getInstructions() ?? "";
+    expect(instructions).toMatch(/about one result[^.]*pass `result`/i);
+  });
+});
+
+describe("rate_job with a result", () => {
+  test("records the Rating on that result, numbered from 1 in the order of the Job's files", async () => {
+    harness = await startHarness(openaiSetup(recorded("openai/generations-2.json")));
+    const jobId = await generate({ n: 2 });
+
+    const response = await rate({ job_id: jobId, result: 2, verdict: "good", reason: "the second one is great" });
+
+    expect(response.isError).toBeFalsy();
+    expect(response.structuredContent).toEqual({
+      job_id: jobId,
+      result: 2,
+      verdict: "good",
+      reason: "the second one is great",
+      rated_at: ratedAt.toISOString(),
+    });
+    expect(textOf(response)).toContain("result 2");
+    expect((await readHistoryLines(harness)).at(-1)).toEqual({
+      type: "rating",
+      jobId,
+      result: 2,
+      verdict: "good",
+      reason: "the second one is great",
+      ratedAt: ratedAt.toISOString(),
+    });
+  });
+
+  test("a result outside the Job's files errors, says how many there are, and records nothing", async () => {
+    harness = await startHarness(openaiSetup(recorded("openai/generations-2.json")));
+    const jobId = await generate({ n: 2 });
+
+    const response = await rate({ job_id: jobId, result: 3, verdict: "good", reason: "nice" });
+
+    expect(response.isError).toBe(true);
+    expect(textOf(response)).toContain("2 results");
+    expect((await rate({ job_id: jobId, result: 0, verdict: "good", reason: "nice" })).isError).toBe(true);
+    expect((await readHistoryLines(harness)).some((line) => line.type === "rating")).toBe(false);
+  });
+});
+
+describe("which Ratings make a Job's options suspect (ADR 0006)", () => {
+  const options = async () => {
+    const listed = await harness!.client.callTool({ name: "list_models", arguments: { model: "gpt-image" } });
+    const [model] = (listed.structuredContent as { models: Array<{ known_good_options: unknown; suspect_options: unknown }> }).models;
+    return model!;
+  };
+
+  test("a bad Rating of one result among several leaves the Job's options known-good", async () => {
+    harness = await startHarness(openaiSetup(recorded("openai/generations-2.json")));
+    const jobId = await generate({ n: 2, provider_options: { quality: "high" } });
+
+    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "the first one has six legs" });
+
+    expect(await options()).toMatchObject({ known_good_options: { quality: "high" }, suspect_options: {} });
+  });
+
+  test("a bad Rating of the whole Job makes its options suspect, and a good Rating of one result does not clear it", async () => {
+    harness = await startHarness(openaiSetup(recorded("openai/generations-2.json")));
+    const jobId = await generate({ n: 2, provider_options: { quality: "high" } });
+
+    await rate({ job_id: jobId, verdict: "bad", reason: "both are blurry" });
+    await rate({ job_id: jobId, result: 2, verdict: "good", reason: "the second one is fine" });
+
+    expect(await options()).toMatchObject({
+      known_good_options: {},
+      suspect_options: { quality: { value: "high", reason: "both are blurry", job_id: jobId, cause: "rating" } },
+    });
+  });
+
+  test("a bad Rating of a one-result Job's only result makes its options suspect, until a later good Rating", async () => {
+    harness = await startHarness(openaiSetup());
+    const jobId = await generate({ provider_options: { quality: "high" } });
+
+    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "the text is wrong" });
+    expect(await options()).toMatchObject({
+      known_good_options: {},
+      suspect_options: { quality: { value: "high", reason: "the text is wrong", job_id: jobId, cause: "rating" } },
+    });
+
+    // A later Rating of the whole Job speaks for the same single result.
+    await rate({ job_id: jobId, verdict: "good", reason: "fine after all" });
+    expect(await options()).toMatchObject({ known_good_options: { quality: "high" }, suspect_options: {} });
+  });
+
+  test("a later Rating of the same result supersedes the earlier one", async () => {
+    harness = await startHarness(openaiSetup());
+    const jobId = await generate({ provider_options: { quality: "high" } });
+
+    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "the text is wrong" });
+    await rate({ job_id: jobId, result: 1, verdict: "good", reason: "I misread it" });
+    expect(await options()).toMatchObject({ known_good_options: { quality: "high" }, suspect_options: {} });
+
+    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "no, it is wrong" });
+    expect(await options()).toMatchObject({ suspect_options: { quality: { reason: "no, it is wrong" } } });
+  });
 });
 
 /** Runs a Job that the Provider rejects and returns its id. */
