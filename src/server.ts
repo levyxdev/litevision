@@ -16,7 +16,21 @@ import {
   type ResolvedModel,
 } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
-import { optionsRecord, rateJob, readJob, ratingReasonMaxLength, RatingError, readRatedJobs, verdicts, type OptionsRecord, type RatedJob, type SuspectOption } from "./history.ts";
+import {
+  optionsRecord,
+  rateJob,
+  readJob,
+  ratingReasonMaxLength,
+  RatingError,
+  readRatedJobs,
+  recentRatings,
+  verdicts,
+  type OptionsRecord,
+  type RatedJob,
+  type RatingRecord,
+  type RatingWithJob,
+  type SuspectOption,
+} from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, JobRunner, type JobState } from "./jobs.ts";
 import type { MediaFacts } from "./media.ts";
@@ -61,7 +75,12 @@ export const instructions = `litevision generates images and videos through Mode
 - For Provider-specific \`provider_options\`: first reuse the Model's Known-good Options, which \`list_models\` shows. Only when none cover what you need, read the Model's docs link (\`list_models\` with \`model\` also gives the Provider's parameter schema when it publishes one). Read the docs again when a result does not match the request, when the Provider rejects an option (its error carries the docs link), or when options are marked suspect because a result that used them did not match or the User rated it bad. litevision passes \`provider_options\` through unchecked.
 - If fewer images came back than you asked for, the result says why. Tell the User.
 - When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. When the verdict is about one result of a Job with several ("the second one is great"), pass \`result\`, its number from 1 in the order of the Job's files; omit it when the verdict is about the whole Job. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
-- Model Notes say what each Model is good or bad at. When the User learns something worth keeping, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
+- Model Notes say what each Model is good or bad at. When the User learns something worth keeping, or a Model's recent Ratings (\`list_models\` with \`model\`) say something its Model Notes do not, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
+
+/** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
+const recentRatingsShown = 5;
+/** How much of a Job's prompt a recent Rating shows. */
+const promptStartLength = 80;
 
 /** The structured form of one Model in `list_models`. */
 const listedModelSchema = z.object({
@@ -109,6 +128,21 @@ const listedModelSchema = z.object({
       "`provider_options` last used by a Job the User rated bad (cause \"rating\", with the User's reason) or whose result did not match the request (cause \"mismatch\"). Check the docs before sending them again.",
     ),
   problem: z.string().optional(),
+  recent_ratings: z
+    .array(
+      z.object({
+        job_id: z.string(),
+        result: z.number().optional().describe("Which result of the Job, from 1; absent when the Rating is about the whole Job."),
+        verdict: z.enum(verdicts),
+        reason: z.string().describe("The User's reason, in their words."),
+        rated_at: z.string(),
+        prompt: z.string().describe("The start of the Job's prompt."),
+      }),
+    )
+    .optional()
+    .describe(
+      `Only with \`model\`: the Model's ${recentRatingsShown} most recent Ratings, newest first. When they say something the Model Notes do not, propose new Model Notes to the User.`,
+    ),
   parameter_schema: z
     .unknown()
     .optional()
@@ -189,6 +223,10 @@ async function listedModel(
     for (const [key, suspect] of Object.entries(record.suspect)) {
       text += `\nSuspect: ${key}=${JSON.stringify(suspect.value)}, used by Job ${suspect.jobId}, ${suspectWhy(suspect)}`;
     }
+    const ratings = recentRatings(ratedJobs, model, recentRatingsShown);
+    output.recent_ratings = ratings.map(recentRatingOutput);
+    text += ratings.length === 0 ? "\nRecent Ratings: none recorded yet." : "\nRecent Ratings, newest first:";
+    for (const rated of ratings) text += `\n- ${describeRecentRating(rated)}`;
     if (described.parameterSchema !== undefined) {
       output.parameter_schema = described.parameterSchema;
       text += `\nParameter schema from the Provider: ${JSON.stringify(described.parameterSchema)}`;
@@ -198,6 +236,36 @@ async function listedModel(
     if (suspectKeys.length > 0) text += ` Suspect options: ${suspectKeys.join(", ")}.`;
   }
   return { output, text };
+}
+
+/** A Rating as `rate_job` and `list_models` report it. */
+function ratingOutput(rating: RatingRecord) {
+  return {
+    job_id: rating.jobId,
+    ...(rating.result === undefined ? {} : { result: rating.result }),
+    verdict: rating.verdict,
+    reason: rating.reason,
+    rated_at: rating.ratedAt,
+  };
+}
+
+/** What a Rating is about, in words: the whole Job, or one result of it. */
+function ratingSubject(rating: RatingRecord): string {
+  return rating.result === undefined ? `Job ${rating.jobId}` : `result ${rating.result} of Job ${rating.jobId}`;
+}
+
+function recentRatingOutput({ rating, job }: RatingWithJob) {
+  return { ...ratingOutput(rating), prompt: promptStart(job.prompt) };
+}
+
+function describeRecentRating({ rating, job }: RatingWithJob): string {
+  return `${rating.verdict} on ${ratingSubject(rating)} (${JSON.stringify(promptStart(job.prompt))}): ${rating.reason}`;
+}
+
+/** Enough of a prompt, on one line, for the Agent to tell which Job a Rating is about. */
+function promptStart(prompt: string): string {
+  const line = prompt.replace(/\s+/g, " ").trim();
+  return line.length <= promptStartLength ? line : `${line.slice(0, promptStartLength).trimEnd()}…`;
 }
 
 function videoCapabilitiesOutput(capabilities: ReturnType<typeof videoModelInfo>["capabilities"]) {
@@ -791,17 +859,9 @@ export function createServer(deps: ServerDeps): McpServer {
     async ({ job_id, result, verdict, reason }) => {
       try {
         const rating = await rateJob(deps.dirs, { jobId: job_id, result, verdict, reason }, now());
-        const output = {
-          job_id: rating.jobId,
-          ...(rating.result === undefined ? {} : { result: rating.result }),
-          verdict: rating.verdict,
-          reason: rating.reason,
-          rated_at: rating.ratedAt,
-        };
-        const subject = rating.result === undefined ? `Job ${rating.jobId}` : `result ${rating.result} of Job ${rating.jobId}`;
         return {
-          content: [{ type: "text", text: `Recorded a ${rating.verdict} Rating on ${subject}: ${rating.reason}` }],
-          structuredContent: output,
+          content: [{ type: "text", text: `Recorded a ${rating.verdict} Rating on ${ratingSubject(rating)}: ${rating.reason}` }],
+          structuredContent: ratingOutput(rating),
         };
       } catch (error) {
         if (error instanceof RatingError) return toolError(error.message);
@@ -814,7 +874,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "list_models",
     {
       description:
-        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, capabilities, Model Notes, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the values of its Known-good and suspect options and the Provider's parameter schema.",
+        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, capabilities, Model Notes, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the values of its Known-good and suspect options, its five most recent Ratings and the Provider's parameter schema.",
       inputSchema: {
         model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
       },
