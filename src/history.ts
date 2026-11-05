@@ -240,6 +240,28 @@ export interface ModelKey {
   modelId: string;
 }
 
+function ranOn(job: JobRecord, model: ModelKey): boolean {
+  return job.provider === model.provider && job.protocol === model.protocol && job.modelId === model.modelId;
+}
+
+/** A current Rating with the Job it is about. */
+export interface RatingWithJob {
+  rating: RatingRecord;
+  job: JobRecord;
+}
+
+/**
+ * A Model's most recent current Ratings, newest first, at most `limit` (ADR 0008). A Model is followed by Provider,
+ * Protocol and model id, so its Ratings survive renaming its Alias.
+ */
+export function recentRatings(jobs: RatedJob[], model: ModelKey, limit: number): RatingWithJob[] {
+  return jobs
+    .filter(({ job }) => ranOn(job, model))
+    .flatMap(({ job, ratings }) => ratings.map((rating) => ({ rating, job })))
+    .sort((a, b) => Date.parse(b.rating.ratedAt) - Date.parse(a.rating.ratedAt))
+    .slice(0, limit);
+}
+
 /** One `provider_options` key whose latest value is in doubt, and why. */
 export interface SuspectOption {
   value: unknown;
@@ -282,7 +304,7 @@ export function optionsRecord(jobs: RatedJob[], model: ModelKey): OptionsRecord 
     const { job } = ratedJob;
     if (job.outcome !== "completed") continue;
     const rating = optionsRating(ratedJob);
-    if (job.provider !== model.provider || job.protocol !== model.protocol || job.modelId !== model.modelId) continue;
+    if (!ranOn(job, model)) continue;
     for (const [key, value] of Object.entries(job.parameters?.providerOptions ?? {})) {
       const asJson = JSON.stringify(value);
       const badValues = ratedBad.get(key) ?? new Map<string, SuspectOption>();
