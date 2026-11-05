@@ -1,12 +1,27 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Dirs } from "../dirs.ts";
-import { rateJob, RatingError, ratingOf, ratingReasonMaxLength, readJob, readRatedJobs, verdicts, type RatingRecord } from "../history.ts";
+import {
+  PickError,
+  pickResult,
+  rateJob,
+  RatingError,
+  ratingOf,
+  ratingReasonMaxLength,
+  readJob,
+  readRatedJobs,
+  verdicts,
+  type PickRecord,
+  type RatingRecord,
+} from "../history.ts";
 import { fileTypeOf } from "../media.ts";
 import type { Modality } from "../protocols/protocol.ts";
 import { SettingsError } from "./providers.ts";
 
-/** The settings page's Job history area: Jobs newest first, their images or videos and Ratings, and rating from the page. */
+/**
+ * The settings page's Job history area: Jobs newest first, a Comparison's Jobs together, their images or videos, Ratings
+ * and Picks, and rating and picking from the page.
+ */
 
 export const rateJobInput = z.object({
   /** Which result, from 1 in the order of the Job's files; absent to rate the whole Job. */
@@ -14,6 +29,18 @@ export const rateJobInput = z.object({
   verdict: z.enum(verdicts, { message: "Choose good or bad." }),
   reason: z.string().max(ratingReasonMaxLength, `Keep the reason to at most ${ratingReasonMaxLength} characters.`),
 });
+
+export const pickInput = z.object({
+  jobId: z.string({ message: "Choose one of the Comparison's Jobs." }).min(1, "Choose one of the Comparison's Jobs."),
+  /** Which result of that Job, from 1 in the order of its files; absent to pick the whole Job. */
+  result: z.number({ message: "Choose a result by its number." }).int("Choose a result by its number.").positive("Choose a result by its number.").optional(),
+});
+
+export interface ListedPick {
+  jobId: string;
+  result?: number;
+  pickedAt: string;
+}
 
 export interface ListedRating {
   verdict: RatingRecord["verdict"];
@@ -42,11 +69,17 @@ export interface ListedJob {
   shortfall?: string;
   /** How a completed Job's result differs from its request (ADR 0006). */
   mismatch?: string;
+  /** For a Job of a Comparison: the Comparison's id and its current Pick, whichever of its Jobs that is. */
+  comparison?: { id: string; pick: ListedPick | null };
 }
 
+/**
+ * Every Job, newest first, except that a Comparison's Jobs are listed together, in the order they started, where its
+ * newest Job would be.
+ */
 export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
-  return (await readRatedJobs(dirs)).map((rated) => {
-    const { job } = rated;
+  const listed = (await readRatedJobs(dirs)).map((rated) => {
+    const { job, pick } = rated;
     const listedRatingOf = (result?: number) => {
       const current = ratingOf(rated, result);
       return current === undefined ? null : listedRating(current);
@@ -70,8 +103,33 @@ export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
       ...(job.error === undefined ? {} : { error: job.error.message }),
       ...(job.shortfall === undefined ? {} : { shortfall: job.shortfall }),
       ...(job.mismatch === undefined ? {} : { mismatch: `The result does not match the request: ${job.mismatch}.` }),
-    };
+      ...(job.comparison === undefined ? {} : { comparison: { id: job.comparison, pick: pick === undefined ? null : listedPick(pick) } }),
+    } satisfies ListedJob;
   });
+  const byComparison = new Map<string, ListedJob[]>();
+  for (const job of listed) {
+    if (job.comparison === undefined) continue;
+    const ofComparison = byComparison.get(job.comparison.id) ?? [];
+    byComparison.set(job.comparison.id, ofComparison);
+    ofComparison.unshift(job);
+  }
+  return listed.flatMap((job) => {
+    if (job.comparison === undefined) return [job];
+    const ofComparison = byComparison.get(job.comparison.id);
+    // A Comparison's Jobs go where its newest Job is; the others were already listed there.
+    if (ofComparison === undefined) return [];
+    byComparison.delete(job.comparison.id);
+    return ofComparison;
+  });
+}
+
+export async function pickFromPage(dirs: Dirs, comparison: string, input: z.infer<typeof pickInput>, now: Date): Promise<ListedPick> {
+  try {
+    return listedPick(await pickResult(dirs, { comparison, ...input }, now));
+  } catch (error) {
+    if (!(error instanceof PickError)) throw error;
+    throw new SettingsError({ "unknown-comparison": 404, "not-in-comparison": 400, "not-completed": 409, invalid: 400 }[error.kind], error.message);
+  }
 }
 
 export async function rateJobFromPage(dirs: Dirs, jobId: string, input: z.infer<typeof rateJobInput>, now: Date): Promise<ListedRating> {
@@ -100,6 +158,10 @@ export async function jobImage(dirs: Dirs, jobId: string, index: string): Promis
   const type = fileTypeOf(bytes);
   if (type === undefined) throw new SettingsError(404, "The file is no longer an image or a video.");
   return { bytes, contentType: type.mimeType };
+}
+
+function listedPick(pick: PickRecord): ListedPick {
+  return { jobId: pick.jobId, ...(pick.result === undefined ? {} : { result: pick.result }), pickedAt: pick.pickedAt };
 }
 
 function listedRating(rating: RatingRecord): ListedRating {

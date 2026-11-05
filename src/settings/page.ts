@@ -97,6 +97,11 @@ export function renderPage(nonce: string): string {
   .inline > select.rate-target { flex: 0 0 auto; }
   .rating { font-size: 13px; }
   .rating.good { color: var(--ok); } .rating.bad { color: var(--danger); }
+  .comparison { display: grid; gap: 12px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .comparison > .card { margin-bottom: 0; }
+  .comparison-head p { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .picked { color: var(--accent); font-weight: 500; }
 
   #status { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
     background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none;
@@ -156,7 +161,7 @@ export function renderPage(nonce: string): string {
   <section id="history">
     <div class="section-head">
       <h2>Job history</h2>
-      <p>Newest first. Rate a Job, or one of its results, to keep your verdict on it; rating it again replaces the earlier Rating.</p>
+      <p>Newest first. Rate a Job, or one of its results, to keep your verdict on it; rating it again replaces the earlier Rating. In a Comparison, pick the result you prefer; picking again replaces the earlier Pick.</p>
     </div>
     <div id="job-list"><p class="muted">Loading…</p></div>
   </section>
@@ -527,13 +532,44 @@ function ratingText(rating) {
   return (rating.verdict === "good" ? "Good" : "Bad") + ": " + rating.reason;
 }
 
-/** A thumbnail, captioned with its number and its own Rating when the Job has several results or this one is rated. */
+/** Whether this Job is its Comparison's Pick: as a whole, or with \`result\` that one result of it. */
+function isPicked(job, result) {
+  const pick = job.comparison && job.comparison.pick;
+  return !!pick && pick.jobId === job.id && (result === undefined || pick.result === result);
+}
+
+/**
+ * A thumbnail, captioned with its number, its own Rating and whether it is its Comparison's Pick, when the Job has
+ * several results or this one is rated or picked.
+ */
 function resultThumbnail(job, file, index) {
   const media = thumbnail(job, file);
+  const picked = job.files.length > 1 && isPicked(job, index + 1);
   if (job.files.length === 1 && !file.rating) return media;
-  const caption = el("figcaption", { textContent: "Result " + (index + 1) + (file.rating ? " · " + ratingText(file.rating) : "") });
+  const caption = el("figcaption", { textContent: "Result " + (index + 1) + (picked ? " · Picked" : "") + (file.rating ? " · " + ratingText(file.rating) : "") });
   if (file.rating) caption.className = "rating " + file.rating.verdict;
+  else if (picked) caption.className = "picked";
   return el("figure", { className: "result-thumb" }, media, caption);
+}
+
+/**
+ * For a completed Job of a Comparison: a Pick button for the Job or, when it has several results, the one selected.
+ * A Pick says which of the Comparison's results the User prefers; it is not a Rating.
+ */
+function pickRow(job) {
+  if (!job.comparison || job.outcome !== "completed") return [];
+  const target = el("select", { className: "rate-target", title: "What you pick" },
+    el("option", { value: "", textContent: "Whole Job" }),
+    ...job.files.map((_, index) => el("option", { value: String(index + 1), textContent: "Result " + (index + 1) })));
+  const button = el("button", { type: "button", textContent: "Pick" });
+  button.onclick = () => act(button, async () => {
+    const body = { jobId: job.id };
+    if (target.value !== "") body.result = Number(target.value);
+    await api("POST", "/api/comparisons/" + encodeURIComponent(job.comparison.id) + "/pick", body);
+    await loadJobs();
+  }, "Pick saved.");
+  const controls = job.files.length > 1 ? [target, button] : [button];
+  return [el("div", { className: "actions" }, el("span", { className: "spacer muted", textContent: "Prefer this one?" }), ...controls)];
 }
 
 /**
@@ -576,13 +612,41 @@ function jobCard(job) {
   return el("div", { className: "card" },
     el("div", {},
       el("div", { className: "card-head" }, el("h3", { textContent: job.model }),
+        ...(isPicked(job) ? [el("span", { className: "chip accent", textContent: "Picked" })] : []),
         el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome })),
       el("p", { className: "job-meta", textContent: job.modelId + " on " + job.provider + " · " + when + " · " + formatDuration(job.durationMs) })),
     el("p", { className: "prompt", textContent: job.prompt }),
     ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map((file, index) => resultThumbnail(job, file, index)))]),
     ...details,
     ...ratingRow(job),
+    ...pickRow(job),
   );
+}
+
+/** A Comparison's Jobs together, under what the User picked among them. */
+function comparisonCard(jobs) {
+  const pick = jobs[0].comparison.pick;
+  const picked = pick && jobs.find((job) => job.id === pick.jobId);
+  const status = !pick ? "Not picked yet."
+    : "Picked: " + (pick.result === undefined ? "" : "result " + pick.result + " of ") + (picked ? picked.model + "'s Job" : "Job " + pick.jobId) + ".";
+  return el("div", { className: "comparison" },
+    el("div", { className: "comparison-head" }, el("h3", { textContent: "Comparison · " + jobs.length + " Jobs" }),
+      el("p", { textContent: status + " A Pick says which you prefer; it is not a Rating." })),
+    ...jobs.map(jobCard));
+}
+
+/** Job cards, each Comparison's Jobs (which the listing keeps together) in one Comparison card. */
+function jobEntries(jobs) {
+  const entries = [];
+  for (let i = 0; i < jobs.length; ) {
+    const comparison = jobs[i].comparison;
+    if (!comparison) { entries.push(jobCard(jobs[i])); i++; continue; }
+    let end = i;
+    while (end < jobs.length && jobs[end].comparison && jobs[end].comparison.id === comparison.id) end++;
+    entries.push(comparisonCard(jobs.slice(i, end)));
+    i = end;
+  }
+  return entries;
 }
 
 async function loadJobs() {
@@ -590,7 +654,7 @@ async function loadJobs() {
   const { jobs } = await api("GET", "/api/jobs");
   list.replaceChildren(...(jobs.length === 0
     ? [emptyState("No Jobs yet. Images your Agent generates will appear here.")]
-    : jobs.map(jobCard)));
+    : jobEntries(jobs)));
 }
 
 (async () => {

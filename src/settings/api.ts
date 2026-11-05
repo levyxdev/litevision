@@ -5,7 +5,7 @@ import type { HttpTransport } from "../http.ts";
 import { refreshModelInfo, refreshProviderModelInfo, type ModelInfoDeps } from "../model-info.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { fetchModelIds, testConnection } from "./connection.ts";
-import { jobImage, listJobHistory, rateJobFromPage, rateJobInput } from "./job-history.ts";
+import { jobImage, listJobHistory, pickFromPage, pickInput, rateJobFromPage, rateJobInput } from "./job-history.ts";
 import {
   addModel,
   addModelInput,
@@ -176,6 +176,13 @@ const routes: Route[] = [
     path: "/api/jobs/:id/rating",
     handler: async ({ dirs, now, params, body }) => ({
       body: { rating: await rateJobFromPage(dirs, params.id!, parse(rateJobInput, body), now()) },
+    }),
+  },
+  {
+    method: "POST",
+    path: "/api/comparisons/:id/pick",
+    handler: async ({ dirs, now, params, body }) => ({
+      body: { pick: await pickFromPage(dirs, params.id!, parse(pickInput, body), now()) },
     }),
   },
   {

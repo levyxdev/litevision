@@ -18,14 +18,19 @@ import {
 import type { Dirs } from "./dirs.ts";
 import {
   optionsRecord,
+  PickError,
+  pickResult,
   rateJob,
   readJob,
   ratingReasonMaxLength,
   RatingError,
   readRatedJobs,
+  recentPicks,
   recentRatings,
   verdicts,
   type OptionsRecord,
+  type PickRecord,
+  type PickWithJob,
   type RatedJob,
   type RatingRecord,
   type RatingWithJob,
@@ -78,11 +83,14 @@ export const instructions = `litevision generates images and videos through Mode
 - If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs link and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
 - If fewer images came back than you asked for, the result says why. Tell the User.
 - When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. When the verdict is about one result of a Job with several ("the second one is great"), pass \`result\`, its number from 1 in the order of the Job's files; omit it when the verdict is about the whole Job. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
-- Model Notes say what each Model is good or bad at. When the User learns something worth keeping, or a Model's recent Ratings (\`list_models\` with \`model\`) say something its Model Notes do not, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
+- When the User chooses among a Comparison's results ("I'll take the second one"), call \`pick_result\` with the Comparison id, the chosen Job's id and, when that Job made several results, the result's number. Call it only when the User actually chooses; never pick for them. A Pick is not a Rating: if the User also says what they think of a result, call \`rate_job\` as well.
+- Model Notes say what each Model is good or bad at. When the User learns something worth keeping, or a Model's recent Ratings and Picks (\`list_models\` with \`model\`) say something its Model Notes do not, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
 
 /** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
 const recentRatingsShown = 5;
-/** How much of a Job's prompt a recent Rating shows. */
+/** Of how many Comparisons `list_models` with `model` shows a Model's Picks. */
+const recentPicksShown = 5;
+/** How much of a Job's prompt a recent Rating or Pick shows. */
 const promptStartLength = 80;
 
 /** The structured form of one Model in `list_models`. */
@@ -145,6 +153,22 @@ const listedModelSchema = z.object({
     .optional()
     .describe(
       `Only with \`model\`: the Model's ${recentRatingsShown} most recent Ratings, newest first. When they say something the Model Notes do not, propose new Model Notes to the User.`,
+    ),
+  recent_picks: z
+    .array(
+      z.object({
+        comparison_id: z.string(),
+        job_id: z.string().describe("This Model's Job in the Comparison."),
+        picked: z.boolean().describe("Whether the User picked this Model's Job."),
+        result: z.number().optional().describe("When picked: which result of the Job the User picked, from 1; absent when they picked the whole Job."),
+        picked_model: z.string().optional().describe("Alias of the Model whose Job the User picked."),
+        picked_at: z.string(),
+        prompt: z.string().describe("The start of this Model's Job's prompt."),
+      }),
+    )
+    .optional()
+    .describe(
+      `Only with \`model\`: the current Picks of up to ${recentPicksShown} Comparisons this Model took part in, most recently picked first, one entry per Job of this Model in them. A Pick is a relative preference among the Comparison's results, not a Rating.`,
     ),
   parameter_schema: z
     .unknown()
@@ -230,6 +254,10 @@ async function listedModel(
     output.recent_ratings = ratings.map(recentRatingOutput);
     text += ratings.length === 0 ? "\nRecent Ratings: none recorded yet." : "\nRecent Ratings, newest first:";
     for (const rated of ratings) text += `\n- ${describeRecentRating(rated)}`;
+    const picks = recentPicks(ratedJobs, model, recentPicksShown);
+    output.recent_picks = picks.map(recentPickOutput);
+    text += picks.length === 0 ? "\nRecent Picks: none recorded yet." : "\nRecent Picks in Comparisons, newest first:";
+    for (const picked of picks) text += `\n- ${describeRecentPick(picked)}`;
     if (described.parameterSchema !== undefined) {
       output.parameter_schema = described.parameterSchema;
       text += `\nParameter schema from the Provider: ${JSON.stringify(described.parameterSchema)}`;
@@ -263,6 +291,35 @@ function recentRatingOutput({ rating, job }: RatingWithJob) {
 
 function describeRecentRating({ rating, job }: RatingWithJob): string {
   return `${rating.verdict} on ${ratingSubject(rating)} (${JSON.stringify(promptStart(job.prompt))}): ${rating.reason}`;
+}
+
+/** A Pick as `pick_result` reports it. */
+function pickOutput(pick: PickRecord) {
+  return {
+    comparison_id: pick.comparison,
+    job_id: pick.jobId,
+    ...(pick.result === undefined ? {} : { result: pick.result }),
+    picked_at: pick.pickedAt,
+  };
+}
+
+function recentPickOutput({ pick, job, picked }: PickWithJob) {
+  const isPicked = pick.jobId === job.id;
+  return {
+    comparison_id: pick.comparison,
+    job_id: job.id,
+    picked: isPicked,
+    ...(isPicked && pick.result !== undefined ? { result: pick.result } : {}),
+    ...(picked === undefined ? {} : { picked_model: picked.model }),
+    picked_at: pick.pickedAt,
+    prompt: promptStart(job.prompt),
+  };
+}
+
+function describeRecentPick({ pick, job, picked }: PickWithJob): string {
+  const subject = `Job ${job.id} in Comparison ${pick.comparison} (${JSON.stringify(promptStart(job.prompt))})`;
+  if (pick.jobId === job.id) return `${subject}: picked${pick.result === undefined ? "" : `, result ${pick.result}`}`;
+  return `${subject}: not picked; the User picked ${picked === undefined ? `Job ${pick.jobId}` : `a Job on ${picked.model}`}`;
 }
 
 /** Enough of a prompt, on one line, for the Agent to tell which Job a Rating is about. */
@@ -782,7 +839,7 @@ export function createServer(deps: ServerDeps): McpServer {
         }),
       );
       const text = [
-        `Comparison ${comparisonId}: ${results.length} ${modality} Jobs. Show the User every result so they can choose.`,
+        `Comparison ${comparisonId}: ${results.length} ${modality} Jobs. Show the User every result so they can choose; when they do, call \`pick_result\`.`,
         ...results.map((result, index) => `Variant ${index + 1}: ${result.text}`),
       ].join("\n\n");
       return {
@@ -874,10 +931,47 @@ export function createServer(deps: ServerDeps): McpServer {
   );
 
   server.registerTool(
+    "pick_result",
+    {
+      description:
+        "Record the User's Pick within a Comparison: the Job, or the one result of it, the User chose among the Comparison's results. Call it only when the User actually chooses; never pick for them. A later Pick for the same Comparison replaces the earlier one. A Pick is a relative preference, not a Rating: it does not mark the result good or the others bad.",
+      inputSchema: {
+        comparison_id: z.string().min(1).describe("The `comparison_id` that `generate_comparison` returned."),
+        job_id: z.string().min(1).describe("The `job_id` of the chosen Job, one of the Comparison's Jobs."),
+        result: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Which result of that Job the User chose, from 1 in the order of its files. Omit when the Job made one result or the User chose the Job as a whole."),
+      },
+      outputSchema: {
+        comparison_id: z.string(),
+        job_id: z.string(),
+        result: z.number().optional().describe("The result picked; absent when the Job was picked as a whole."),
+        picked_at: z.string().describe("When the Pick was recorded, ISO 8601."),
+      },
+    },
+    async ({ comparison_id, job_id, result }) => {
+      try {
+        const pick = await pickResult(deps.dirs, { comparison: comparison_id, jobId: job_id, result }, now());
+        const subject = pick.result === undefined ? `Job ${pick.jobId}` : `result ${pick.result} of Job ${pick.jobId}`;
+        return {
+          content: [{ type: "text", text: `Recorded the User's Pick in Comparison ${pick.comparison}: ${subject}.` }],
+          structuredContent: pickOutput(pick),
+        };
+      } catch (error) {
+        if (error instanceof PickError) return toolError(error.message);
+        throw error;
+      }
+    },
+  );
+
+  server.registerTool(
     "list_models",
     {
       description:
-        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, capabilities, Model Notes, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the values of its Known-good and suspect options, its five most recent Ratings and the Provider's parameter schema.",
+        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, capabilities, Model Notes, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the values of its Known-good and suspect options, its five most recent Ratings, the Picks of up to five Comparisons it took part in (most recently picked first), and the Provider's parameter schema.",
       inputSchema: {
         model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
       },
