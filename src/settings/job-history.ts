@@ -109,17 +109,17 @@ export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
   const byComparison = new Map<string, ListedJob[]>();
   for (const job of listed) {
     if (job.comparison === undefined) continue;
-    const group = byComparison.get(job.comparison.id) ?? [];
-    byComparison.set(job.comparison.id, group);
-    group.unshift(job);
+    const ofComparison = byComparison.get(job.comparison.id) ?? [];
+    byComparison.set(job.comparison.id, ofComparison);
+    ofComparison.unshift(job);
   }
   return listed.flatMap((job) => {
     if (job.comparison === undefined) return [job];
-    const group = byComparison.get(job.comparison.id);
-    // The group goes where its newest Job is; its other Jobs were already listed there.
-    if (group === undefined) return [];
+    const ofComparison = byComparison.get(job.comparison.id);
+    // A Comparison's Jobs go where its newest Job is; the others were already listed there.
+    if (ofComparison === undefined) return [];
     byComparison.delete(job.comparison.id);
-    return group;
+    return ofComparison;
   });
 }
 

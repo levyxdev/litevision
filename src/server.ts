@@ -88,7 +88,7 @@ export const instructions = `litevision generates images and videos through Mode
 
 /** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
 const recentRatingsShown = 5;
-/** How many of a Model's Picks `list_models` with `model` shows. */
+/** Of how many Comparisons `list_models` with `model` shows a Model's Picks. */
 const recentPicksShown = 5;
 /** How much of a Job's prompt a recent Rating or Pick shows. */
 const promptStartLength = 80;
@@ -168,7 +168,7 @@ const listedModelSchema = z.object({
     )
     .optional()
     .describe(
-      `Only with \`model\`: the Picks of the ${recentPicksShown} Comparisons this Model most recently took part in, newest first. A Pick is a relative preference among the Comparison's results, not a Rating.`,
+      `Only with \`model\`: the current Picks of up to ${recentPicksShown} Comparisons this Model took part in, most recently picked first, one entry per Job of this Model in them. A Pick is a relative preference among the Comparison's results, not a Rating.`,
     ),
   parameter_schema: z
     .unknown()
@@ -971,7 +971,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "list_models",
     {
       description:
-        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, capabilities, Model Notes, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the values of its Known-good and suspect options, its five most recent Ratings, the Picks of the five Comparisons it most recently took part in, and the Provider's parameter schema.",
+        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, capabilities, Model Notes, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the values of its Known-good and suspect options, its five most recent Ratings, the Picks of up to five Comparisons it took part in (most recently picked first), and the Provider's parameter schema.",
       inputSchema: {
         model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
       },

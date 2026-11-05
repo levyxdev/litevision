@@ -185,17 +185,9 @@ export async function rateJob(
   }
   const job = await readJob(dirs, rating.jobId);
   if (job === undefined) throw new RatingError("unknown-job", `litevision has no Job "${rating.jobId}".`);
-  if (job.outcome === "running") {
-    throw new RatingError("not-completed", `Job ${job.id} is still running; it can be rated once it has completed.`);
-  }
-  if (job.outcome === "failed") {
-    throw new RatingError("not-completed", `Job ${job.id} failed and saved no images, so there is nothing to rate.`);
-  }
   const { result } = rating;
-  if (result !== undefined && !(Number.isInteger(result) && result >= 1 && result <= job.files.length)) {
-    const count = job.files.length === 1 ? "1 result" : `${job.files.length} results`;
-    throw new RatingError("invalid", `Job ${job.id} has ${count}, numbered from 1 in the order of its files.`);
-  }
+  const problem = whyNotChosen(job, result, "rate");
+  if (problem !== undefined) throw new RatingError(problem.kind, problem.message);
   const record: RatingRecord = {
     type: "rating",
     jobId: job.id,
@@ -220,22 +212,14 @@ export async function pickResult(
 ): Promise<PickRecord> {
   const ofComparison = (await readJobs(dirs)).filter((job) => job.comparison === pick.comparison);
   if (ofComparison.length === 0) throw new PickError("unknown-comparison", `litevision has no Comparison "${pick.comparison}".`);
-  const job = ofComparison.find((candidate) => candidate.id === pick.jobId);
+  const job = ofComparison.find((job) => job.id === pick.jobId);
   if (job === undefined) {
-    const ids = ofComparison.map((candidate) => candidate.id).join(", ");
+    const ids = ofComparison.map((job) => job.id).join(", ");
     throw new PickError("not-in-comparison", `Job "${pick.jobId}" is not part of Comparison ${pick.comparison}, whose Jobs are ${ids}.`);
   }
-  if (job.outcome === "running") {
-    throw new PickError("not-completed", `Job ${job.id} is still running; it can be picked once it has completed.`);
-  }
-  if (job.outcome === "failed") {
-    throw new PickError("not-completed", `Job ${job.id} failed and saved nothing, so there is nothing to pick.`);
-  }
   const { result } = pick;
-  if (result !== undefined && !(Number.isInteger(result) && result >= 1 && result <= job.files.length)) {
-    const count = job.files.length === 1 ? "1 result" : `${job.files.length} results`;
-    throw new PickError("invalid", `Job ${job.id} has ${count}, numbered from 1 in the order of its files.`);
-  }
+  const problem = whyNotChosen(job, result, "pick");
+  if (problem !== undefined) throw new PickError(problem.kind, problem.message);
   const record: PickRecord = {
     type: "pick",
     comparison: pick.comparison,
@@ -245,6 +229,28 @@ export async function pickResult(
   };
   await appendHistory(dirs, record);
   return record;
+}
+
+/**
+ * Why a Job, or with `result` one result of it, cannot be rated or picked: it has not completed, or has no such result.
+ * Undefined when it can be.
+ */
+function whyNotChosen(
+  job: JobRecord,
+  result: number | undefined,
+  act: "rate" | "pick",
+): { kind: "not-completed" | "invalid"; message: string } | undefined {
+  if (job.outcome === "running") {
+    return { kind: "not-completed", message: `Job ${job.id} is still running; it can be ${act === "rate" ? "rated" : "picked"} once it has completed.` };
+  }
+  if (job.outcome === "failed") {
+    return { kind: "not-completed", message: `Job ${job.id} failed and saved no images, so there is nothing to ${act}.` };
+  }
+  if (result !== undefined && !(Number.isInteger(result) && result >= 1 && result <= job.files.length)) {
+    const count = job.files.length === 1 ? "1 result" : `${job.files.length} results`;
+    return { kind: "invalid", message: `Job ${job.id} has ${count}, numbered from 1 in the order of its files.` };
+  }
+  return undefined;
 }
 
 /**
@@ -362,19 +368,24 @@ export interface PickWithJob {
 }
 
 /**
- * The current Picks of the Comparisons a Model most recently took part in, newest Pick first, at most `limit`: one for
- * each of the Model's Jobs in them, picked or not (ADR 0009). The Model is followed as in {@link recentRatings}.
+ * The current Picks of at most `limit` Comparisons a Model took part in, most recently picked first: one entry for each
+ * of the Model's Jobs in them, picked or not (ADR 0009). The Model is followed as in {@link recentRatings}.
  */
 export function recentPicks(jobs: RatedJob[], model: ModelKey, limit: number): PickWithJob[] {
   const byId = new Map(jobs.map(({ job }) => [job.id, job]));
-  return jobs
+  const entries = jobs
     .flatMap(({ job, pick }) => {
       if (pick === undefined || !ranOn(job, model)) return [];
       const picked = byId.get(pick.jobId);
       return [{ pick, job, ...(picked === undefined ? {} : { picked }) }];
     })
-    .sort((a, b) => Date.parse(b.pick.pickedAt) - Date.parse(a.pick.pickedAt))
-    .slice(0, limit);
+    .sort((a, b) => Date.parse(b.pick.pickedAt) - Date.parse(a.pick.pickedAt));
+  const comparisons = new Set<string>();
+  return entries.filter(({ pick }) => {
+    if (comparisons.size === limit && !comparisons.has(pick.comparison)) return false;
+    comparisons.add(pick.comparison);
+    return true;
+  });
 }
 
 /** One `provider_options` key whose latest value is in doubt, and why. */

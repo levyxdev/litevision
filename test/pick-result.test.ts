@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { startHarness, type Harness } from "./harness.ts";
 import { readHistoryLines, recorded, textOf, type ToolResult } from "./helpers.ts";
 
-/** Picks (ADR 0009): the User's choice among a Comparison's results, kept apart from Ratings. */
+/** Picks (ADR 0009): which of a Comparison's results the User prefers, kept apart from Ratings. */
 
 const openai = { id: "openai", baseUrl: "https://api.openai.com/v1" };
 const gptImage = { alias: "gpt-image", provider: "openai", modelId: "gpt-image-1", protocol: "openai-images" };
@@ -238,15 +238,19 @@ describe("list_models with `model`: recent Picks", () => {
     ]);
   });
 
-  test("shows at most five, and says when the Model has none yet", async () => {
+  test("shows at most five Comparisons, and says when the Model has none yet", async () => {
     const ids = ["1", "2", "3", "4", "5", "6"];
-    await start(ids.map((id) => jobRecord(`j${id}`, `2026-11-05T0${id}:00:00.000Z`, { comparison: `c${id}` })));
+    await start([
+      ...ids.map((id) => jobRecord(`j${id}`, `2026-11-05T0${id}:00:00.000Z`, { comparison: `c${id}` })),
+      // A second Job of this Model in c6: still one Comparison.
+      jobRecord("j6b", "2026-11-05T06:00:00.000Z", { comparison: "c6" }),
+    ]);
     expect(textOf(await describeModel("gpt-image"))).toContain("Recent Picks: none recorded yet.");
 
     for (const id of ids) await pick({ comparison_id: `c${id}`, job_id: `j${id}` }, `2026-11-05T10:0${id}:00.000Z`);
 
     const picks = (await recentPicksOf("gpt-image")) as Array<{ comparison_id: string }>;
-    expect(picks.map((entry) => entry.comparison_id)).toEqual(["c6", "c5", "c4", "c3", "c2"]);
+    expect(picks.map((entry) => entry.comparison_id)).toEqual(["c6", "c6", "c5", "c4", "c3", "c2"]);
   });
 
   test("list_models without `model` does not show Picks", async () => {

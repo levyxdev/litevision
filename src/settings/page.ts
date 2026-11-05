@@ -532,10 +532,10 @@ function ratingText(rating) {
   return (rating.verdict === "good" ? "Good" : "Bad") + ": " + rating.reason;
 }
 
-/** Whether this Job, or with \`result\` this one result of it, is its Comparison's Pick. */
+/** Whether this Job is its Comparison's Pick: as a whole, or with \`result\` that one result of it. */
 function isPicked(job, result) {
   const pick = job.comparison && job.comparison.pick;
-  return !!pick && pick.jobId === job.id && pick.result === result;
+  return !!pick && pick.jobId === job.id && (result === undefined || pick.result === result);
 }
 
 /**
@@ -553,8 +553,8 @@ function resultThumbnail(job, file, index) {
 }
 
 /**
- * For a completed Job of a Comparison: a Pick button for the Job or, when it has several results, the one chosen.
- * A Pick is the User's choice among the Comparison's results, not a Rating.
+ * For a completed Job of a Comparison: a Pick button for the Job or, when it has several results, the one selected.
+ * A Pick says which of the Comparison's results the User prefers; it is not a Rating.
  */
 function pickRow(job) {
   if (!job.comparison || job.outcome !== "completed") return [];
@@ -612,8 +612,7 @@ function jobCard(job) {
   return el("div", { className: "card" },
     el("div", {},
       el("div", { className: "card-head" }, el("h3", { textContent: job.model }),
-        ...(job.comparison && job.comparison.pick && job.comparison.pick.jobId === job.id
-          ? [el("span", { className: "chip accent", textContent: "Picked" })] : []),
+        ...(isPicked(job) ? [el("span", { className: "chip accent", textContent: "Picked" })] : []),
         el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome })),
       el("p", { className: "job-meta", textContent: job.modelId + " on " + job.provider + " · " + when + " · " + formatDuration(job.durationMs) })),
     el("p", { className: "prompt", textContent: job.prompt }),
@@ -625,7 +624,7 @@ function jobCard(job) {
 }
 
 /** A Comparison's Jobs together, under what the User picked among them. */
-function comparisonGroup(jobs) {
+function comparisonCard(jobs) {
   const pick = jobs[0].comparison.pick;
   const picked = pick && jobs.find((job) => job.id === pick.jobId);
   const status = !pick ? "Not picked yet."
@@ -636,7 +635,7 @@ function comparisonGroup(jobs) {
     ...jobs.map(jobCard));
 }
 
-/** Job cards, with each Comparison's Jobs (which the listing keeps together) in one group. */
+/** Job cards, each Comparison's Jobs (which the listing keeps together) in one Comparison card. */
 function jobEntries(jobs) {
   const entries = [];
   for (let i = 0; i < jobs.length; ) {
@@ -644,7 +643,7 @@ function jobEntries(jobs) {
     if (!comparison) { entries.push(jobCard(jobs[i])); i++; continue; }
     let end = i;
     while (end < jobs.length && jobs[end].comparison && jobs[end].comparison.id === comparison.id) end++;
-    entries.push(comparisonGroup(jobs.slice(i, end)));
+    entries.push(comparisonCard(jobs.slice(i, end)));
     i = end;
   }
   return entries;
