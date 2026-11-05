@@ -36,7 +36,7 @@ Add `-g` to install it for your user instead of the current project, and `-a` to
 
 ## Set up
 
-Ask your Agent to generate an image. While nothing is configured, it calls `open_settings`, which opens the settings page in your browser. You can also open it yourself, from your Agent's prompt menu (in Claude Code, the `/mcp__litevision__settings` command) or from a terminal:
+Ask your Agent to generate an image. While nothing is configured, it calls `open_settings`, which opens the settings page in your browser. You can also ask your Agent to open litevision's settings, or open the page yourself from a terminal:
 
 ```bash
 npx -y litevision settings

@@ -19,12 +19,6 @@ function textOf(result: Awaited<ReturnType<typeof openSettings>>): string {
   return (result.content as Array<{ text?: string }>).map((part) => part.text ?? "").join("\n");
 }
 
-const getSettingsPrompt = () => harness!.client.getPrompt({ name: "settings" });
-
-function promptText(result: Awaited<ReturnType<typeof getSettingsPrompt>>): string {
-  return result.messages.map((message) => (message.content as { text?: string }).text ?? "").join("\n");
-}
-
 describe("open_settings", () => {
   test("is one of the tools", async () => {
     harness = await startHarness();
@@ -93,51 +87,5 @@ describe("open_settings", () => {
     await harness.close();
     harness = undefined;
     await expect(fetch(url!)).rejects.toThrow();
-  });
-});
-
-describe("settings prompt", () => {
-  test("is offered to the User, and listing it opens nothing", async () => {
-    harness = await startHarness();
-    const { prompts } = await harness.client.listPrompts();
-    const settings = prompts.find((prompt) => prompt.name === "settings");
-    expect(settings?.description).toContain("settings page");
-    expect(harness.openedUrls).toHaveLength(0);
-  });
-
-  test("opens the settings page itself, and tells the Agent it is already open without exposing the token", async () => {
-    harness = await startHarness();
-    const result = await getSettingsPrompt();
-
-    expect(harness.openedUrls).toHaveLength(1);
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]!.role).toBe("user");
-    expect(promptText(result)).toContain("already opened");
-    expect(promptText(result)).toContain("Do not call `open_settings`");
-    const url = new URL(harness.openedUrls[0]!);
-    const serialised = JSON.stringify(result);
-    expect(serialised).not.toContain(url.searchParams.get("token")!);
-    expect(serialised).not.toContain(url.port);
-  });
-
-  test("shares the running settings page with `open_settings`", async () => {
-    harness = await startHarness();
-    await getSettingsPrompt();
-    await openSettings();
-    expect(harness.openedUrls).toHaveLength(2);
-    expect(harness.openedUrls[1]).toBe(harness.openedUrls[0]!);
-  });
-
-  test("when no browser can be opened, asks the Agent to have the User run `litevision settings`", async () => {
-    const attempted: string[] = [];
-    harness = await startHarness({
-      openBrowser: async (url) => {
-        attempted.push(url);
-        throw new Error("spawn xdg-open ENOENT");
-      },
-    });
-    const result = await getSettingsPrompt();
-    expect(promptText(result)).toContain("litevision settings");
-    expect(JSON.stringify(result)).not.toContain(new URL(attempted[0]!).searchParams.get("token")!);
   });
 });

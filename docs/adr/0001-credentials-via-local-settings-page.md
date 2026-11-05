@@ -1,6 +1,6 @@
 # Credentials are entered through a local settings page, never through the Agent
 
-litevision's caller is an Agent whose conversation, tool arguments and shell output can end up in transcripts and logs, so a Credential must never pass through it. The User enters Credentials in a settings web page that litevision serves on `127.0.0.1`. The `open_settings` MCP tool, the `settings` MCP prompt or `litevision settings` opens the page. Credentials are stored in a separate `credentials.json` (mode 600) that the Agent-facing tools never print.
+litevision's caller is an Agent whose conversation, tool arguments and shell output can end up in transcripts and logs, so a Credential must never pass through it. The User enters Credentials in a settings web page that litevision serves on `127.0.0.1`. The `open_settings` MCP tool or `litevision settings` opens the page. Credentials are stored in a separate `credentials.json` (mode 600) that the Agent-facing tools never print.
 
 Any website open in the User's browser can send requests to localhost. The page therefore accepts a request only if all three checks pass:
 
@@ -15,6 +15,7 @@ The page also shuts down after a period of idleness. Without these checks, a mal
 - **Environment variables only**: rejected because the User then has to edit shell profiles for every relay. It also gives no place to test a connection or choose Models.
 - **Interactive CLI wizard**: rejected because MCP is the only Agent-facing surface. Asking the User to switch to a terminal is clumsier than a page the Agent can open for them.
 - **The User pastes the key into chat**: rejected outright, because the key would land in the transcript.
+- **A `settings` MCP prompt the User picks from their Agent's command menu**: shipped in 0.2.0, then rejected because the Claude desktop app refused to send it. Asking the Agent, which calls `open_settings`, needs no prompt support from the client.
 
 ## Consequences
 
