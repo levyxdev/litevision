@@ -34,7 +34,7 @@ export interface ServerDeps {
   now?: () => Date;
   /** Relative `references` and `output_path` resolve against this; defaults to the process's working directory. */
   cwd?: string;
-  /** Opens the settings page for `open_settings`. Defaults to the User's default browser. */
+  /** Opens the settings page for `open_settings` and the `settings` prompt. Defaults to the User's default browser. */
   openBrowser?: OpenBrowser;
   /** How long the settings page `open_settings` starts may sit idle before it shuts down. */
   settingsIdleMs?: number;
@@ -728,6 +728,27 @@ export function createServer(deps: ServerDeps): McpServer {
       const text =
         "Opened the litevision settings page in the User's browser. Ask the User to finish setting up there and tell you when they are done. Never ask the User for a Credential in the conversation.";
       return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerPrompt(
+    "settings",
+    {
+      title: "litevision settings",
+      description: "Open litevision's settings page to add Providers, enter Credentials and set up Models.",
+    },
+    // The User picks a prompt themselves, so this opens the page directly instead of leaving it to the Agent.
+    async () => {
+      let text: string;
+      try {
+        await settings.open();
+        text =
+          "I have already opened litevision's settings page in my browser. Do not call `open_settings`. Wait until I say I am done there. Never ask me for a Credential in the conversation.";
+      } catch {
+        text =
+          "I tried to open litevision's settings page, but it could not open my browser. Tell me to run `litevision settings` in a terminal, which opens the page and prints its address.";
+      }
+      return { messages: [{ role: "user", content: { type: "text", text } }] };
     },
   );
 

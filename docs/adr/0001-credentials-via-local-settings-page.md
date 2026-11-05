@@ -1,6 +1,6 @@
 # Credentials are entered through a local settings page, never through the Agent
 
-litevision's caller is an Agent whose conversation, tool arguments and shell output can end up in transcripts and logs, so a Credential must never pass through it. The User enters Credentials in a settings web page that litevision serves on `127.0.0.1`. Either the `open_settings` MCP tool or `litevision settings` opens the page. Credentials are stored in a separate `credentials.json` (mode 600) that the Agent-facing tools never print.
+litevision's caller is an Agent whose conversation, tool arguments and shell output can end up in transcripts and logs, so a Credential must never pass through it. The User enters Credentials in a settings web page that litevision serves on `127.0.0.1`. The `open_settings` MCP tool, the `settings` MCP prompt or `litevision settings` opens the page. Credentials are stored in a separate `credentials.json` (mode 600) that the Agent-facing tools never print.
 
 Any website open in the User's browser can send requests to localhost. The page therefore accepts a request only if all three checks pass:
 

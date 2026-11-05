@@ -26,7 +26,7 @@ Any other MCP client: run `npx -y litevision` as a stdio server, for example:
 
 ## Set up
 
-Ask your Agent to generate an image. While nothing is configured, it calls `open_settings`, which opens the settings page in your browser. You can also open it yourself:
+Ask your Agent to generate an image. While nothing is configured, it calls `open_settings`, which opens the settings page in your browser. You can also open it yourself, from your Agent's prompt menu (in Claude Code, the `/mcp__litevision__settings` command) or from a terminal:
 
 ```bash
 npx -y litevision settings
