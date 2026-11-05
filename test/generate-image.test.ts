@@ -52,6 +52,18 @@ describe("MCP server", () => {
     expect(tools.map((tool) => tool.name)).toContain("generate_image");
     expect(harness.client.getInstructions()).toContain("open_settings");
   });
+
+  test("the server instructions point at the litevision Skill and how to install it (ADR 0007)", async () => {
+    harness = await startHarness();
+    const instructions = harness.client.getInstructions()!;
+    expect(instructions).toContain("use the litevision Skill");
+    expect(instructions).toContain("npx skills add levyxdev/litevision");
+  });
+
+  test("the litevision Skill ships in this repository under its own name", async () => {
+    const skill = await readFile(join(import.meta.dir, "..", "skills", "litevision", "SKILL.md"), "utf8");
+    expect(skill).toMatch(/^---\nname: litevision\n/);
+  });
 });
 
 function textOf(result: Awaited<ReturnType<Harness["client"]["callTool"]>>): string {

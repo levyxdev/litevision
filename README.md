@@ -24,6 +24,16 @@ Any other MCP client: run `npx -y litevision` as a stdio server, for example:
 }
 ```
 
+### The litevision Skill
+
+The server tells your Agent the rules it must keep. How to get good results (writing prompts, checking each result against your request, when to suggest a Comparison or new Model Notes) is in the litevision Skill, [`skills/litevision/SKILL.md`](skills/litevision/SKILL.md), drafted from the Model makers' own prompting guides. Install it with [`skills`](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add levyxdev/litevision
+```
+
+Add `-g` to install it for your user instead of the current project, and `-a` to choose which Agents get it. The Skill changes only with a litevision release: run `npx skills update` after upgrading litevision. Without it, your Agent still keeps the rules, but writes prompts its own way.
+
 ## Set up
 
 Ask your Agent to generate an image. While nothing is configured, it calls `open_settings`, which opens the settings page in your browser. You can also open it yourself, from your Agent's prompt menu (in Claude Code, the `/mcp__litevision__settings` command) or from a terminal:

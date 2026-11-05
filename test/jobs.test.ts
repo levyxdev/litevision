@@ -74,10 +74,10 @@ describe("the wait limit", () => {
 });
 
 describe("get_job", () => {
-  test("is listed, and the server instructions explain when to call it", async () => {
+  test("is listed, and its description explains when to call it", async () => {
     harness = await startHarness();
     const { tools } = await harness.client.listTools();
-    expect(tools.map((tool) => tool.name)).toContain("get_job");
-    expect(harness.client.getInstructions()).toContain("get_job");
+    const getJob = tools.find((tool) => tool.name === "get_job");
+    expect(getJob?.description).toContain("still running");
   });
 });

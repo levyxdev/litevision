@@ -288,11 +288,4 @@ describe("list_models with `model`: recent Ratings (ADR 0008)", () => {
     expect(textOf(result)).not.toContain("the fur looks real");
     expect(textOf(result)).not.toContain("Recent Ratings");
   });
-
-  test("the server instructions point at the recent Ratings and keep Model Notes to what the User agreed", async () => {
-    harness = await startHarness();
-    const instructions = harness.client.getInstructions()!;
-    expect(instructions).toContain("recent Ratings");
-    expect(instructions).toContain("show the User the old and new Model Notes and get their agreement; never change them without it");
-  });
 });
