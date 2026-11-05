@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "Invalid value: 'ultra'. Supported values are: 'low', 'medium', 'high', and 'auto'.",
+    "type": "invalid_request_error",
+    "param": "quality",
+    "code": "invalid_value"
+  }
+}

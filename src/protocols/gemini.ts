@@ -1,18 +1,20 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
-import { classifyProviderError, providerError, providerLabel, sendToProvider } from "./errors.ts";
+import { classifyProviderError, providerError, providerLabel } from "./errors.ts";
 import { inParallel } from "./parallel.ts";
 import type {
   GeneratedImage,
   ImageCapabilities,
   ImageRequest,
   ImageSize,
+  JobContext,
   ModelIdsResult,
   ModelTarget,
   ProtocolAdapter,
   ProviderErrorKind,
   ProviderTarget,
 } from "./protocol.ts";
+import { sendToProvider } from "./send.ts";
 
 const contentSchema = z.object({
   type: z.string(),
@@ -137,20 +139,21 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Interaction error codes may be bare (`image_safety`) or a URI ending in one. */
-function kindOf(status: number, codes: Array<string | undefined>, message: string | undefined): ProviderErrorKind {
+/** Interaction error codes may be bare (`image_safety`) or a URI ending in one. `options` are the `provider_options` keys sent. */
+function kindOf(status: number, codes: Array<string | undefined>, message: string | undefined, options: readonly string[] = []): ProviderErrorKind {
   const bare = codes.filter((code) => code !== undefined).map((code) => code.split(/[/#]/).pop()!.toLowerCase());
   if (bare.some((code) => blockedCodes.has(code))) return "refusal";
-  return classifyProviderError({ status, codes, message });
+  return classifyProviderError({ status, codes, message, options });
 }
 
 /** One Interaction, one image. */
-async function sendInteraction(request: ImageRequest, target: ModelTarget, http: HttpTransport): Promise<GeneratedImage[]> {
-  const response = await sendToProvider(http, target.providerId, `${trimmed(target.baseUrl)}/interactions`, {
+async function sendInteraction(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<GeneratedImage[]> {
+  const init = {
     method: "POST",
     headers: { "x-goog-api-key": target.credential, "content-type": "application/json" },
     body: JSON.stringify(interactionBody(request, target)),
-  });
+  };
+  const response = await sendToProvider(http, target.providerId, `${trimmed(target.baseUrl)}/interactions`, init, { context });
 
   const body: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
@@ -159,7 +162,7 @@ async function sendInteraction(request: ImageRequest, target: ModelTarget, http:
     const message = error?.message ?? (response.statusText || undefined);
     const codes = [typeof error?.code === "string" ? error.code : undefined, error?.status, ...(error?.details ?? []).map((detail) => detail.reason)];
     const detail = message === undefined ? `HTTP ${response.status}` : `HTTP ${response.status}: ${message}`;
-    throw providerError(kindOf(response.status, codes, message), target.providerId, detail);
+    throw providerError(kindOf(response.status, codes, message, Object.keys(request.providerOptions)), target.providerId, detail);
   }
 
   const parsed = interactionSchema.safeParse(body);
@@ -200,8 +203,8 @@ export const gemini: ProtocolAdapter = {
 
   reservedOptions: ["model", "input"],
 
-  async submit(request, target, http) {
-    return { wait: () => inParallel(request.n, target.providerId, () => sendInteraction(request, target, http)) };
+  async submit(request, target, http, context) {
+    return { wait: () => inParallel(request.n, target.providerId, () => sendInteraction(request, target, http, context)) };
   },
 
   async testConnection(target, http) {

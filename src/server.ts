@@ -42,6 +42,8 @@ export interface ServerDeps {
   waitLimitMs?: number;
   /** How often asynchronous Protocols poll their Provider; defaults to three seconds. */
   pollIntervalMs?: number;
+  /** The delay before the first retry of a request the Provider never processed; defaults to two seconds. */
+  retryDelayMs?: number;
 }
 
 export const instructions = `litevision generates images and videos through Models the User has configured with their own Providers. Each Model makes one Modality: image Models work with \`generate_image\`, video Models with \`generate_video\`.
@@ -56,6 +58,7 @@ export const instructions = `litevision generates images and videos through Mode
 - If a tool says a Model cannot do something (reference images, that many images, a first frame), the error lists what the Model supports: choose another Model or change the request.
 - Pass \`output_path\` when the files belong in the User's project (e.g. its assets folder); otherwise omit it.
 - For Provider-specific \`provider_options\`: first reuse the Model's Known-good Options, which \`list_models\` shows. Only when none cover what you need, read the Model's docs link (\`list_models\` with \`model\` also gives the Provider's parameter schema when it publishes one). Read the docs again when a result does not match the request, when the Provider rejects an option (its error carries the docs link), or when options are marked suspect because a result that used them did not match or the User rated it bad. litevision passes \`provider_options\` through unchecked.
+- If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs link and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
 - If fewer images came back than you asked for, the result says why. Tell the User.
 - When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
 - Model Notes say what each Model is good or bad at. When the User learns something worth keeping, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
@@ -312,7 +315,7 @@ function toolError(text: string) {
 async function failure(error: unknown, hint: (() => Promise<string>) | undefined) {
   if (error instanceof ConfigError) return toolError(error.message);
   if (error instanceof JobFailedError) {
-    const helpful = hint !== undefined && (error.kind === "unsupported" || error.kind === "other");
+    const helpful = hint !== undefined && (error.kind === "unsupported" || error.kind === "rejected_option" || error.kind === "other");
     return toolError(`Job ${error.jobId} failed: ${error.message}${helpful ? await hint() : ""}`);
   }
   throw error;
@@ -323,7 +326,7 @@ export function createServer(deps: ServerDeps): McpServer {
   const now = deps.now ?? (() => new Date());
   const cwd = deps.cwd ?? process.cwd();
   const infoDeps: ModelInfoDeps = { dirs: deps.dirs, http: deps.http, now };
-  const jobs = new JobRunner({ dirs: deps.dirs, http: deps.http, now, waitLimitMs: deps.waitLimitMs, pollIntervalMs: deps.pollIntervalMs });
+  const jobs = new JobRunner({ dirs: deps.dirs, http: deps.http, now, waitLimitMs: deps.waitLimitMs, pollIntervalMs: deps.pollIntervalMs, retryDelayMs: deps.retryDelayMs });
 
   server.registerTool(
     "generate_image",

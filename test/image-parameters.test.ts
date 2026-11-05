@@ -303,6 +303,25 @@ describe("typed Provider errors", () => {
     expect((await readHistory(harness))[0]).toMatchObject({ error: { kind: "refusal" } });
   });
 
+  test("an option the Provider rejects by name is a rejected option, with what the Provider said and the Model's docs link", async () => {
+    harness = await startHarness(openaiSetup({ [generationsUrl]: recorded("openai/invalid-value.json", 400) }));
+    const result = await generate({ provider_options: { quality: "ultra" } });
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('Provider "openai" rejected an option');
+    expect(text).toContain("Invalid value: 'ultra'");
+    expect(text).toContain("https://platform.openai.com/docs/api-reference/images/create");
+    expect((await readHistory(harness))[0]).toMatchObject({ outcome: "failed", error: { kind: "rejected_option" } });
+  });
+
+  test("the server instructions say to fix a rejected option at most twice, then tell the User", async () => {
+    harness = await startHarness(openaiSetup());
+    const instructions = harness.client.getInstructions() ?? "";
+    expect(instructions).toContain("rejected an option");
+    expect(instructions).toMatch(/at most twice.*tell the User/s);
+  });
+
   test("an auth error tells the Agent to call open_settings rather than ask for the key", async () => {
     harness = await startHarness(openaiSetup({ [generationsUrl]: recorded("openai/invalid-api-key.json", 401) }));
     const text = textOf(await generate({}));

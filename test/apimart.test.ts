@@ -221,6 +221,18 @@ describe("apimart Protocol", () => {
     expect(polls(harness)).toHaveLength(0);
   });
 
+  test("a submission rejected for naming a provider_options key is a rejected option, with what APIMart said and the docs link", async () => {
+    harness = await startHarness(apimartSetup({ [submitUrl]: recorded("apimart/invalid-parameter.json", 400) }));
+    const result = await generate(harness, { provider_options: { resolution: "8k" } });
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('Provider "apimart" rejected an option');
+    expect(text).toContain("resolution must be one of 1k, 2k, 4k");
+    expect(text).toContain("https://docs.apimart.ai/en/api-reference/images/gpt-image-2/generation");
+    expect((await readHistory(harness))[0]).toMatchObject({ outcome: "failed", error: { kind: "rejected_option" } });
+  });
+
   test("keeps polling through a brief outage of the task-status endpoint", async () => {
     let calls = 0;
     harness = await startHarness(
@@ -234,6 +246,33 @@ describe("apimart Protocol", () => {
     const result = await generate(harness);
     expect(result.isError).toBeFalsy();
     expect(polls(harness)).toHaveLength(2);
+  });
+
+  test("a status check that could not reach APIMart is retried without submitting the task again", async () => {
+    let calls = 0;
+    const unreachableOnce: Route = (request) => {
+      if (calls++ === 0) throw new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+      return recorded("apimart/task-completed.json")(request);
+    };
+    harness = await startHarness(apimartSetup({ [taskUrl()]: unreachableOnce }));
+    const result = await generate(harness);
+
+    expect(result.isError, textOf(result)).toBeFalsy();
+    expect(submits(harness)).toHaveLength(1);
+    expect(polls(harness)).toHaveLength(2);
+    expect((await readHistoryLines(harness)).map((line) => line.outcome)).toEqual(["running", "running", "completed"]);
+  });
+
+  test("status checks that keep failing are retried twice, then the Job fails", async () => {
+    const down: Route = () => Response.json({ error: { code: 503, message: "Service unavailable", type: "unavailable" } }, { status: 503 });
+    harness = await startHarness(apimartSetup({ [taskUrl()]: down }));
+    const result = await generate(harness);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Service unavailable");
+    expect(submits(harness)).toHaveLength(1);
+    expect(polls(harness)).toHaveLength(3);
+    expect((await readHistoryLines(harness)).map((line) => line.outcome)).toEqual(["running", "running", "failed"]);
   });
 });
 

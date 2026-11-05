@@ -26,6 +26,9 @@ export const defaultWaitLimitMs = 120_000;
 /** How often asynchronous Protocols ask their Provider whether a Job is done. */
 export const defaultPollIntervalMs = 3_000;
 
+/** The delay before the first retry of a request the Provider never processed; each further retry waits twice as long. */
+export const defaultRetryDelayMs = 2_000;
+
 export interface JobRunnerDeps {
   dirs: Dirs;
   http: HttpTransport;
@@ -34,6 +37,8 @@ export interface JobRunnerDeps {
   waitLimitMs?: number;
   /** Defaults to {@link defaultPollIntervalMs}. */
   pollIntervalMs?: number;
+  /** Defaults to {@link defaultRetryDelayMs}. */
+  retryDelayMs?: number;
 }
 
 interface SpecBase extends ResolvedModel {
@@ -102,10 +107,12 @@ export class JobRunner {
   private closed = false;
   private readonly waitLimitMs: number;
   private readonly pollIntervalMs: number;
+  private readonly retryDelayMs: number;
 
   constructor(private readonly deps: JobRunnerDeps) {
     this.waitLimitMs = deps.waitLimitMs ?? defaultWaitLimitMs;
     this.pollIntervalMs = deps.pollIntervalMs ?? defaultPollIntervalMs;
+    this.retryDelayMs = deps.retryDelayMs ?? defaultRetryDelayMs;
   }
 
   /** Starts an image Job and waits for it up to the wait limit. */
@@ -213,20 +220,25 @@ export class JobRunner {
   }
 
   private readonly context: JobContext = {
-    pause: () =>
-      new Promise((resolve, reject) => {
-        if (this.closed) return reject(new JobAbandoned());
-        const abandon = () => {
-          clearTimeout(timer);
-          reject(new JobAbandoned());
-        };
-        const timer = setTimeout(() => {
-          this.abandons.delete(abandon);
-          resolve();
-        }, this.pollIntervalMs);
-        this.abandons.add(abandon);
-      }),
+    pause: () => this.sleep(this.pollIntervalMs),
+    backoff: (retry) => this.sleep(this.retryDelayMs * 2 ** (retry - 1)),
   };
+
+  /** Resolves after `ms`, or rejects with {@link JobAbandoned} when litevision shuts down first. */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.closed) return reject(new JobAbandoned());
+      const abandon = () => {
+        clearTimeout(timer);
+        reject(new JobAbandoned());
+      };
+      const timer = setTimeout(() => {
+        this.abandons.delete(abandon);
+        resolve();
+      }, ms);
+      this.abandons.add(abandon);
+    });
+  }
 
   private register(id: string, job: Promise<CompletedJob>): Promise<CompletedJob> {
     this.jobs.set(id, job);

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
-import { httpProviderError, providerError, providerLabel, sendToProvider } from "./errors.ts";
+import { httpProviderError, providerError, providerLabel } from "./errors.ts";
 import { inParallel } from "./parallel.ts";
 import {
   aspectRatios,
@@ -9,6 +9,7 @@ import {
   type ImageCapabilities,
   type ImageRequest,
   type ImageSize,
+  type JobContext,
   type JobImages,
   type ModelDescription,
   type ModelIdsResult,
@@ -17,6 +18,7 @@ import {
   type ProviderModelInfo,
   type ProviderTarget,
 } from "./protocol.ts";
+import { sendToProvider } from "./send.ts";
 
 /**
  * Venice's native image API. Text-to-image models (Venice type `image`) answer `/image/generate` with base64 JSON;
@@ -78,6 +80,8 @@ const errorSchema = z.object({
   error: z.union([z.string(), z.object({ message: z.string().optional(), code: z.string().nullish() })]),
   code: z.string().optional(),
   suggested_prompt: z.string().optional(),
+  /** Why a request was invalid, by field: `{ _errors: [], cfg_scale: { _errors: ["Number must be …"] } }`. */
+  details: z.record(z.string(), z.unknown()).optional(),
 });
 
 const generateSchema = z.object({
@@ -222,25 +226,44 @@ function errorMessage(body: unknown): string | undefined {
   return typeof parsed.data.error === "string" ? parsed.data.error : parsed.data.error.message;
 }
 
-/** The typed ProviderError for a Venice error response. */
-async function veniceError(response: Response, providerId: string): Promise<Error> {
+const fieldErrorsSchema = z.object({ _errors: z.array(z.string()) });
+
+/** What `details` says about each field, e.g. `cfg_scale: Number must be less than or equal to 20`. */
+function fieldProblems(details: Record<string, unknown> | undefined): string[] {
+  return Object.entries(details ?? {}).flatMap(([field, value]) => {
+    const parsed = fieldErrorsSchema.safeParse(value);
+    return field === "_errors" || !parsed.success || parsed.data._errors.length === 0 ? [] : [`${field}: ${parsed.data._errors.join(", ")}`];
+  });
+}
+
+/** The typed ProviderError for a Venice error response; `options` are the `provider_options` keys the request sent. */
+async function veniceError(response: Response, providerId: string, options: readonly string[]): Promise<Error> {
   const body: unknown = await response.json().catch(() => undefined);
   const parsed = errorSchema.safeParse(body);
   const error = parsed.success ? parsed.data : undefined;
   const nested = typeof error?.error === "object" ? error.error : undefined;
-  const message = errorMessage(body) ?? (response.statusText || undefined);
+  const problems = fieldProblems(error?.details);
+  const said = errorMessage(body) ?? (response.statusText || undefined);
+  const message = said === undefined ? undefined : problems.length === 0 ? said : `${said}: ${problems.join("; ")}`;
   const suggestion = error?.suggested_prompt === undefined ? "" : ` Venice suggests this prompt instead: ${error.suggested_prompt}`;
   return httpProviderError(providerId, {
     status: response.status,
     codes: [error?.code, nested?.code],
     message: message === undefined ? undefined : `${message}${suggestion}`,
+    options,
   });
 }
 
 /** Defaults litevision sets on every request; `provider_options` may override each. Prompts go out verbatim. */
 const sharedDefaults = { safe_mode: false, enhance_prompt: false };
 
-async function generate(request: ImageRequest, target: ModelTarget, model: Pick<VeniceModel, "sizing">, http: HttpTransport): Promise<JobImages> {
+async function generate(
+  request: ImageRequest,
+  target: ModelTarget,
+  model: Pick<VeniceModel, "sizing">,
+  http: HttpTransport,
+  context: JobContext,
+): Promise<JobImages> {
   const { size } = request;
   const sizing = model.sizing === "pixels" ? { width: size.width, height: size.height } : { aspect_ratio: size.aspectRatio };
   const body = {
@@ -258,8 +281,8 @@ async function generate(request: ImageRequest, target: ModelTarget, model: Pick<
     method: "POST",
     headers: { ...authorization(target.credential), "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
-  if (!response.ok) throw await veniceError(response, target.providerId);
+  }, { context });
+  if (!response.ok) throw await veniceError(response, target.providerId, Object.keys(request.providerOptions));
 
   const parsed = generateSchema.safeParse(await response.json().catch(() => undefined));
   if (!parsed.success) throw providerError("other", target.providerId, "its response could not be read as Venice images.");
@@ -279,7 +302,7 @@ async function generate(request: ImageRequest, target: ModelTarget, model: Pick<
 }
 
 /** One reference goes to `/image/edit`, several to `/image/multi-edit` (which names the model `modelId`). One image per request. */
-async function edit(request: ImageRequest, target: ModelTarget, http: HttpTransport): Promise<GeneratedImage[]> {
+async function edit(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<GeneratedImage[]> {
   const encoded = request.references.map((reference) => Buffer.from(reference.bytes).toString("base64"));
   const [path, inputs] =
     encoded.length === 1
@@ -297,8 +320,8 @@ async function edit(request: ImageRequest, target: ModelTarget, http: HttpTransp
     method: "POST",
     headers: { ...authorization(target.credential), "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
-  if (!response.ok) throw await veniceError(response, target.providerId);
+  }, { context });
+  if (!response.ok) throw await veniceError(response, target.providerId, Object.keys(request.providerOptions));
   if (response.headers.get("content-type")?.includes("json")) {
     throw providerError("other", target.providerId, "it answered an edit with JSON rather than an image.");
   }
@@ -321,11 +344,11 @@ export const venice: ProtocolAdapter = {
 
   reservedOptions: ["model", "modelId", "prompt", "variants", "return_binary", "width", "height", "aspect_ratio", "image", "images"],
 
-  async submit(request, target, http) {
+  async submit(request, target, http, context) {
     const model = describedModel(request.model, target.modelId);
 
     if (request.references.length > 0) {
-      return { wait: () => inParallel(request.n, target.providerId, () => edit(request, target, http)) };
+      return { wait: () => inParallel(request.n, target.providerId, () => edit(request, target, http, context)) };
     }
     if (model.kind === "edit") {
       throw providerError(
@@ -334,7 +357,7 @@ export const venice: ProtocolAdapter = {
         `"${target.modelId}" is an edit model and needs at least one reference image. Pass \`references\`, or choose a text-to-image Model.`,
       );
     }
-    const images = await generate(request, target, model, http);
+    const images = await generate(request, target, model, http, context);
     return { wait: async () => images };
   },
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
-import { classifyProviderError, httpProviderError, providerError, providerLabel, sendToProvider } from "./errors.ts";
+import { classifyProviderError, httpProviderError, providerError, providerLabel } from "./errors.ts";
 import {
   aspectRatios,
   ProviderError,
@@ -16,6 +16,7 @@ import {
   type ProviderTarget,
   type SubmittedJob,
 } from "./protocol.ts";
+import { sendToProvider } from "./send.ts";
 
 /**
  * APIMart (https://docs.apimart.ai/en): asynchronous. A Job is one or more tasks submitted to `/images/generations`,
@@ -153,72 +154,66 @@ const known = (modelId: string) => knownModels.find((model) => model.matches.tes
 const headers = (credential: string) => ({ authorization: `Bearer ${credential}` });
 const baseUrlOf = (target: ProviderTarget) => target.baseUrl.replace(/\/+$/, "");
 
-async function errorOf(response: Response, providerId: string): Promise<ProviderError> {
+/** `options` are the `provider_options` keys the request sent, so a rejection naming one is reported as a rejected option. */
+async function errorOf(response: Response, providerId: string, options: readonly string[] = []): Promise<ProviderError> {
   const parsed = errorSchema.safeParse(await response.json().catch(() => undefined));
   const error = parsed.success ? parsed.data.error : undefined;
   return httpProviderError(providerId, {
     status: response.status,
     codes: [error?.type],
     message: error?.message ?? (response.statusText || undefined),
+    options,
   });
 }
 
-async function submitTask(body: Record<string, unknown>, target: ModelTarget, http: HttpTransport): Promise<string> {
-  const response = await sendToProvider(http, target.providerId, `${baseUrlOf(target)}/images/generations`, {
+async function submitTask(
+  body: Record<string, unknown>,
+  options: readonly string[],
+  target: ModelTarget,
+  http: HttpTransport,
+  context: JobContext,
+): Promise<string> {
+  const init = {
     method: "POST",
     headers: { ...headers(target.credential), "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
-  if (!response.ok) throw await errorOf(response, target.providerId);
+  };
+  const response = await sendToProvider(http, target.providerId, `${baseUrlOf(target)}/images/generations`, init, { context });
+  if (!response.ok) throw await errorOf(response, target.providerId, options);
   const parsed = submittedSchema.safeParse(await response.json().catch(() => undefined));
   if (!parsed.success) throw providerError("other", target.providerId, "its answer to the submission had no task id.");
   return parsed.data.data[0]!.task_id;
 }
 
-/** How many failed status checks in a row are put down to a passing outage before the task is given up. */
-const toleratedPollFailures = 5;
-
 /** Polls one task until it ends, and returns its images or its typed error. */
 async function pollTask(taskId: string, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<JobImages> {
   // `language=en` asks for the error message of a failed task in English.
   const url = `${baseUrlOf(target)}/tasks/${encodeURIComponent(taskId)}?language=en`;
-  let failures = 0;
   for (;;) {
-    let response: Response | undefined;
-    try {
-      response = await sendToProvider(http, target.providerId, url, { headers: headers(target.credential) });
-    } catch (error) {
-      if (++failures > toleratedPollFailures) throw error;
+    // A failed check is retried without submitting the task again.
+    const response = await sendToProvider(http, target.providerId, url, { headers: headers(target.credential) }, { context, poll: true });
+    if (!response.ok) throw await errorOf(response, target.providerId);
+    const parsed = taskSchema.safeParse(await response.json().catch(() => undefined));
+    if (!parsed.success) throw providerError("other", target.providerId, `its status for task ${taskId} could not be read.`);
+    const task = parsed.data.data;
+    if (task.status === "completed") {
+      const images = (task.result?.images ?? [])
+        .flatMap((image) => (Array.isArray(image.url) ? image.url : [image.url]))
+        .map((url): GeneratedImage => ({ url }));
+      if (images.length === 0) throw providerError("other", target.providerId, `task ${taskId} completed without images.`);
+      return { images, ...(task.cost === undefined ? {} : { cost: task.cost }) };
     }
-    if (response !== undefined && !response.ok) {
-      const transient = response.status >= 500 || response.status === 429;
-      if (!transient || ++failures > toleratedPollFailures) throw await errorOf(response, target.providerId);
-      response = undefined;
+    if (task.status === "failed") {
+      const error = task.error ?? undefined;
+      const kind = classifyProviderError({
+        status: typeof error?.code === "number" ? error.code : 0,
+        codes: [error?.type],
+        message: error?.message,
+      });
+      throw providerError(kind, target.providerId, error?.message ?? `task ${taskId} failed.`);
     }
-    if (response !== undefined) {
-      failures = 0;
-      const parsed = taskSchema.safeParse(await response.json().catch(() => undefined));
-      if (!parsed.success) throw providerError("other", target.providerId, `its status for task ${taskId} could not be read.`);
-      const task = parsed.data.data;
-      if (task.status === "completed") {
-        const images = (task.result?.images ?? [])
-          .flatMap((image) => (Array.isArray(image.url) ? image.url : [image.url]))
-          .map((url): GeneratedImage => ({ url }));
-        if (images.length === 0) throw providerError("other", target.providerId, `task ${taskId} completed without images.`);
-        return { images, ...(task.cost === undefined ? {} : { cost: task.cost }) };
-      }
-      if (task.status === "failed") {
-        const error = task.error ?? undefined;
-        const kind = classifyProviderError({
-          status: typeof error?.code === "number" ? error.code : 0,
-          codes: [error?.type],
-          message: error?.message,
-        });
-        throw providerError(kind, target.providerId, error?.message ?? `task ${taskId} failed.`);
-      }
-      if (task.status === "cancelled") throw providerError("other", target.providerId, `task ${taskId} was cancelled.`);
-      // "pending" or "processing".
-    }
+    if (task.status === "cancelled") throw providerError("other", target.providerId, `task ${taskId} was cancelled.`);
+    // "pending" or "processing".
     await context.pause();
   }
 }
@@ -349,7 +344,7 @@ export const apimart: ProtocolAdapter = {
         : { image_urls: request.references.map((reference) => `data:${reference.mimeType};base64,${Buffer.from(reference.bytes).toString("base64")}`) }),
       ...request.providerOptions,
     };
-    const settled = await Promise.allSettled(Array.from({ length: batches ? 1 : request.n }, () => submitTask(body, target, http)));
+    const settled = await Promise.allSettled(Array.from({ length: batches ? 1 : request.n }, () => submitTask(body, Object.keys(request.providerOptions), target, http, context)));
     const taskIds = settled.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
     const failures = settled.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason as Error] : []));
     if (taskIds.length === 0) throw failures[0]!;
