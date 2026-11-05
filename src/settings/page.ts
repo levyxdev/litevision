@@ -91,7 +91,10 @@ export function renderPage(nonce: string): string {
   .thumb.video { width: 192px; height: 108px; }
   .thumb.placeholder { display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px;
     font-size: 11px; color: var(--muted); border-style: dashed; }
+  .result-thumb { margin: 0; display: grid; gap: 4px; width: min-content; }
+  .result-thumb figcaption { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
   .actions.rate { display: grid; gap: 10px; }
+  .inline > select.rate-target { flex: 0 0 auto; }
   .rating { font-size: 13px; }
   .rating.good { color: var(--ok); } .rating.bad { color: var(--danger); }
 
@@ -153,7 +156,7 @@ export function renderPage(nonce: string): string {
   <section id="history">
     <div class="section-head">
       <h2>Job history</h2>
-      <p>Newest first. Rate a Job to keep your verdict on it; rating it again replaces the earlier Rating.</p>
+      <p>Newest first. Rate a Job, or one of its results, to keep your verdict on it; rating it again replaces the earlier Rating.</p>
     </div>
     <div id="job-list"><p class="muted">Loading…</p></div>
   </section>
@@ -520,22 +523,45 @@ function formatDuration(ms) {
   return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s";
 }
 
-/** The current Rating, and a one-line reason with Good and Bad buttons to rate the Job. Only completed Jobs can be rated. */
+function ratingText(rating) {
+  return (rating.verdict === "good" ? "Good" : "Bad") + ": " + rating.reason;
+}
+
+/** A thumbnail, captioned with its number and its own Rating when the Job has several results or this one is rated. */
+function resultThumbnail(job, file, index) {
+  const media = thumbnail(job, file);
+  if (job.files.length === 1 && !file.rating) return media;
+  const caption = el("figcaption", { textContent: "Result " + (index + 1) + (file.rating ? " · " + ratingText(file.rating) : "") });
+  if (file.rating) caption.className = "rating " + file.rating.verdict;
+  return el("figure", { className: "result-thumb" }, media, caption);
+}
+
+/**
+ * The whole Job's Rating, and a one-line reason with Good and Bad buttons to rate the Job or, when it has several
+ * results, one of them. Only completed Jobs can be rated.
+ */
 function ratingRow(job) {
   if (job.outcome !== "completed") return [];
+  const whole = job.files.length > 1 ? "Whole Job · " : "";
   const current = job.rating
-    ? el("span", { className: "rating " + job.rating.verdict, textContent: (job.rating.verdict === "good" ? "Good" : "Bad") + ": " + job.rating.reason })
-    : el("span", { className: "rating muted", textContent: "Not rated yet." });
+    ? el("span", { className: "rating " + job.rating.verdict, textContent: whole + ratingText(job.rating) })
+    : el("span", { className: "rating muted", textContent: whole + "Not rated yet." });
   const reason = el("input", { maxLength: reasonMax, placeholder: "One-line reason, e.g. the text is misspelled" });
+  const target = el("select", { className: "rate-target", title: "What the Rating is about" },
+    el("option", { value: "", textContent: "Whole Job" }),
+    ...job.files.map((_, index) => el("option", { value: String(index + 1), textContent: "Result " + (index + 1) })));
   const rateAs = (verdict, label) => {
     const button = el("button", { type: "button", textContent: label });
     button.onclick = () => act(button, async () => {
-      await api("POST", "/api/jobs/" + encodeURIComponent(job.id) + "/rating", { verdict, reason: reason.value });
+      const body = { verdict, reason: reason.value };
+      if (target.value !== "") body.result = Number(target.value);
+      await api("POST", "/api/jobs/" + encodeURIComponent(job.id) + "/rating", body);
       await loadJobs();
     }, "Rating saved.");
     return button;
   };
-  return [el("div", { className: "actions rate" }, current, el("div", { className: "inline" }, reason, rateAs("good", "Good"), rateAs("bad", "Bad")))];
+  const controls = job.files.length > 1 ? [target, reason] : [reason];
+  return [el("div", { className: "actions rate" }, current, el("div", { className: "inline" }, ...controls, rateAs("good", "Good"), rateAs("bad", "Bad")))];
 }
 
 function jobCard(job) {
@@ -553,7 +579,7 @@ function jobCard(job) {
         el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome })),
       el("p", { className: "job-meta", textContent: job.modelId + " on " + job.provider + " · " + when + " · " + formatDuration(job.durationMs) })),
     el("p", { className: "prompt", textContent: job.prompt }),
-    ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map((file) => thumbnail(job, file)))]),
+    ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map((file, index) => resultThumbnail(job, file, index)))]),
     ...details,
     ...ratingRow(job),
   );

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -12,6 +13,7 @@ import {
   resolveModel,
   type Config,
   type Model,
+  type ResolvedModel,
 } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 import { optionsRecord, rateJob, readJob, ratingReasonMaxLength, RatingError, readRatedJobs, verdicts, type OptionsRecord, type RatedJob, type SuspectOption } from "./history.ts";
@@ -22,7 +24,7 @@ import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
 import { describeCapabilities, describeVideoCapabilities, normaliseImageRequest, normaliseVideoRequest } from "./protocols/capabilities.ts";
 import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
-import { aspectRatios, formatSize, modalities } from "./protocols/protocol.ts";
+import { aspectRatios, formatSize, modalities, type AspectRatio, type Modality } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
 import { settingsOpener } from "./settings/opener.ts";
 import { defaultSettingsIdleMs } from "./settings/server.ts";
@@ -53,6 +55,7 @@ export const instructions = `litevision generates images and videos through Mode
 - Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
 - \`generate_image\` and \`generate_video\` return file paths, not media data. Tell the User where the files are.
 - A Job that takes longer than two minutes keeps running in the background (videos often do): the tool then returns its Job id with status "running". Tell the User it is still running, and call \`get_job\` with that Job id to wait for it again and get the files.
+- \`generate_comparison\` starts a Comparison: up to 4 Jobs at once, so it costs as much as all of them. Start a Comparison only when the User asks for one or agrees to it.
 - Ask for an aspect ratio (and for a video, a duration), not pixel sizes. If the Model does not support it, the closest supported one is used; when the result says it was adjusted, tell the User what was used.
 - Every result says what litevision actually got (pixel size, and a video's length). If it says the result does not match the request, tell the User, and check the Model's docs before trying again.
 - If a tool says a Model cannot do something (reference images, that many images, a first frame), the error lists what the Model supports: choose another Model or change the request.
@@ -60,7 +63,7 @@ export const instructions = `litevision generates images and videos through Mode
 - For Provider-specific \`provider_options\`: first reuse the Model's Known-good Options, which \`list_models\` shows. Only when none cover what you need, read the Model's docs link (\`list_models\` with \`model\` also gives the Provider's parameter schema when it publishes one). Read the docs again when a result does not match the request, when the Provider rejects an option (its error carries the docs link), or when options are marked suspect because a result that used them did not match or the User rated it bad. litevision passes \`provider_options\` through unchecked.
 - If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs link and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
 - If fewer images came back than you asked for, the result says why. Tell the User.
-- When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
+- When the User says what they think of a result ("this one's great", "the text is wrong", "that's not 4K"), call \`rate_job\` with that Job's id, their verdict (good or bad) and a one-line reason in their words. When the verdict is about one result of a Job with several ("the second one is great"), pass \`result\`, its number from 1 in the order of the Job's files; omit it when the verdict is about the whole Job. This is how litevision learns which options work, so do it whenever the User states a verdict in the conversation; never invent one, and never rate a result yourself.
 - Model Notes say what each Model is good or bad at. When the User learns something worth keeping, you may propose new Model Notes: short, replacing the old text whole rather than adding to it. Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
 
 /** The structured form of one Model in `list_models`. */
@@ -313,12 +316,106 @@ function toolError(text: string) {
  * the error carries the Model's docs link and Known-good Options, so the Agent need not look them up (ADR 0006).
  */
 async function failure(error: unknown, hint: (() => Promise<string>) | undefined) {
-  if (error instanceof ConfigError) return toolError(error.message);
+  const reason = await failureReason(error, hint);
+  return toolError(error instanceof JobFailedError ? `Job ${error.jobId} failed: ${reason}` : reason);
+}
+
+/** Why a Job failed or could not start, safe to show the Agent; any other error is rethrown. */
+async function failureReason(error: unknown, hint: (() => Promise<string>) | undefined): Promise<string> {
+  if (error instanceof ConfigError) return error.message;
   if (error instanceof JobFailedError) {
     const helpful = hint !== undefined && (error.kind === "unsupported" || error.kind === "rejected_option" || error.kind === "other");
-    return toolError(`Job ${error.jobId} failed: ${error.message}${helpful ? await hint() : ""}`);
+    return `${error.message}${helpful ? await hint() : ""}`;
   }
   throw error;
+}
+
+/** A Job checked and ready to start, and how to report it: shared by the single-Job tools and `generate_comparison`. */
+interface PreparedJob {
+  model: Model;
+  start(comparison?: string): Promise<JobState>;
+  report(job: JobState): { output: Record<string, unknown>; text: string };
+  /** The Model's docs link and Known-good Options, for a failed Job's error (ADR 0006). */
+  hint(): Promise<string>;
+}
+
+interface ImageArgs {
+  prompt: string;
+  n: number;
+  aspect_ratio: AspectRatio;
+  references: string[];
+  output_path?: string;
+  provider_options: Record<string, unknown>;
+}
+
+interface VideoArgs {
+  prompt: string;
+  aspect_ratio?: AspectRatio;
+  duration?: number;
+  resolution?: string;
+  first_frame?: string;
+  last_frame?: string;
+  references: string[];
+  output_path?: string;
+  provider_options: Record<string, unknown>;
+}
+
+const imageJobShape = {
+  job_id: z.string(),
+  status: jobStatusSchema,
+  model: z.string().describe("Alias of the Model that ran the Job."),
+  files: z.array(z.string()).describe("Paths of the saved images; empty while the Job is running."),
+  aspect_ratio: z.enum(aspectRatios).describe("Aspect ratio actually used."),
+  size: z.string().describe("Size actually requested from the Provider, e.g. 1536x1024."),
+  requested_aspect_ratio: z.enum(aspectRatios),
+  aspect_ratio_adjusted: z.boolean().describe("True when the Model does not support the requested aspect ratio and the closest one was used."),
+  shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
+  observed: observedSchema,
+  mismatch: mismatchSchema,
+};
+
+const videoJobShape = {
+  job_id: z.string(),
+  status: jobStatusSchema,
+  model: z.string().describe("Alias of the Model that ran the Job."),
+  files: z.array(z.string()).describe("Path of the saved video; empty while the Job is running."),
+  aspect_ratio: z.enum(aspectRatios).describe("Aspect ratio actually used."),
+  size: z.string().describe("Size the request implies, e.g. 1280x720."),
+  resolution: z.string().nullable().describe("Resolution tier actually requested; null when the Model takes none."),
+  duration: z.number().describe("Length in seconds actually requested."),
+  requested_aspect_ratio: z.enum(aspectRatios),
+  aspect_ratio_adjusted: z.boolean(),
+  duration_adjusted: z.boolean().describe("True when the Model cannot make the requested length and the closest one was used."),
+  observed: observedSchema,
+  mismatch: mismatchSchema,
+};
+
+const failedJobSchema = z.object({
+  job_id: z.string().nullable().describe("Null when the Job could not start."),
+  status: z.literal("failed"),
+  model: z.string().describe("Alias of the Model the Job ran on."),
+  files: z.array(z.string()).describe("Always empty."),
+  error: z.string().describe("Why the Job failed."),
+});
+
+/** The most Jobs one Comparison starts (ADR 0009). */
+export const maxComparisonVariants = 4;
+
+/**
+ * The one Modality a Comparison's Models share (ADR 0009): `wanted` when given, else the named Models', else image.
+ * Throws when the variants name Models of both Modalities, or of another one than `wanted`.
+ */
+function comparisonModality(config: Config, variants: Array<{ model?: string | undefined }>, wanted: Modality | undefined): Modality {
+  const named = variants.flatMap((variant) => config.models.filter((model) => model.alias === variant.model));
+  const found = new Set([...(wanted === undefined ? [] : [wanted]), ...named.map((model) => model.modality)]);
+  if (found.size > 1) {
+    const makes = [...new Map(named.map((model) => [model.alias, `${model.alias} makes ${model.modality}s`])).values()].join(", ");
+    const asked = wanted === undefined ? "" : ` and \`modality\` is ${wanted}`;
+    throw new ConfigError(
+      `A Comparison's Models must share one Modality, but ${makes}${asked}. Compare image Models or video Models, not both.`,
+    );
+  }
+  return [...found][0] ?? "image";
 }
 
 export function createServer(deps: ServerDeps): McpServer {
@@ -327,6 +424,114 @@ export function createServer(deps: ServerDeps): McpServer {
   const cwd = deps.cwd ?? process.cwd();
   const infoDeps: ModelInfoDeps = { dirs: deps.dirs, http: deps.http, now };
   const jobs = new JobRunner({ dirs: deps.dirs, http: deps.http, now, waitLimitMs: deps.waitLimitMs, pollIntervalMs: deps.pollIntervalMs, retryDelayMs: deps.retryDelayMs });
+
+  /** Checks an image Job against its Model before anything is sent, so a bad request starts no Job. */
+  const prepareImage = async (resolved: ResolvedModel, args: ImageArgs): Promise<PreparedJob> => {
+    const { model } = resolved;
+    const adapter = adapterFor(model);
+    const credential = await requireCredential(deps.dirs, resolved.provider);
+    const info = await modelInfo(infoDeps, resolved);
+    const normalised = await normaliseImageRequest(
+      { prompt: args.prompt, n: args.n, aspectRatio: args.aspect_ratio, references: args.references, providerOptions: args.provider_options },
+      model,
+      adapter,
+      info,
+      cwd,
+    );
+    const outputDir = args.output_path === undefined ? undefined : resolve(cwd, args.output_path);
+    return {
+      model,
+      start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
+      hint: async () => optionsHint(info.docsUrl, await modelOptions(deps, model)),
+      report: (job) => {
+        const { size } = normalised.request;
+        const output = {
+          ...jobOutput(job),
+          aspect_ratio: size.aspectRatio,
+          size: formatSize(size),
+          requested_aspect_ratio: normalised.requestedAspectRatio,
+          aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
+        };
+        const adjustment = normalised.aspectRatioAdjusted
+          ? ` ${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.`
+          : "";
+        const text =
+          job.status === "running"
+            ? `${jobText(job)} It asks ${model.alias} for ${size.aspectRatio} (${formatSize(size)}).${adjustment}`
+            : `Saved ${job.files.length} image(s) from ${model.alias} at ${size.aspectRatio} (${formatSize(size)}), Job ${job.id}.${adjustment}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
+        return { output, text };
+      },
+    };
+  };
+
+  /** Checks a video Job against its Model before anything is sent, so a bad request starts no Job. */
+  const prepareVideo = async (resolved: ResolvedModel, args: VideoArgs): Promise<PreparedJob> => {
+    const { model } = resolved;
+    const adapter = adapterFor(model);
+    const info = videoModelInfo(resolved);
+    const credential = await requireCredential(deps.dirs, resolved.provider);
+    const normalised = await normaliseVideoRequest(
+      {
+        prompt: args.prompt,
+        ...(args.aspect_ratio === undefined ? {} : { aspectRatio: args.aspect_ratio }),
+        ...(args.duration === undefined ? {} : { duration: args.duration }),
+        ...(args.resolution === undefined ? {} : { resolution: args.resolution }),
+        ...(args.first_frame === undefined ? {} : { firstFrame: args.first_frame }),
+        ...(args.last_frame === undefined ? {} : { lastFrame: args.last_frame }),
+        references: args.references,
+        providerOptions: args.provider_options,
+      },
+      model,
+      adapter,
+      info.capabilities,
+      cwd,
+    );
+    const outputDir = args.output_path === undefined ? undefined : resolve(cwd, args.output_path);
+    return {
+      model,
+      start: (comparison) =>
+        jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
+      hint: async () => optionsHint(info.docsUrl, await modelOptions(deps, model)),
+      report: (job) => {
+        const { size, seconds } = normalised.request;
+        const output = {
+          ...jobOutput(job),
+          aspect_ratio: size.aspectRatio,
+          size: formatSize(size),
+          resolution: normalised.request.resolution ?? null,
+          duration: seconds,
+          requested_aspect_ratio: normalised.requestedAspectRatio,
+          aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
+          duration_adjusted: normalised.durationAdjusted,
+        };
+        const asked = `${seconds} s at ${size.aspectRatio}${normalised.request.resolution === undefined ? "" : ` ${normalised.request.resolution}`} (${formatSize(size)})`;
+        const adjustments = [
+          normalised.aspectRatioAdjusted ? `${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.` : "",
+          normalised.durationAdjusted ? `${model.alias} cannot make ${normalised.requestedDuration} s, so the closest length it can was used.` : "",
+        ]
+          .filter(Boolean)
+          .map((sentence) => ` ${sentence}`)
+          .join("");
+        const text =
+          job.status === "running"
+            ? `${jobText(job)} It asks ${model.alias} for ${asked}.${adjustments}`
+            : `Saved a video from ${model.alias}, ${asked}, Job ${job.id}.${adjustments}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}\n${job.files.join("\n")}`;
+        return { output, text };
+      },
+    };
+  };
+
+  /** Runs one prepared Job on its own, as `generate_image` and `generate_video` do. */
+  const runSingle = async (prepare: () => Promise<PreparedJob>) => {
+    let prepared: PreparedJob | undefined;
+    try {
+      prepared = await prepare();
+      const { output, text } = prepared.report(await prepared.start());
+      return { content: [{ type: "text" as const, text }], structuredContent: output };
+    } catch (error) {
+      return failure(error, prepared?.hint);
+    }
+  };
 
   server.registerTool(
     "generate_image",
@@ -359,61 +564,9 @@ export function createServer(deps: ServerDeps): McpServer {
             "Provider-specific request fields passed through untouched, e.g. { \"quality\": \"high\" } for OpenAI. Cannot override fields litevision sets from the other parameters.",
           ),
       },
-      outputSchema: {
-        job_id: z.string(),
-        status: jobStatusSchema,
-        model: z.string().describe("Alias of the Model that ran the Job."),
-        files: z.array(z.string()).describe("Paths of the saved images; empty while the Job is running."),
-        aspect_ratio: z.enum(aspectRatios).describe("Aspect ratio actually used."),
-        size: z.string().describe("Size actually requested from the Provider, e.g. 1536x1024."),
-        requested_aspect_ratio: z.enum(aspectRatios),
-        aspect_ratio_adjusted: z
-          .boolean()
-          .describe("True when the Model does not support the requested aspect ratio and the closest one was used."),
-        shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
-        observed: observedSchema,
-        mismatch: mismatchSchema,
-      },
+      outputSchema: imageJobShape,
     },
-    async ({ prompt, model: alias, n, aspect_ratio, references, output_path, provider_options }) => {
-      let failureHint: (() => Promise<string>) | undefined;
-      try {
-        const resolved = resolveModel(await loadConfig(deps.dirs), alias);
-        const { model } = resolved;
-        const adapter = adapterFor(model);
-        const credential = await requireCredential(deps.dirs, resolved.provider);
-        const info = await modelInfo(infoDeps, resolved);
-        const normalised = await normaliseImageRequest(
-          { prompt, n, aspectRatio: aspect_ratio, references, providerOptions: provider_options },
-          model,
-          adapter,
-          info,
-          cwd,
-        );
-
-        const outputDir = output_path === undefined ? undefined : resolve(cwd, output_path);
-        failureHint = async () => optionsHint(info.docsUrl, await modelOptions(deps, model));
-        const job = await jobs.start({ ...resolved, adapter, credential, normalised, outputDir });
-        const { size } = normalised.request;
-        const output = {
-          ...jobOutput(job),
-          aspect_ratio: size.aspectRatio,
-          size: formatSize(size),
-          requested_aspect_ratio: normalised.requestedAspectRatio,
-          aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
-        };
-        const adjustment = normalised.aspectRatioAdjusted
-          ? ` ${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.`
-          : "";
-        const text =
-          job.status === "running"
-            ? `${jobText(job)} It asks ${model.alias} for ${size.aspectRatio} (${formatSize(size)}).${adjustment}`
-            : `Saved ${job.files.length} image(s) from ${model.alias} at ${size.aspectRatio} (${formatSize(size)}), Job ${job.id}.${adjustment}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
-        return { content: [{ type: "text", text }], structuredContent: output };
-      } catch (error) {
-        return failure(error, failureHint);
-      }
-    },
+    async ({ model: alias, ...args }) => runSingle(async () => prepareImage(resolveModel(await loadConfig(deps.dirs), alias), args)),
   );
 
   server.registerTool(
@@ -457,77 +610,117 @@ export function createServer(deps: ServerDeps): McpServer {
           .default({})
           .describe("Provider-specific request fields passed through untouched, e.g. { \"generate_audio\": true }. Reuse the Model's Known-good Options from `list_models`."),
       },
+      outputSchema: videoJobShape,
+    },
+    async ({ model: alias, ...args }) => runSingle(async () => prepareVideo(resolveModel(await loadConfig(deps.dirs), alias, "video"), args)),
+  );
+
+  server.registerTool(
+    "generate_comparison",
+    {
+      description: `Start a Comparison: 2 to ${maxComparisonVariants} Jobs together for one request, differing in prompt, in Model, or both, so the User can choose among their results. All variants' Models must share one Modality. Start one only when the User asks for a Comparison or agrees to one: it costs as much as all its Jobs. Saves each Job's files locally and returns them under one Comparison id.`,
+      inputSchema: {
+        variants: z
+          .array(
+            z.object({
+              prompt: z.string().min(1).describe("Sent to this variant's Model verbatim."),
+              model: z.string().optional().describe("Alias of this variant's Model. Omit to use the default Model of the Comparison's Modality."),
+              n: z
+                .number()
+                .int()
+                .positive()
+                .optional()
+                .describe("Image Comparisons only: how many images this variant's Job makes, up to its Model's maximum. Defaults to 1."),
+            }),
+          )
+          .min(2)
+          .max(maxComparisonVariants)
+          .describe(`The Jobs to start, 2 to ${maxComparisonVariants}, one per variant.`),
+        modality: z
+          .enum(modalities)
+          .optional()
+          .describe("image or video. Omit to take it from the variants' Models; when no variant names one, image."),
+        aspect_ratio: z
+          .enum(aspectRatios)
+          .optional()
+          .describe("Wanted aspect ratio for every Job. Omit for 1:1 images or 16:9 videos. Each Model that does not support it uses its closest one."),
+        references: z
+          .array(z.string().min(1))
+          .default([])
+          .describe("Local paths of reference images every Job gets. Relative paths resolve against litevision's working directory."),
+        output_path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Folder to save every Job's files in; created if missing. Omit to save under a dated folder in the User's home directory."),
+        duration: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Video Comparisons only: wanted length in seconds. Omit for each Model's default."),
+      },
       outputSchema: {
-        job_id: z.string(),
-        status: jobStatusSchema,
-        model: z.string().describe("Alias of the Model that ran the Job."),
-        files: z.array(z.string()).describe("Path of the saved video; empty while the Job is running."),
-        aspect_ratio: z.enum(aspectRatios).describe("Aspect ratio actually used."),
-        size: z.string().describe("Size the request implies, e.g. 1280x720."),
-        resolution: z.string().nullable().describe("Resolution tier actually requested; null when the Model takes none."),
-        duration: z.number().describe("Length in seconds actually requested."),
-        requested_aspect_ratio: z.enum(aspectRatios),
-        aspect_ratio_adjusted: z.boolean(),
-        duration_adjusted: z.boolean().describe("True when the Model cannot make the requested length and the closest one was used."),
-        observed: observedSchema,
-        mismatch: mismatchSchema,
+        comparison_id: z.string(),
+        modality: z.enum(modalities),
+        jobs: z
+          .array(z.union([z.object(imageJobShape), z.object(videoJobShape), failedJobSchema]))
+          .describe(
+            "One per variant, in the order given: each as `generate_image` or `generate_video` returns it, or status \"failed\" with why. A \"running\" Job continues in the background; call `get_job` with its `job_id`.",
+          ),
       },
     },
-    async ({ prompt, model: alias, aspect_ratio, duration, resolution, first_frame, last_frame, references, output_path, provider_options }) => {
-      let failureHint: (() => Promise<string>) | undefined;
+    async ({ variants, modality: wanted, aspect_ratio, references, output_path, duration }) => {
+      let prepared: PreparedJob[];
+      let modality: Modality;
       try {
-        const resolved = resolveModel(await loadConfig(deps.dirs), alias, "video");
-        const { model } = resolved;
-        const adapter = adapterFor(model);
-        const info = videoModelInfo(resolved);
-        const credential = await requireCredential(deps.dirs, resolved.provider);
-        const normalised = await normaliseVideoRequest(
-          {
-            prompt,
-            ...(aspect_ratio === undefined ? {} : { aspectRatio: aspect_ratio }),
-            ...(duration === undefined ? {} : { duration }),
-            ...(resolution === undefined ? {} : { resolution }),
-            ...(first_frame === undefined ? {} : { firstFrame: first_frame }),
-            ...(last_frame === undefined ? {} : { lastFrame: last_frame }),
-            references,
-            providerOptions: provider_options,
-          },
-          model,
-          adapter,
-          info.capabilities,
-          cwd,
+        const config = await loadConfig(deps.dirs);
+        modality = comparisonModality(config, variants, wanted);
+        if (modality === "image" && duration !== undefined) {
+          throw new ConfigError("`duration` applies only to a video Comparison; leave it out for images.");
+        }
+        if (modality === "video" && variants.some((variant) => (variant.n ?? 1) > 1)) {
+          throw new ConfigError("A video Job makes one video, so leave `n` out of a video Comparison's variants.");
+        }
+        // Every variant is checked before any Job starts, so a bad one costs nothing.
+        prepared = await Promise.all(
+          variants.map((variant) => {
+            const resolved = resolveModel(config, variant.model, modality);
+            const shared = { prompt: variant.prompt, references, provider_options: {}, ...(output_path === undefined ? {} : { output_path }) };
+            return modality === "video"
+              ? prepareVideo(resolved, { ...shared, ...(aspect_ratio === undefined ? {} : { aspect_ratio }), ...(duration === undefined ? {} : { duration }) })
+              : prepareImage(resolved, { ...shared, n: variant.n ?? 1, aspect_ratio: aspect_ratio ?? "1:1" });
+          }),
         );
-
-        const outputDir = output_path === undefined ? undefined : resolve(cwd, output_path);
-        failureHint = async () => optionsHint(info.docsUrl, await modelOptions(deps, model));
-        const job = await jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir });
-        const { size, seconds } = normalised.request;
-        const output = {
-          ...jobOutput(job),
-          aspect_ratio: size.aspectRatio,
-          size: formatSize(size),
-          resolution: normalised.request.resolution ?? null,
-          duration: seconds,
-          requested_aspect_ratio: normalised.requestedAspectRatio,
-          aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
-          duration_adjusted: normalised.durationAdjusted,
-        };
-        const asked = `${seconds} s at ${size.aspectRatio}${normalised.request.resolution === undefined ? "" : ` ${normalised.request.resolution}`} (${formatSize(size)})`;
-        const adjustments = [
-          normalised.aspectRatioAdjusted ? `${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.` : "",
-          normalised.durationAdjusted ? `${model.alias} cannot make ${normalised.requestedDuration} s, so the closest length it can was used.` : "",
-        ]
-          .filter(Boolean)
-          .map((sentence) => ` ${sentence}`)
-          .join("");
-        const text =
-          job.status === "running"
-            ? `${jobText(job)} It asks ${model.alias} for ${asked}.${adjustments}`
-            : `Saved a video from ${model.alias}, ${asked}, Job ${job.id}.${adjustments}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}\n${job.files.join("\n")}`;
-        return { content: [{ type: "text", text }], structuredContent: output };
       } catch (error) {
-        return failure(error, failureHint);
+        return failure(error, undefined);
       }
+
+      const comparisonId = randomUUID();
+      const settled = await Promise.allSettled(prepared.map((job) => job.start(comparisonId)));
+      const results = await Promise.all(
+        settled.map(async (outcome, index) => {
+          const job = prepared[index]!;
+          if (outcome.status === "fulfilled") return job.report(outcome.value);
+          // Whatever stopped this Job, the others' results still go back to the Agent.
+          const reason = await failureReason(outcome.reason, job.hint).catch(
+            () => `litevision could not run this Job: ${(outcome.reason as Error).message}`,
+          );
+          const jobId = outcome.reason instanceof JobFailedError ? outcome.reason.jobId : null;
+          return {
+            output: { job_id: jobId, status: "failed" as const, model: job.model.alias, files: [], error: reason },
+            text: `Job${jobId === null ? "" : ` ${jobId}`} on ${job.model.alias} failed: ${reason}`,
+          };
+        }),
+      );
+      const text = [
+        `Comparison ${comparisonId}: ${results.length} ${modality} Jobs. Show the User every result so they can choose.`,
+        ...results.map((result, index) => `Variant ${index + 1}: ${result.text}`),
+      ].join("\n\n");
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: { comparison_id: comparisonId, modality, jobs: results.map((result) => result.output) },
+      };
     },
   );
 
@@ -535,9 +728,9 @@ export function createServer(deps: ServerDeps): McpServer {
     "get_job",
     {
       description:
-        "Get a Job's status, waiting up to two minutes while it runs; once it has completed, the paths of its saved images or video. Use it when `generate_image` or `generate_video` returned a Job that is still running.",
+        "Get a Job's status, waiting up to two minutes while it runs; once it has completed, the paths of its saved images or video. Use it when `generate_image`, `generate_video` or `generate_comparison` returned a Job that is still running.",
       inputSchema: {
-        job_id: z.string().min(1).describe("The `job_id` that `generate_image` or `generate_video` returned."),
+        job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `generate_comparison` returned."),
       },
       outputSchema: {
         job_id: z.string(),
@@ -575,9 +768,15 @@ export function createServer(deps: ServerDeps): McpServer {
     "rate_job",
     {
       description:
-        "Record the User's Rating of a completed Job: good or bad, plus a one-line reason. Call it only when the User has actually said what they think of the result; never invent a verdict. A later Rating of the same Job replaces the earlier one.",
+        "Record the User's Rating of a completed Job, or of one result of it: good or bad, plus a one-line reason. Call it only when the User has actually said what they think of the result; never invent a verdict. A later Rating of the same Job and result replaces the earlier one; a Rating of the whole Job and one of a single result stand side by side.",
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `get_job` returned."),
+        result: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Which result the verdict is about, from 1 in the order of the Job's files. Omit when it is about the whole Job."),
         verdict: z.enum(verdicts).describe("The User's verdict."),
         reason: z
           .string()
@@ -586,17 +785,25 @@ export function createServer(deps: ServerDeps): McpServer {
       },
       outputSchema: {
         job_id: z.string(),
+        result: z.number().optional().describe("The result rated; absent for a Rating of the whole Job."),
         verdict: z.enum(verdicts),
         reason: z.string().describe("The reason as recorded, on one line."),
         rated_at: z.string().describe("When the Rating was recorded, ISO 8601."),
       },
     },
-    async ({ job_id, verdict, reason }) => {
+    async ({ job_id, result, verdict, reason }) => {
       try {
-        const rating = await rateJob(deps.dirs, { jobId: job_id, verdict, reason }, now());
-        const output = { job_id: rating.jobId, verdict: rating.verdict, reason: rating.reason, rated_at: rating.ratedAt };
+        const rating = await rateJob(deps.dirs, { jobId: job_id, result, verdict, reason }, now());
+        const output = {
+          job_id: rating.jobId,
+          ...(rating.result === undefined ? {} : { result: rating.result }),
+          verdict: rating.verdict,
+          reason: rating.reason,
+          rated_at: rating.ratedAt,
+        };
+        const subject = rating.result === undefined ? `Job ${rating.jobId}` : `result ${rating.result} of Job ${rating.jobId}`;
         return {
-          content: [{ type: "text", text: `Recorded a ${rating.verdict} Rating on Job ${rating.jobId}: ${rating.reason}` }],
+          content: [{ type: "text", text: `Recorded a ${rating.verdict} Rating on ${subject}: ${rating.reason}` }],
           structuredContent: output,
         };
       } catch (error) {
