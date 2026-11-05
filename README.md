@@ -55,7 +55,8 @@ The page also shows the Job history, with the images and videos and any Ratings 
 | --- | --- |
 | `generate_image` | Generates images from a prompt, optionally with reference images, an aspect ratio and Provider-specific `provider_options`. Saves them and returns the file paths, with the size each image actually came out at. |
 | `generate_video` | Generates a video from a prompt, optionally with a first and last frame, reference images, an aspect ratio, a duration and a resolution. Saves it and returns the file path, with its actual size and length. |
-| `get_job` | Waits for, or reports on, a Job that was still running when `generate_image` or `generate_video` returned. |
+| `generate_comparison` | Starts 2 to 4 Jobs of one Modality together, differing in prompt, Model or both, so you can choose among the results. The Agent starts one only when you ask for it or agree to it. |
+| `get_job` | Waits for, or reports on, a Job that was still running when `generate_image`, `generate_video` or `generate_comparison` returned. |
 | `list_models` | Lists the configured Models with their Modality, capabilities, Model Notes, docs link and Known-good Options (the `provider_options` that worked); for one Model, also their values, options made suspect by a bad Rating or a result that did not match, and the Provider's parameter schema. |
 | `rate_job` | Records your verdict on a result (good or bad, plus a reason) when you state one. A bad Rating makes the options that Job used suspect until a good one uses them again. |
 | `update_model_notes` | Replaces a Model's Notes, only with text you agreed to. You can undo it in the settings page. |

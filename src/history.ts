@@ -48,6 +48,8 @@ export interface JobRecord {
   modality?: Modality;
   prompt: string;
   parameters: JobParameters;
+  /** The id of the Comparison the Job was started in (ADR 0009); absent for a Job started on its own. */
+  comparison?: string;
   /** So far, while the Job is running. */
   durationMs: number;
   files: string[];
