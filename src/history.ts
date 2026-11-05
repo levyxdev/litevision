@@ -7,7 +7,8 @@ import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle 
 /**
  * The Job history, `jobs.jsonl`: append-only, one JSON record per line. A Job gets several records over its life
  * (running when it starts, running again once an asynchronous Provider accepts it, then completed or failed); the
- * latest one for an id is what it is now. Ratings are lines of their own, and the latest for a Job is its Rating now.
+ * latest one for an id is what it is now. Ratings are lines of their own: the latest for a Job, or for one result of it,
+ * is its Rating now.
  * Every read of the history goes through this module.
  */
 
@@ -71,20 +72,31 @@ export type Verdict = (typeof verdicts)[number];
 /** Long enough for one line, short enough to stay one. */
 export const ratingReasonMaxLength = 200;
 
-/** One Rating line of `jobs.jsonl`: the User's verdict on a completed Job. A later one for the same Job supersedes it. */
+/**
+ * One Rating line of `jobs.jsonl`: the User's verdict on a completed Job, or on one result of it. A later one for the
+ * same Job and result supersedes it; a Rating of the whole Job and one of a single result stand side by side.
+ */
 export interface RatingRecord {
   type: "rating";
   jobId: string;
+  /** Which result, from 1 in the order of the Job's `files`; absent when the Rating is about the whole Job. */
+  result?: number;
   verdict: Verdict;
   /** One line. */
   reason: string;
   ratedAt: string;
 }
 
-/** A Job as it is now, with its current Rating if the User has given one. */
+/** A Job as it is now, with its current Ratings. */
 export interface RatedJob {
   job: JobRecord;
-  rating?: RatingRecord;
+  /** At most one for the whole Job and one for each result, in the order they were recorded. */
+  ratings: RatingRecord[];
+}
+
+/** The current Rating of the whole Job, or of one result when `result` is given. */
+export function ratingOf({ ratings }: RatedJob, result?: number): RatingRecord | undefined {
+  return ratings.find((rating) => rating.result === result);
 }
 
 /** Why a Rating was not recorded. Its message is safe to show the Agent and the User. */
@@ -115,21 +127,22 @@ export async function readJob(dirs: Dirs, id: string): Promise<JobRecord | undef
   return (await readJobs(dirs)).find((job) => job.id === id);
 }
 
-/** Every Job with its current Rating, most recently started first. */
+/** Every Job with its current Ratings, most recently started first. */
 export async function readRatedJobs(dirs: Dirs): Promise<RatedJob[]> {
   const { jobs, ratings } = await readRecords(dirs);
   return jobs
-    .map((job) => ({ job, ...(ratings.has(job.id) ? { rating: ratings.get(job.id) } : {}) }))
+    .map((job) => ({ job, ratings: [...(ratings.get(job.id)?.values() ?? [])] }))
     .sort((a, b) => Date.parse(b.job.createdAt) - Date.parse(a.job.createdAt));
 }
 
 /**
- * Records the User's verdict on a Job. Only a completed Job can be rated; the reason is kept to one line.
- * Throws {@link RatingError} when the Job is unknown, has not completed, or the reason is empty.
+ * Records the User's verdict on a Job, or with `result` on one of its results. Only a completed Job can be rated; the
+ * reason is kept to one line. Throws {@link RatingError} when the Job is unknown, has not completed, has no such
+ * result, or the reason is empty.
  */
 export async function rateJob(
   dirs: Dirs,
-  rating: { jobId: string; verdict: Verdict; reason: string },
+  rating: { jobId: string; result?: number; verdict: Verdict; reason: string },
   now: Date,
 ): Promise<RatingRecord> {
   const reason = rating.reason.replace(/\s+/g, " ").trim();
@@ -145,13 +158,28 @@ export async function rateJob(
   if (job.outcome === "failed") {
     throw new RatingError("not-completed", `Job ${job.id} failed and saved no images, so there is nothing to rate.`);
   }
-  const record: RatingRecord = { type: "rating", jobId: job.id, verdict: rating.verdict, reason, ratedAt: now.toISOString() };
+  const { result } = rating;
+  if (result !== undefined && !(Number.isInteger(result) && result >= 1 && result <= job.files.length)) {
+    const count = job.files.length === 1 ? "1 result" : `${job.files.length} results`;
+    throw new RatingError("invalid", `Job ${job.id} has ${count}, numbered from 1 in the order of its files.`);
+  }
+  const record: RatingRecord = {
+    type: "rating",
+    jobId: job.id,
+    ...(result === undefined ? {} : { result }),
+    verdict: rating.verdict,
+    reason,
+    ratedAt: now.toISOString(),
+  };
   await appendHistory(dirs, record);
   return record;
 }
 
-/** One pass over `jobs.jsonl`: the latest record of each Job, and the latest Rating of each. */
-async function readRecords(dirs: Dirs): Promise<{ jobs: JobRecord[]; ratings: Map<string, RatingRecord> }> {
+/**
+ * One pass over `jobs.jsonl`: the latest record of each Job, and per Job its latest Rating of the whole Job and of each
+ * result, keyed by result number (0 for the whole Job) in the order they were recorded.
+ */
+async function readRecords(dirs: Dirs): Promise<{ jobs: JobRecord[]; ratings: Map<string, Map<number, RatingRecord>> }> {
   let text: string;
   try {
     text = await readFile(historyPath(dirs), "utf8");
@@ -160,7 +188,7 @@ async function readRecords(dirs: Dirs): Promise<{ jobs: JobRecord[]; ratings: Ma
     throw error;
   }
   const jobs = new Map<string, JobRecord>();
-  const ratings = new Map<string, RatingRecord>();
+  const ratings = new Map<string, Map<number, RatingRecord>>();
   for (const line of text.split("\n")) {
     if (line.trim() === "") continue;
     let record: unknown;
@@ -170,7 +198,11 @@ async function readRecords(dirs: Dirs): Promise<{ jobs: JobRecord[]; ratings: Ma
       continue;
     }
     if (isRatingRecord(record)) {
-      ratings.set(record.jobId, record);
+      const ofJob = ratings.get(record.jobId) ?? new Map<number, RatingRecord>();
+      ratings.set(record.jobId, ofJob);
+      // Re-inserting keeps the Ratings in the order they were last recorded.
+      ofJob.delete(record.result ?? 0);
+      ofJob.set(record.result ?? 0, record);
       continue;
     }
     if (!isJobRecord(record)) continue;
@@ -194,7 +226,8 @@ function isRatingRecord(value: unknown): value is RatingRecord {
     record.type === "rating" &&
     typeof record.jobId === "string" &&
     verdicts.includes(record.verdict as Verdict) &&
-    typeof record.reason === "string"
+    typeof record.reason === "string" &&
+    (record.result === undefined || (Number.isInteger(record.result) && record.result >= 1))
   );
 }
 
@@ -224,7 +257,16 @@ export interface OptionsRecord {
 }
 
 /**
- * Known-good and suspect `provider_options` for a Model, oldest Job first (ADR 0006). Each key's latest value counts.
+ * The Rating that speaks for a Job's options: the latest of the whole Job, or of its only result. The results of one
+ * Job share its options, so a Rating of one result among several says more about chance than about them (ADR 0006).
+ */
+function optionsRating({ job, ratings }: RatedJob): RatingRecord | undefined {
+  return ratings.findLast((rating) => rating.result === undefined || (rating.result === 1 && job.files.length === 1));
+}
+
+/**
+ * Known-good and suspect `provider_options` for a Model, oldest Job first (ADR 0006). Each key's latest value counts,
+ * and only a Rating of the whole Job, or of its only result, counts for its options (see {@link optionsRating}).
  * A value the User rated bad stays suspect, whenever it is sent again, until the User rates a Job that sent it good:
  * no Job without a Rating clears the User's verdict, matching or not. Otherwise a value is suspect when its latest Job
  * did not match its request, and Known-good when it did.
@@ -234,8 +276,10 @@ export function optionsRecord(jobs: RatedJob[], model: ModelKey): OptionsRecord 
   /** Per key, the values the User rated bad and not good since, by their JSON. */
   const ratedBad = new Map<string, Map<string, SuspectOption>>();
   const ordered = [...jobs].sort((a, b) => Date.parse(a.job.createdAt) - Date.parse(b.job.createdAt));
-  for (const { job, rating } of ordered) {
+  for (const ratedJob of ordered) {
+    const { job } = ratedJob;
     if (job.outcome !== "completed") continue;
+    const rating = optionsRating(ratedJob);
     if (job.provider !== model.provider || job.protocol !== model.protocol || job.modelId !== model.modelId) continue;
     for (const [key, value] of Object.entries(job.parameters?.providerOptions ?? {})) {
       const asJson = JSON.stringify(value);

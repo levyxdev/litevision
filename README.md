@@ -47,7 +47,7 @@ The page listens on `127.0.0.1` only, behind a one-time token, and shuts down af
 
 3. **Pick a default image Model** (and a default video Model) and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
 
-The page also shows the Job history, with the images and videos and any Ratings you gave.
+The page also shows the Job history, with the images and videos and any Ratings you gave, and lets you rate a Job or one of its results.
 
 ## Tools
 
@@ -57,7 +57,7 @@ The page also shows the Job history, with the images and videos and any Ratings 
 | `generate_video` | Generates a video from a prompt, optionally with a first and last frame, reference images, an aspect ratio, a duration and a resolution. Saves it and returns the file path, with its actual size and length. |
 | `get_job` | Waits for, or reports on, a Job that was still running when `generate_image` or `generate_video` returned. |
 | `list_models` | Lists the configured Models with their Modality, capabilities, Model Notes, docs link and Known-good Options (the `provider_options` that worked); for one Model, also their values, options made suspect by a bad Rating or a result that did not match, and the Provider's parameter schema. |
-| `rate_job` | Records your verdict on a result (good or bad, plus a reason) when you state one. A bad Rating makes the options that Job used suspect until a good one uses them again. |
+| `rate_job` | Records your verdict on a Job or on one of its results (good or bad, plus a reason) when you state one. A bad Rating of the whole Job, or of its only result, makes the options that Job used suspect until a good one uses them again. |
 | `update_model_notes` | Replaces a Model's Notes, only with text you agreed to. You can undo it in the settings page. |
 | `open_settings` | Opens the settings page. |
 
