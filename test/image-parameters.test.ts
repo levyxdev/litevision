@@ -12,10 +12,7 @@ interface GenerateResult {
   job_id: string;
   model: string;
   files: string[];
-  aspect_ratio: string;
-  size: string;
-  requested_aspect_ratio: string;
-  aspect_ratio_adjusted: boolean;
+  requested_shape: string | null;
 }
 
 /** One OpenAI Provider with three `openai-images` Models; `gpt-image` is the default. */
@@ -63,68 +60,22 @@ describe("n", () => {
   });
 });
 
-describe("aspect_ratio", () => {
-  test("a supported aspect ratio is sent as its concrete size", async () => {
+describe("size", () => {
+  test("is sent only from provider_options, in the Model's own field, and the result is checked against it", async () => {
     harness = await startHarness(openaiSetup());
-    const output = outputOf(await generate({ aspect_ratio: "2:3" }));
-
+    const output = outputOf(await generate({ provider_options: { size: "1024x1536" } }));
     expect(await harness.requests[0]!.json()).toMatchObject({ size: "1024x1536" });
-    expect(output).toMatchObject({
-      aspect_ratio: "2:3",
-      size: "1024x1536",
-      requested_aspect_ratio: "2:3",
-      aspect_ratio_adjusted: false,
-    });
-  });
-
-  test("an unsupported aspect ratio is mapped to the closest supported one and the actual size is reported", async () => {
-    harness = await startHarness(openaiSetup());
-    const result = await generate({ aspect_ratio: "16:9" });
-    const output = outputOf(result);
-
-    expect(await harness.requests[0]!.json()).toMatchObject({ size: "1536x1024" });
-    expect(output).toMatchObject({
-      aspect_ratio: "3:2",
-      size: "1536x1024",
-      requested_aspect_ratio: "16:9",
-      aspect_ratio_adjusted: true,
-      requested_shape: "3:2",
-    });
-    expect(textOf(result)).toContain("closest supported aspect ratio");
-  });
-
-  test("portrait ratios map to the closest portrait size", async () => {
-    harness = await startHarness(openaiSetup());
-    const output = outputOf(await generate({ aspect_ratio: "3:4" }));
-    expect(output).toMatchObject({ aspect_ratio: "2:3", size: "1024x1536", aspect_ratio_adjusted: true });
-  });
-
-  test("the closest size depends on the Model", async () => {
-    harness = await startHarness(openaiSetup());
-    const output = outputOf(await generate({ model: "dalle3", aspect_ratio: "16:9" }));
-    expect(await harness.requests[0]!.json()).toMatchObject({ model: "dall-e-3", size: "1792x1024" });
-    expect(output).toMatchObject({ aspect_ratio: "16:9", size: "1792x1024", aspect_ratio_adjusted: false });
+    expect(output.requested_shape).toBe("1024x1536");
   });
 
   test("omitted, no size is sent and the Provider's default applies (ADR 0010)", async () => {
     harness = await startHarness(openaiSetup());
     const output = outputOf(await generate({}));
     expect(await harness.requests[0]!.json()).not.toHaveProperty("size");
-    expect(output).toMatchObject({ aspect_ratio: null, size: null, requested_aspect_ratio: null, aspect_ratio_adjusted: false, requested_shape: null });
-  });
-
-  test("a size in provider_options overrides the translated aspect ratio, and is what the result is checked against", async () => {
-    harness = await startHarness(openaiSetup());
-    const output = outputOf(await generate({ aspect_ratio: "1:1", provider_options: { size: "1536x1024" } }));
-    expect(await harness.requests[0]!.json()).toMatchObject({ size: "1536x1024" });
-    expect(output).toMatchObject({ requested_shape: "1536x1024" });
-  });
-
-  test("an aspect ratio outside the supported set is rejected before any Provider request", async () => {
-    harness = await startHarness(openaiSetup());
-    const result = await generate({ aspect_ratio: "21:9" });
-    expect(result.isError).toBe(true);
-    expect(harness.requests).toHaveLength(0);
+    expect(output).toMatchObject({ requested_shape: null });
+    expect(output).not.toHaveProperty("aspect_ratio");
+    expect(output).not.toHaveProperty("size");
+    expect(output).not.toHaveProperty("aspect_ratio_adjusted");
   });
 });
 
@@ -137,7 +88,7 @@ describe("references", () => {
     const elsewhere = join(harness.dirs.output, "..", "lamp.jpg");
     await writeFile(elsewhere, tinyJpeg);
 
-    const result = await generate({ prompt: "put the fox under the lamp", references: ["fox.png", elsewhere], aspect_ratio: "3:2" });
+    const result = await generate({ prompt: "put the fox under the lamp", references: ["fox.png", elsewhere], provider_options: { size: "1536x1024" } });
     const output = outputOf(result);
 
     expect(output.files).toHaveLength(1);
@@ -342,10 +293,9 @@ describe("Job history", () => {
       await generate({
         prompt: "the fox, at dusk",
         n: 1,
-        aspect_ratio: "16:9",
         references: ["fox.png"],
         output_path: "assets",
-        provider_options: { quality: "high" },
+        provider_options: { quality: "high", size: "1536x1024" },
       }),
     );
 
@@ -356,11 +306,10 @@ describe("Job history", () => {
       prompt: "the fox, at dusk",
       parameters: {
         n: 1,
-        aspectRatio: "16:9",
-        size: { aspectRatio: "3:2", width: 1536, height: 1024 },
+        requestedShape: "1536x1024",
         references: [join(harness.cwd, "fox.png")],
         outputPath: join(harness.cwd, "assets"),
-        providerOptions: { quality: "high" },
+        providerOptions: { quality: "high", size: "1536x1024" },
       },
       files: output.files,
       outcome: "completed",

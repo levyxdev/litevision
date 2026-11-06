@@ -7,11 +7,11 @@ import type { Dirs } from "./dirs.ts";
 import type { HttpTransport } from "./http.ts";
 import { adapterFor } from "./protocols/index.ts";
 import type { ParameterGuide } from "./protocols/parameter-guide.ts";
-import { aspectRatios, type ImageCapabilities, type ProviderModelInfo, type VideoCapabilities } from "./protocols/protocol.ts";
+import type { ProviderModelInfo } from "./protocols/protocol.ts";
 
 /**
- * What litevision knows about one Model: its capabilities, asked of the Provider where its Protocol can, and cached
- * (ADR 0004).
+ * What litevision knows about one Model's parameters (ADR 0010): the built-in Parameter Guide, and the Provider's own
+ * description where its Protocol can ask for one, cached (ADR 0004). The Provider's description wins.
  */
 
 export interface ModelInfoDeps {
@@ -23,9 +23,6 @@ export interface ModelInfoDeps {
 }
 
 export interface ModelInfo {
-  capabilities: ImageCapabilities;
-  /** "provider" when the Provider reported the capabilities, "built-in" when they come from the adapter's own table. */
-  source: "provider" | "built-in";
   docsUrl: string;
   /** The Provider's own description of the Model's parameters, when it publishes one; it wins over `guide` (ADR 0010). */
   parameterSchema?: unknown;
@@ -33,9 +30,8 @@ export interface ModelInfo {
   guide?: ParameterGuide;
 }
 
-/** What litevision knows about one video Model: the adapter's own table, since no Provider describes its video Models yet. */
+/** What litevision knows about one video Model: its built-in Parameter Guide, since no Provider describes its video Models yet. */
 export interface VideoModelInfo {
-  capabilities: VideoCapabilities;
   docsUrl: string;
   guide?: ParameterGuide;
 }
@@ -43,12 +39,11 @@ export interface VideoModelInfo {
 /** Everything known about a video Model. Throws a ConfigError when its Protocol makes no videos. */
 export function videoModelInfo({ model }: ResolvedModel): VideoModelInfo {
   const adapter = adapterFor(model);
-  if (adapter.builtInVideoCapabilities === undefined || adapter.submitVideo === undefined) {
+  if (adapter.submitVideo === undefined) {
     throw new ConfigError(`Model "${model.alias}" is a video Model, but its Protocol "${model.protocol}" makes no videos in litevision.`);
   }
   const guide = adapter.parameterGuide?.(model.modelId, "video");
   return {
-    capabilities: adapter.builtInVideoCapabilities(model.modelId),
     docsUrl: adapter.docsUrl(model.modelId, "video"),
     ...(guide === undefined ? {} : { guide }),
   };
@@ -59,27 +54,16 @@ export const modelInfoTtlMs = 24 * 60 * 60 * 1000;
 
 export const defaultModelInfoTimeoutMs = 5000;
 
-const sizeSchema = z.object({
-  aspectRatio: z.enum(aspectRatios),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-});
-
-const capabilitiesSchema = z.object({
-  sizes: z.array(sizeSchema).min(1),
-  maxReferences: z.number().int().nonnegative(),
-  maxImages: z.number().int().positive(),
-});
-
+/** Entries written by an earlier litevision also hold `capabilities`, which is ignored. */
 const entrySchema = z.object({
   fetchedAt: z.string(),
-  /** Null when the Provider had nothing to say about the model id. */
-  capabilities: capabilitiesSchema.nullable(),
+  /** Omitted when the Provider had nothing to say about the model id. */
   parameterSchema: z.unknown().optional(),
 });
 
 type CacheEntry = z.infer<typeof entrySchema>;
 
+/** Named for what it held before ADR 0010, so earlier caches are still read. */
 const cachePath = (dirs: Dirs) => join(dirs.data, "capabilities.json");
 
 /** Keyed by where the Model lives rather than its Alias, which the User may rename. */
@@ -95,8 +79,6 @@ export async function modelInfo(deps: ModelInfoDeps, resolved: ResolvedModel, op
   const adapter = adapterFor(resolved.model);
   const guide = adapter.parameterGuide?.(resolved.model.modelId, "image");
   const builtIn: ModelInfo = {
-    capabilities: adapter.builtInCapabilities(resolved.model.modelId),
-    source: "built-in",
     docsUrl: adapter.docsUrl(resolved.model.modelId, "image"),
     ...(guide === undefined ? {} : { guide }),
   };
@@ -135,12 +117,8 @@ export async function modelInfo(deps: ModelInfoDeps, resolved: ResolvedModel, op
     }
   }
 
-  if (entry === undefined) return builtIn;
-  return {
-    ...builtIn,
-    ...(entry.capabilities === null ? {} : { capabilities: entry.capabilities, source: "provider" as const }),
-    ...(entry.parameterSchema === undefined ? {} : { parameterSchema: entry.parameterSchema }),
-  };
+  if (entry?.parameterSchema === undefined) return builtIn;
+  return { ...builtIn, parameterSchema: entry.parameterSchema };
 }
 
 /** Asks the Provider again about the Model with this Alias, e.g. after the User added it. Never fails. */
@@ -166,14 +144,8 @@ async function refreshMatching(deps: ModelInfoDeps, wanted: (resolved: ResolvedM
   }
 }
 
-/** Validates what an adapter reported, so a Provider's odd answer can never break `generate_image`. */
 function toEntry(info: ProviderModelInfo | undefined, now: Date): CacheEntry {
-  const capabilities = capabilitiesSchema.safeParse(info?.capabilities);
-  return {
-    fetchedAt: now.toISOString(),
-    capabilities: capabilities.success ? capabilities.data : null,
-    ...(info?.parameterSchema === undefined ? {} : { parameterSchema: info.parameterSchema }),
-  };
+  return { fetchedAt: now.toISOString(), ...(info?.parameterSchema === undefined ? {} : { parameterSchema: info.parameterSchema }) };
 }
 
 async function readCache(dirs: Dirs): Promise<Record<string, CacheEntry>> {

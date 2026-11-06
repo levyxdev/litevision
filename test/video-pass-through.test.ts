@@ -106,13 +106,13 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
 
   test("a duration or tier the old tables did not list is sent as given, not rounded", async () => {
     harness = await startHarness(setup());
-    await video({ duration: 17, resolution: "4K" });
+    await video({ provider_options: { seconds: "17", resolution: "4K" } });
     expect(await sentBody()).toMatchObject({ seconds: "17", resolution: "4K" });
   });
 
   test("the Job history records what litevision read from the final request", async () => {
     harness = await startHarness(setup());
-    await video({ aspect_ratio: "16:9", provider_options: { seconds: "5" } });
+    await video({ provider_options: { ratio: "16:9", seconds: "5" } });
     const [job] = await readHistory(harness);
     expect(job!.parameters).toMatchObject({ requestedShape: "16:9", requestedSeconds: 5 });
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });

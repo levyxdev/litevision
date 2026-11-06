@@ -48,9 +48,7 @@ function veniceSetup(routes: HarnessOptions["routes"] = {}): HarnessOptions {
 interface GenerateResult {
   job_id: string;
   files: string[];
-  aspect_ratio: string;
-  size: string;
-  aspect_ratio_adjusted: boolean;
+  requested_shape: string | null;
   shortfall?: string;
 }
 
@@ -87,7 +85,7 @@ async function writeReferences(...names: string[]): Promise<string[]> {
 describe("text-to-image with a venice Model", () => {
   test("saves the image and returns its path, sending the prompt verbatim with litevision's defaults", async () => {
     harness = await startHarness(veniceSetup());
-    const output = outputOf(await generate({ aspect_ratio: "16:9" }));
+    const output = outputOf(await generate({}));
 
     expect(output.files).toHaveLength(1);
     expect(await readFile(output.files[0]!)).toEqual(tinyPng);
@@ -97,44 +95,29 @@ describe("text-to-image with a venice Model", () => {
       model: "qwen-image-2",
       prompt: "a red fox",
       variants: 1,
-      aspect_ratio: "16:9",
       ...generateDefaults,
     });
   });
 
-  test("a Model that sizes in pixels gets width and height instead of an aspect ratio", async () => {
+  test("a Model that sizes in pixels takes width and height in provider_options, and the result is checked against them", async () => {
     harness = await startHarness(veniceSetup());
-    const output = outputOf(await generate({ model: "sd35", aspect_ratio: "16:9" }));
+    const output = outputOf(await generate({ model: "sd35", provider_options: { width: 1280, height: 720 } }));
 
-    expect(output).toMatchObject({ aspect_ratio: "16:9", size: "1280x720", aspect_ratio_adjusted: false });
-    const body = await bodyOf(generateUrl);
-    expect(body).toMatchObject({ model: "venice-sd35", width: 1280, height: 720 });
-    expect(body).not.toHaveProperty("aspect_ratio");
+    expect(output.requested_shape).toBe("1280x720");
+    expect(await bodyOf(generateUrl)).toMatchObject({ model: "venice-sd35", width: 1280, height: 720 });
   });
 
-  test("pixel sizes stay within Venice's limits and divisible by the Model's divisor", async () => {
-    harness = await startHarness(veniceSetup());
-    const output = outputOf(await generate({ model: "sd35", aspect_ratio: "3:2" }));
-    expect(output.size).toBe("1248x832");
-    expect(await bodyOf(generateUrl)).toMatchObject({ width: 1248, height: 832 });
-  });
 
-  test("a Model with resolution tiers gets an aspect ratio, and `resolution` passes through provider_options", async () => {
+  test("a Model with resolution tiers takes its aspect ratio and tier in provider_options", async () => {
     harness = await startHarness(veniceSetup());
-    outputOf(await generate({ model: "banana", aspect_ratio: "3:2", provider_options: { resolution: "2K" } }));
+    const output = outputOf(await generate({ model: "banana", provider_options: { aspect_ratio: "3:2", resolution: "2K" } }));
 
     const body = await bodyOf(generateUrl);
     expect(body).toMatchObject({ model: "nano-banana-pro", aspect_ratio: "3:2", resolution: "2K" });
     expect(body).not.toHaveProperty("width");
-    expect(body).not.toHaveProperty("height");
+    expect(output.requested_shape).toBe("3:2");
   });
 
-  test("an aspect ratio the Model lacks maps to the closest one Venice reports", async () => {
-    harness = await startHarness(veniceSetup());
-    const output = outputOf(await generate({ aspect_ratio: "3:2" }));
-    expect(output).toMatchObject({ aspect_ratio: "4:3", aspect_ratio_adjusted: true });
-    expect(await bodyOf(generateUrl)).toMatchObject({ aspect_ratio: "4:3" });
-  });
 
   test("prompt enhancement, safe mode, watermark and format are overridable through provider_options", async () => {
     harness = await startHarness(veniceSetup());
@@ -242,7 +225,9 @@ describe("a rejected option", () => {
 describe("reference-image editing with a Venice edit Model", () => {
   test("one reference goes to /image/edit as base64, with litevision's defaults", async () => {
     harness = await startHarness(veniceSetup({ [editUrl]: pngResponse }));
-    const output = outputOf(await generate({ model: "banana-edit", aspect_ratio: "16:9", references: await writeReferences("fox.png") }));
+    const output = outputOf(
+      await generate({ model: "banana-edit", references: await writeReferences("fox.png"), provider_options: { aspect_ratio: "16:9" } }),
+    );
 
     expect(output.files).toHaveLength(1);
     expect(await readFile(output.files[0]!)).toEqual(tinyPng);
@@ -292,37 +277,28 @@ describe("reference-image editing with a Venice edit Model", () => {
     expect(sent(multiEditUrl)).toHaveLength(1);
   });
 
-  test("an edit Model without reference images fails before any generation request", async () => {
-    harness = await startHarness(veniceSetup());
+  test("an edit Model without reference images is sent to /image/generate, and Venice's answer comes back (ADR 0010)", async () => {
+    harness = await startHarness(veniceSetup({ [generateUrl]: recorded("venice/invalid-request.json", 400) }));
     const result = await generate({ model: "banana-edit" });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("reference image");
-    expect(sent(generateUrl)).toHaveLength(0);
-    expect(sent(editUrl)).toHaveLength(0);
+    expect(sent(generateUrl)).toHaveLength(1);
+    expect(textOf(result)).toContain("Invalid request");
+    expect(textOf(result)).toContain("https://docs.venice.ai/api-reference/endpoint/image/edit");
   });
 });
 
-describe("live capabilities from Venice's model list", () => {
+describe("Venice's own description of its Models", () => {
   const listModels = (args: Record<string, unknown> = {}) => harness!.client.callTool({ name: "list_models", arguments: args });
   type Listed = { models: Array<Record<string, any>> };
 
-  test("list_models reports each Model's sizes and reference limits as Venice describes them", async () => {
+  test("list_models says Venice describes each Model it lists, with the docs link for its kind", async () => {
     harness = await startHarness(veniceSetup());
     const result = await listModels();
     expect(result.isError, textOf(result)).toBeFalsy();
     const byAlias = Object.fromEntries((result.structuredContent as Listed).models.map((model) => [model.alias, model]));
 
-    expect(byAlias.qwen!.capabilities.aspect_ratios.map((entry: { aspect_ratio: string }) => entry.aspect_ratio)).toEqual([
-      "1:1",
-      "16:9",
-      "9:16",
-      "4:3",
-      "3:4",
-    ]);
-    expect(byAlias.qwen!.capabilities).toMatchObject({ reference_images: false, max_images_per_job: 4 });
-    expect(byAlias.sd35!.capabilities.aspect_ratios).toContainEqual({ aspect_ratio: "9:16", size: "720x1280" });
-    expect(byAlias["banana-edit"]!.capabilities).toMatchObject({ reference_images: true, max_reference_images: 14, max_images_per_job: 4 });
-    expect(byAlias.firered!.capabilities).toMatchObject({ max_reference_images: 1 });
+    expect(byAlias.qwen!.parameters).toContain('Provider "venice" describes this Model');
+    expect(byAlias.qwen!).not.toHaveProperty("capabilities");
     expect(byAlias.qwen!.docs_url).toBe("https://docs.venice.ai/api-reference/endpoint/image/generate");
     expect(byAlias["banana-edit"]!.docs_url).toBe("https://docs.venice.ai/api-reference/endpoint/image/edit");
     expect(harness.requests.find((request) => request.url.includes("/models"))!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
@@ -335,44 +311,29 @@ describe("live capabilities from Venice's model list", () => {
     expect(model!.parameter_schema).toMatchObject({ resolutions: ["1K", "2K", "4K"], defaultResolution: "1K" });
   });
 
-  test("a second generation within a day asks for no model list and still sizes pixel models with width and height", async () => {
+  test("a second generation within a day asks for no model list", async () => {
     harness = await startHarness(veniceSetup());
     const modelListRequests = () => harness!.requests.filter((request) => request.url.includes("/models"));
 
-    outputOf(await generate({ model: "sd35", aspect_ratio: "16:9" }));
+    outputOf(await generate({ model: "sd35" }));
     const afterFirst = modelListRequests().length;
     expect(afterFirst).toBeGreaterThan(0);
 
-    outputOf(await generate({ model: "sd35", aspect_ratio: "9:16" }));
+    outputOf(await generate({ model: "sd35" }));
     expect(modelListRequests()).toHaveLength(afterFirst);
-    const body = await bodyOf(generateUrl, 1);
-    expect(body).toMatchObject({ model: "venice-sd35", width: 720, height: 1280 });
-    expect(body).not.toHaveProperty("aspect_ratio");
   });
 
-  test("a cached edit Model still refuses a Job without reference images, without asking for the model list", async () => {
-    harness = await startHarness(veniceSetup({ [editUrl]: pngResponse }));
-    outputOf(await generate({ model: "banana-edit", references: await writeReferences("fox.png") }));
-    const modelListRequests = harness.requests.filter((request) => request.url.includes("/models")).length;
 
-    const result = await generate({ model: "banana-edit" });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("edit model");
-    expect(harness.requests.filter((request) => request.url.includes("/models"))).toHaveLength(modelListRequests);
-    expect(sent(generateUrl)).toHaveLength(0);
-  });
-
-  test("with the model list unreachable, falls back to built-in capabilities and still sizes each Model the right way", async () => {
+  test("with the model list unreachable, generate_image still works and list_models shows the built-in Parameter Guide", async () => {
     const unreachable: Route = () => {
       throw new Error("connect ECONNREFUSED");
     };
     harness = await startHarness(veniceSetup({ [imageModelsUrl]: unreachable, [inpaintModelsUrl]: unreachable }));
 
-    outputOf(await generate({ model: "sd35", aspect_ratio: "16:9" }));
+    outputOf(await generate({ model: "sd35", provider_options: { width: 1280, height: 720 } }));
     expect(await bodyOf(generateUrl)).toMatchObject({ width: 1280, height: 720 });
-    outputOf(await generate({ model: "qwen", aspect_ratio: "16:9" }));
-    expect(await bodyOf(generateUrl, 1)).toMatchObject({ aspect_ratio: "16:9" });
-    expect(await bodyOf(generateUrl, 1)).not.toHaveProperty("width");
+    const [model] = ((await listModels({ model: "sd35" })).structuredContent as Listed).models;
+    expect(model!.parameter_guide.family).toContain("pixel-sized");
   });
 });
 

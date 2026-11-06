@@ -5,10 +5,8 @@ import { httpProviderError, providerError } from "./errors.ts";
 import { multipartBody } from "./multipart.ts";
 import { sendToProvider } from "./send.ts";
 import {
-  formatSize,
   ProviderError,
   type GeneratedImage,
-  type ImageCapabilities,
   type ImageRequest,
   type ModelIdsResult,
   type ModelTarget,
@@ -29,32 +27,6 @@ const errorSchema = z.object({
   }),
 });
 
-const gptImage: ImageCapabilities = {
-  sizes: [
-    { aspectRatio: "1:1", width: 1024, height: 1024 },
-    { aspectRatio: "3:2", width: 1536, height: 1024 },
-    { aspectRatio: "2:3", width: 1024, height: 1536 },
-  ],
-  maxReferences: 16,
-  maxImages: 10,
-};
-
-const dalle3: ImageCapabilities = {
-  sizes: [
-    { aspectRatio: "1:1", width: 1024, height: 1024 },
-    { aspectRatio: "16:9", width: 1792, height: 1024 },
-    { aspectRatio: "9:16", width: 1024, height: 1792 },
-  ],
-  maxReferences: 0,
-  maxImages: 1,
-};
-
-const dalle2: ImageCapabilities = {
-  sizes: [{ aspectRatio: "1:1", width: 1024, height: 1024 }],
-  maxReferences: 1,
-  maxImages: 10,
-};
-
 /** Text-to-image goes to `/images/generations` as JSON; with references, to `/images/edits` as multipart. */
 function buildRequest(request: ImageRequest, target: ModelTarget): { url: string; init: RequestInit } {
   const baseUrl = target.baseUrl.replace(/\/+$/, "");
@@ -63,7 +35,6 @@ function buildRequest(request: ImageRequest, target: ModelTarget): { url: string
     model: target.modelId,
     prompt: request.prompt,
     n: request.n,
-    ...(request.size === undefined ? {} : { size: formatSize(request.size) }),
     ...request.providerOptions,
   };
 
@@ -85,14 +56,7 @@ function buildRequest(request: ImageRequest, target: ModelTarget): { url: string
 
 /** OpenAI's images API: synchronous, results as base64 or links. */
 export const openaiImages: ProtocolAdapter = {
-  builtInCapabilities(modelId) {
-    if (modelId.startsWith("dall-e-3")) return dalle3;
-    if (modelId.startsWith("dall-e-2")) return dalle2;
-    // gpt-image-1 and its successors; also the safest guess for a relay's own model names.
-    return gptImage;
-  },
-
-  // OpenAI's `/models` says nothing about image sizes or limits, so there is no `fetchModelInfo`.
+  // OpenAI's `/models` says nothing about a model's parameters, so there is no `fetchModelInfo`.
 
   docsUrl: () => "https://platform.openai.com/docs/api-reference/images/create",
 

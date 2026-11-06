@@ -7,11 +7,10 @@ import { appendHistory, readJob, type JobRecord } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
 import { parseShape } from "./protocols/parameter-guide.ts";
-import { ratioOf, type NormalisedRequest, type NormalisedVideoRequest } from "./protocols/capabilities.ts";
+import type { NormalisedRequest, NormalisedVideoRequest } from "./protocols/requests.ts";
 import { providerError, providerLabel } from "./protocols/errors.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
 import {
-  formatSize,
   ProviderError,
   type GeneratedFile,
   type JobContext,
@@ -127,8 +126,6 @@ export class JobRunner {
     const { request } = spec.normalised;
     const base = this.baseFor(spec, "image", request.prompt, {
       n: request.n,
-      ...(spec.normalised.requestedAspectRatio === undefined ? {} : { aspectRatio: spec.normalised.requestedAspectRatio }),
-      ...(request.size === undefined ? {} : { size: request.size }),
       requestedShape: spec.normalised.requestedShape,
       references: request.references.map((reference) => reference.path),
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
@@ -154,12 +151,9 @@ export class JobRunner {
     }
     const base = this.baseFor(spec, "video", request.prompt, {
       n: 1,
-      ...(request.aspectRatio === undefined ? {} : { aspectRatio: request.aspectRatio }),
       requestedShape: spec.normalised.requestedShape,
       requestedSeconds: spec.normalised.requestedSeconds,
       references: request.references.map((reference) => reference.path),
-      ...(request.seconds === undefined ? {} : { seconds: request.seconds }),
-      ...(request.resolution === undefined ? {} : { resolution: request.resolution }),
       ...(request.firstFrame === undefined ? {} : { firstFrame: request.firstFrame.path }),
       ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame.path }),
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
@@ -390,8 +384,9 @@ function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; as
   if (typeof width === "number" && typeof height === "number" && width > 0 && height > 0) {
     return { ratio: width / height, asked: `${width}x${height} in provider_options` };
   }
-  if (parameters.size === undefined) return undefined;
-  return { ratio: ratioOf(parameters.size.aspectRatio), asked: `${parameters.size.aspectRatio} (${formatSize(parameters.size)})` };
+  const { size } = parameters;
+  const ratio = size === undefined ? undefined : parseShape(size.aspectRatio);
+  return size === undefined || ratio === undefined ? undefined : { ratio: ratio.ratio, asked: `${size.aspectRatio} (${size.width}x${size.height})` };
 }
 
 /**

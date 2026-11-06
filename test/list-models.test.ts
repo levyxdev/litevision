@@ -16,7 +16,7 @@ afterEach(async () => {
 const listModels = () => harness!.client.callTool({ name: "list_models", arguments: {} });
 
 describe("list_models", () => {
-  test("returns each Model's Alias, Provider, Protocol, capabilities and Model Notes, plus the default", async () => {
+  test("returns each Model's Alias, Provider, Protocol, Parameter Guide summary, Model Notes and Standing Options, plus the default", async () => {
     harness = await startHarness({
       config: {
         providers: [openai, relay],
@@ -47,16 +47,6 @@ describe("list_models", () => {
           parameters: expect.stringContaining("Parameter Guide for GPT Image 1.x"),
           known_good_options: {},
           suspect_options: {},
-          capabilities: {
-            aspect_ratios: [
-              { aspect_ratio: "1:1", size: "1024x1024" },
-              { aspect_ratio: "3:2", size: "1536x1024" },
-              { aspect_ratio: "2:3", size: "1024x1536" },
-            ],
-            reference_images: true,
-            max_reference_images: 16,
-            max_images_per_job: 10,
-          },
         },
         {
           alias: "dalle",
@@ -71,23 +61,13 @@ describe("list_models", () => {
           parameters: expect.stringContaining("litevision has no Parameter Guide for this model id"),
           known_good_options: {},
           suspect_options: {},
-          capabilities: {
-            aspect_ratios: [
-              { aspect_ratio: "1:1", size: "1024x1024" },
-              { aspect_ratio: "16:9", size: "1792x1024" },
-              { aspect_ratio: "9:16", size: "1024x1792" },
-            ],
-            reference_images: false,
-            max_reference_images: 0,
-            max_images_per_job: 1,
-          },
         },
       ],
     });
     const text = textOf(result);
     expect(text).toContain("gpt-image (default image)");
     expect(text).toContain("photoreal, legible text");
-    expect(text).toContain("no reference images");
+    expect(text).toContain("no Parameter Guide");
   });
 
   test("with no Model configured, tells the Agent to call open_settings", async () => {
@@ -104,7 +84,7 @@ describe("list_models", () => {
     const result = await listModels();
     expect(result.isError).toBeFalsy();
     const [model] = (result.structuredContent as { models: Array<Record<string, unknown>> }).models;
-    expect(model).toMatchObject({ alias: "odd", capabilities: null });
+    expect(model).toMatchObject({ alias: "odd", docs_url: null });
     expect(String(model!.problem)).toContain('Protocol "carrier-pigeon"');
   });
 

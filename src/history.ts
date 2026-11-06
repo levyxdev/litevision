@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Dirs } from "./dirs.ts";
 import type { MediaFacts } from "./media.ts";
-import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
+import type { Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
 
 /**
  * The Job history, `jobs.jsonl`: append-only, one JSON record per line. A Job gets several records over its life
@@ -16,10 +16,10 @@ import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle 
 export interface JobParameters {
   /** Always 1 for a video Job. */
   n: number;
-  /** What the Agent gave as `aspect_ratio`; absent when it gave none, and on Jobs recorded since it went (ADR 0010). */
-  aspectRatio?: AspectRatio;
-  /** The size litevision translated `aspect_ratio` to; absent when it sent none of its own. */
-  size?: ImageSize;
+  /** Jobs recorded before ADR 0010 only: the `aspect_ratio` the Agent asked for. */
+  aspectRatio?: string;
+  /** Jobs recorded before ADR 0010 only: the size litevision chose and sent. */
+  size?: { aspectRatio: string; width: number; height: number };
   /**
    * The shape the final request asked for, as litevision read it from the request's fields (ADR 0010), e.g. `16:9`;
    * null when it could not read one, so the result's shape went unchecked. Absent on Jobs recorded before.
@@ -32,9 +32,9 @@ export interface JobParameters {
   requestedSeconds?: number | null;
   /** Absolute paths of the reference images. */
   references: string[];
-  /** Video Jobs only: what the Agent gave as `duration`, in seconds; absent when it gave none. */
+  /** Video Jobs recorded before ADR 0010 only: the length litevision chose, in seconds. */
   seconds?: number;
-  /** Video Jobs only: what the Agent gave as `resolution`; absent when it gave none. */
+  /** Video Jobs recorded before ADR 0010 only: the resolution tier litevision chose. */
   resolution?: string;
   /** Video Jobs recorded before ADR 0010 only: true when the first frame decided the video's shape, so it was not checked. */
   followsFirstFrame?: true;

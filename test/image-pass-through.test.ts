@@ -216,4 +216,22 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(together).toMatchObject({ width: 1344, height: 768 });
     expect(together).not.toHaveProperty("quality");
   });
+
+  test("the removed parameters are refused by name, not silently ignored (ADR 0010)", async () => {
+    harness = await startHarness(setup());
+    const image = await generate({ model: "flare", aspect_ratio: "16:9" });
+    expect(image.isError).toBe(true);
+    expect(textOf(image)).toContain("aspect_ratio");
+
+    const video = await harness.client.callTool({ name: "generate_video", arguments: { prompt: "a fox runs", duration: 5, resolution: "720P" } });
+    expect(video.isError).toBe(true);
+    expect(textOf(video)).toContain("duration");
+
+    const comparison = await harness.client.callTool({
+      name: "generate_comparison",
+      arguments: { variants: [{ prompt: "a fox", model: "flare" }, { prompt: "a fox", model: "flux2" }], aspect_ratio: "16:9" },
+    });
+    expect(comparison.isError).toBe(true);
+    expect(harness.requests).toHaveLength(0);
+  });
 });

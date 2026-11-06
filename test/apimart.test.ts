@@ -105,7 +105,7 @@ describe("apimart Protocol", () => {
     );
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
     await writeFile(join(harness.cwd, "owl.png"), tinyPng);
-    const result = await generate(harness, { references: ["fox.png", "owl.png"], aspect_ratio: "16:9" });
+    const result = await generate(harness, { references: ["fox.png", "owl.png"], provider_options: { size: "16:9" } });
 
     expect(result.isError).toBeFalsy();
     const uploads = harness.requests.filter((request) => `${request.method} ${request.url}` === uploadUrl);
@@ -314,33 +314,28 @@ describe("apimart Protocol", () => {
   });
 });
 
-describe("apimart capabilities", () => {
-  test("come live from the Model's schema, with its parameter schema for provider_options", async () => {
+describe("what list_models knows about an APIMart Model", () => {
+  test("APIMart's own schema for the Model, which wins over the Parameter Guide", async () => {
     harness = await startHarness(apimartSetup({ [schemaUrl("gpt-image-2")]: recorded("apimart/schema-gpt-image-2.json") }));
     const result = await harness.client.callTool({ name: "list_models", arguments: { model: "gpt2" } });
 
     const [model] = (result.structuredContent as { models: any[] }).models;
-    expect(model.capabilities.aspect_ratios.map((ratio: { aspect_ratio: string }) => ratio.aspect_ratio).sort()).toEqual(
-      ["16:9", "1:1", "2:3", "3:2", "3:4", "4:3", "9:16"].sort(),
-    );
-    expect(model.capabilities.max_reference_images).toBe(15);
-    expect(model.capabilities.max_images_per_job).toBe(4);
     expect(model.parameter_schema.properties.resolution.enum).toEqual(["1k", "2k", "4k"]);
+    expect(model.parameter_guide).toBeNull();
+    expect(model).not.toHaveProperty("capabilities");
     expect(model.docs_url).toBe("https://docs.apimart.ai/en/api-reference/images/gpt-image-2/generation");
     const [schemaRequest] = harness.requests;
     expect(schemaRequest!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
   });
 
-  test("fall back to the built-in table when the schema cannot be fetched", async () => {
+  test("the built-in Parameter Guide when the schema cannot be fetched", async () => {
     harness = await startHarness(
       apimartSetup({ [schemaUrl("seedream-4.5")]: recorded("apimart/invalid-api-key.json", 404) }, "seedream-4.5"),
     );
-    const result = await harness.client.callTool({ name: "list_models", arguments: {} });
+    const result = await harness.client.callTool({ name: "list_models", arguments: { model: "gpt2" } });
 
     const [model] = (result.structuredContent as { models: any[] }).models;
-    expect(model.capabilities.aspect_ratios).toContainEqual({ aspect_ratio: "1:1", size: "2048x2048" });
-    expect(model.capabilities.aspect_ratios).toContainEqual({ aspect_ratio: "16:9", size: "2560x1440" });
-    expect(model.capabilities.max_reference_images).toBe(14);
+    expect(model.parameter_guide.family).toBe("Seedream 4.5 on APIMart");
     expect(model.docs_url).toBe("https://docs.apimart.ai/en/api-reference/images/seedream-4.5/generation");
   });
 });

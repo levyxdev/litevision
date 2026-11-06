@@ -42,10 +42,10 @@ import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
 import { mergeOptions } from "./standing-options.ts";
-import { describeCapabilities, describeVideoCapabilities, normaliseImageRequest, normaliseVideoRequest } from "./protocols/capabilities.ts";
+import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
 import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
 import { guideOutput, guideSummary, guideText, type ParameterGuide } from "./protocols/parameter-guide.ts";
-import { aspectRatios, formatSize, modalities, type AspectRatio, type Modality, type ProviderErrorKind } from "./protocols/protocol.ts";
+import { modalities, type Modality, type ProviderErrorKind } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
 import { settingsOpener } from "./settings/opener.ts";
 import { defaultSettingsIdleMs } from "./settings/server.ts";
@@ -73,9 +73,9 @@ export const instructions = `litevision generates images and videos through Mode
 
 - Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
 - Use the Model the User names. When they name none, omit \`model\` for the default, unless the request needs something the default lacks; then choose with \`list_models\`.
-- For \`provider_options\`, reuse the Model's Known-good Options. For any other option, or one marked suspect, read the Model's docs and parameter schema first (\`list_models\` with \`model\`).
+- litevision passes \`provider_options\` to the Provider as they are and translates nothing: write each Model's own fields, such as the size, resolution or length, from its Parameter Guide (\`list_models\` with \`model\`). Without them the Provider's defaults apply. Reuse Known-good Options; for anything else, or an option marked suspect, read the Parameter Guide and docs first.
 - If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
-- Tell the User where the files are, and pass on whatever a result says was adjusted, did not match the request, or came back short.
+- Tell the User where the files are, and pass on whatever a result says did not match the request or came back short.
 - \`generate_comparison\` costs as much as all its Jobs. Start a Comparison only when the User asks for one or agrees to it.
 - When the User says what they think of a result, call \`rate_job\` with their verdict and a one-line reason in their words; when it is about one result of a Job with several, pass \`result\`. Never invent a verdict, and never rate a result yourself.
 - When the User chooses among a Comparison's results, call \`pick_result\`, only when the User actually chooses. A Pick is not a Rating: if they also give a verdict, call \`rate_job\` too.
@@ -102,31 +102,6 @@ const listedModelSchema = z.object({
     .describe(
       "Standing Options the User set: request fields every Job on this Model sends. Your `provider_options` are merged over them: your values win, objects merge key by key, and `null` removes a key for that Job.",
     ),
-  capabilities: z
-    .object({
-      aspect_ratios: z.array(z.object({ aspect_ratio: z.enum(aspectRatios), size: z.string() })),
-      reference_images: z.boolean(),
-      max_reference_images: z.number(),
-      max_images_per_job: z.number(),
-    })
-    .nullable()
-    .describe("An image Model's capabilities; null for a video Model, or when the Model cannot be used (`problem` then says why)."),
-  video_capabilities: z
-    .object({
-      resolutions: z.array(
-        z.object({
-          resolution: z.string().nullable().describe("The tier's name to pass as `resolution`; null when the Model takes none."),
-          aspect_ratios: z.array(z.object({ aspect_ratio: z.enum(aspectRatios), size: z.string() })),
-        }),
-      ),
-      durations: z.array(z.number()).describe("Every clip length in seconds the Model can make."),
-      default_duration: z.number(),
-      first_frame: z.boolean(),
-      last_frame: z.boolean(),
-      max_reference_images: z.number(),
-    })
-    .optional()
-    .describe("A video Model's capabilities; the first resolution is the default."),
   docs_url: z.string().nullable().describe("Where to read which `provider_options` this Model accepts."),
   parameters: z
     .string()
@@ -223,8 +198,6 @@ async function listedModel(
   const notes = `${model.notes ? ` Notes: ${model.notes}` : ""}${model.standingOptions ? ` Standing Options: ${JSON.stringify(model.standingOptions)}.` : ""}`;
 
   let described: {
-    output: Partial<z.infer<typeof listedModelSchema>>;
-    summary: string;
     docsUrl: string;
     parameterSchema?: unknown;
     guide?: ParameterGuide;
@@ -235,24 +208,12 @@ async function listedModel(
     if (model.modality === "video") {
       const info = videoModelInfo({ model, provider });
       described = {
-        output: { capabilities: null, video_capabilities: videoCapabilitiesOutput(info.capabilities) },
-        summary: describeVideoCapabilities(info.capabilities),
         docsUrl: info.docsUrl,
         ...(info.guide === undefined ? {} : { guide: info.guide }),
       };
     } else {
       const info = await modelInfo(deps, { model, provider });
-      const { capabilities } = info;
       described = {
-        output: {
-          capabilities: {
-            aspect_ratios: capabilities.sizes.map((size) => ({ aspect_ratio: size.aspectRatio, size: formatSize(size) })),
-            reference_images: capabilities.maxReferences > 0,
-            max_reference_images: capabilities.maxReferences,
-            max_images_per_job: capabilities.maxImages,
-          },
-        },
-        summary: describeCapabilities(capabilities),
         docsUrl: info.docsUrl,
         ...(info.parameterSchema === undefined ? {} : { parameterSchema: info.parameterSchema }),
         ...(info.guide === undefined ? {} : { guide: info.guide }),
@@ -261,7 +222,7 @@ async function listedModel(
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     return {
-      output: { ...base, capabilities: null, docs_url: null, problem: error.message },
+      output: { ...base, docs_url: null, problem: error.message },
       text: `${heading} Cannot be used: ${error.message}${notes}`,
     };
   }
@@ -269,14 +230,12 @@ async function listedModel(
   const record = optionsOf(ratedJobs, model);
   const output: z.infer<typeof listedModelSchema> = {
     ...base,
-    capabilities: null,
-    ...described.output,
     docs_url: described.docsUrl,
     parameters: parametersSummary(described, model.provider),
     known_good_options: record.knownGood,
     suspect_options: suspectOutput(record),
   };
-  let text = `${heading} Supports ${described.summary}${notes} provider_options docs: ${described.docsUrl}`;
+  let text = `${heading}${notes} provider_options docs: ${described.docsUrl}`;
   if (!detailed) text += ` ${output.parameters}`;
   const goodKeys = Object.keys(record.knownGood);
   const suspectKeys = Object.keys(record.suspect);
@@ -390,20 +349,6 @@ function describeRecentPick({ pick, job, picked }: PickWithJob): string {
 function promptStart(prompt: string): string {
   const line = prompt.replace(/\s+/g, " ").trim();
   return line.length <= promptStartLength ? line : `${line.slice(0, promptStartLength).trimEnd()}…`;
-}
-
-function videoCapabilitiesOutput(capabilities: ReturnType<typeof videoModelInfo>["capabilities"]) {
-  return {
-    resolutions: capabilities.resolutions.map((tier) => ({
-      resolution: tier.name ?? null,
-      aspect_ratios: tier.sizes.map((size) => ({ aspect_ratio: size.aspectRatio, size: formatSize(size) })),
-    })),
-    durations: capabilities.durations,
-    default_duration: capabilities.defaultDuration,
-    first_frame: capabilities.firstFrame,
-    last_frame: capabilities.lastFrame,
-    max_reference_images: capabilities.maxReferences,
-  };
 }
 
 function suspectOutput(record: OptionsRecord) {
@@ -562,7 +507,6 @@ interface PreparedJob {
 interface ImageArgs {
   prompt: string;
   n: number;
-  aspect_ratio?: AspectRatio;
   references: string[];
   output_path?: string;
   provider_options: Record<string, unknown>;
@@ -570,9 +514,6 @@ interface ImageArgs {
 
 interface VideoArgs {
   prompt: string;
-  aspect_ratio?: AspectRatio;
-  duration?: number;
-  resolution?: string;
   first_frame?: string;
   last_frame?: string;
   references: string[];
@@ -591,10 +532,6 @@ const imageJobShape = {
     .describe(
       "The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 16:9 or 3840x2160; null when it asks for none litevision can read, so the result's shape is not checked. Compare it with `observed`.",
     ),
-  aspect_ratio: z.enum(aspectRatios).nullable().describe("Aspect ratio litevision translated `aspect_ratio` to; null when none was given."),
-  size: z.string().nullable().describe("Size litevision translated `aspect_ratio` to, e.g. 1536x1024; null when none was given."),
-  requested_aspect_ratio: z.enum(aspectRatios).nullable(),
-  aspect_ratio_adjusted: z.boolean().describe("True when the Model does not support the requested aspect ratio and the closest one was used."),
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
   mismatch: mismatchSchema,
@@ -613,13 +550,6 @@ const videoJobShape = {
     .number()
     .nullable()
     .describe("The length in seconds the request sent asks for, as litevision read it; null when unreadable, so the length is not checked."),
-  aspect_ratio: z.enum(aspectRatios).nullable().describe("The `aspect_ratio` given; null when none was."),
-  size: z.null().describe("Always null: litevision chooses no size."),
-  resolution: z.string().nullable().describe("The `resolution` given; null when none was."),
-  duration: z.number().nullable().describe("The `duration` given; null when none was."),
-  requested_aspect_ratio: z.enum(aspectRatios).nullable(),
-  aspect_ratio_adjusted: z.boolean().describe("Always false: nothing is adjusted."),
-  duration_adjusted: z.boolean().describe("Always false: nothing is rounded."),
   observed: observedSchema,
   mismatch: mismatchSchema,
 };
@@ -669,13 +599,11 @@ export function createServer(deps: ServerDeps): McpServer {
       {
         prompt: args.prompt,
         n: args.n,
-        ...(args.aspect_ratio === undefined ? {} : { aspectRatio: args.aspect_ratio }),
         references: args.references,
         providerOptions: mergeOptions(model.standingOptions ?? {}, args.provider_options),
       },
       model,
       adapter,
-      info,
       cwd,
     );
     const outputDir = args.output_path === undefined ? undefined : resolve(cwd, args.output_path);
@@ -684,22 +612,11 @@ export function createServer(deps: ServerDeps): McpServer {
       start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
-        const { size } = normalised.request;
-        const output = {
-          ...jobOutput(job),
-          requested_shape: normalised.requestedShape,
-          aspect_ratio: size?.aspectRatio ?? null,
-          size: size === undefined ? null : formatSize(size),
-          requested_aspect_ratio: normalised.requestedAspectRatio ?? null,
-          aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
-        };
-        const adjustment = normalised.aspectRatioAdjusted
-          ? ` ${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.`
-          : "";
+        const output = { ...jobOutput(job), requested_shape: normalised.requestedShape };
         const text =
           job.status === "running"
-            ? `${jobText(job)} ${requestedText(normalised.requestedShape)}${adjustment}`
-            : `Saved ${job.files.length} image(s) from ${model.alias}, Job ${job.id}. ${requestedText(normalised.requestedShape)}${adjustment}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
+            ? `${jobText(job)} ${requestedText(normalised.requestedShape)}`
+            : `Saved ${job.files.length} image(s) from ${model.alias}, Job ${job.id}. ${requestedText(normalised.requestedShape)}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
         return { output, text };
       },
     };
@@ -714,9 +631,6 @@ export function createServer(deps: ServerDeps): McpServer {
     const normalised = await normaliseVideoRequest(
       {
         prompt: args.prompt,
-        ...(args.aspect_ratio === undefined ? {} : { aspectRatio: args.aspect_ratio }),
-        ...(args.duration === undefined ? {} : { duration: args.duration }),
-        ...(args.resolution === undefined ? {} : { resolution: args.resolution }),
         ...(args.first_frame === undefined ? {} : { firstFrame: args.first_frame }),
         ...(args.last_frame === undefined ? {} : { lastFrame: args.last_frame }),
         references: args.references,
@@ -733,19 +647,7 @@ export function createServer(deps: ServerDeps): McpServer {
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
-        const { request } = normalised;
-        const output = {
-          ...jobOutput(job),
-          requested_shape: normalised.requestedShape,
-          requested_duration: normalised.requestedSeconds,
-          aspect_ratio: request.aspectRatio ?? null,
-          size: null,
-          resolution: request.resolution ?? null,
-          duration: request.seconds ?? null,
-          requested_aspect_ratio: normalised.requestedAspectRatio ?? null,
-          aspect_ratio_adjusted: false,
-          duration_adjusted: false,
-        };
+        const output = { ...jobOutput(job), requested_shape: normalised.requestedShape, requested_duration: normalised.requestedSeconds };
         const asked = requestedVideoText(normalised.requestedShape, normalised.requestedSeconds);
         const text =
           job.status === "running"
@@ -773,7 +675,8 @@ export function createServer(deps: ServerDeps): McpServer {
     {
       description:
         "Generate images from a text prompt with one of the User's configured Models. Saves the images locally and returns their file paths.",
-      inputSchema: {
+      // Strict, so a parameter that no longer exists (`aspect_ratio`, ADR 0010) is refused by name, not ignored.
+      inputSchema: z.strictObject({
         prompt: z.string().min(1).describe("Sent to the Model verbatim."),
         model: z.string().optional().describe("Alias of the Model to use. Omit to use the default image Model."),
         n: z
@@ -782,12 +685,6 @@ export function createServer(deps: ServerDeps): McpServer {
           .positive()
           .default(1)
           .describe("How many images this Job brings back: sent as the Model's own count field, or as that many requests where it has none."),
-        aspect_ratio: z
-          .enum(aspectRatios)
-          .optional()
-          .describe(
-            "Wanted aspect ratio, translated to the Model's own size field; a size in `provider_options` overrides it. Omit for no size at all: the Provider's default applies.",
-          ),
         references: z
           .array(z.string().min(1))
           .default([])
@@ -805,7 +702,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .describe(
             "The Model's own request fields, passed through untouched, e.g. { \"size\": \"2048x1152\", \"quality\": \"high\" } for OpenAI: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt, reference image fields and response format are litevision's.",
           ),
-      },
+      }),
       outputSchema: imageJobShape,
     },
     async ({ model: alias, ...args }) => runSingle(async () => prepareImage(resolveModel(await loadConfig(deps.dirs), alias), args)),
@@ -816,26 +713,9 @@ export function createServer(deps: ServerDeps): McpServer {
     {
       description:
         "Generate one video from a text prompt with one of the User's configured video Models, optionally from a first and last frame or reference images. Saves the video locally and returns its file path. Videos often take minutes: the Job then keeps running in the background.",
-      inputSchema: {
+      inputSchema: z.strictObject({
         prompt: z.string().min(1).describe("Sent to the Model verbatim. Describe motion and camera movement, not only the scene."),
         model: z.string().optional().describe("Alias of the video Model to use. Omit to use the default video Model."),
-        aspect_ratio: z
-          .enum(aspectRatios)
-          .optional()
-          .describe(
-            "Wanted aspect ratio, sent in the Model's own shape field; a shape in `provider_options` overrides it. Omit for the Model's default. Nothing is adjusted.",
-          ),
-        duration: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe("Wanted length in seconds, sent as given in the Model's own length field. Omit for the Model's default. Nothing is rounded."),
-        resolution: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("A resolution tier, e.g. 720P, sent as given; see the Model's Parameter Guide. Omit for the Model's default."),
         first_frame: z.string().min(1).optional().describe("Local path of an image the video starts from."),
         last_frame: z.string().min(1).optional().describe("Local path of an image the video ends on."),
         references: z
@@ -853,7 +733,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .describe(
             "The Model's own request fields, passed through untouched, e.g. { \"resolution\": \"1080P\", \"ratio\": \"9:16\", \"seconds\": \"10\" } for Wan 2.7: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt and media fields are litevision's.",
           ),
-      },
+      }),
       outputSchema: videoJobShape,
     },
     async ({ model: alias, ...args }) => runSingle(async () => prepareVideo(resolveModel(await loadConfig(deps.dirs), alias, "video"), args)),
@@ -863,10 +743,10 @@ export function createServer(deps: ServerDeps): McpServer {
     "generate_comparison",
     {
       description: `Start a Comparison: 2 to ${maxComparisonVariants} Jobs together for one request, differing in prompt, in Model, or both, so the User can choose among their results. All variants' Models must share one Modality. Start one only when the User asks for a Comparison or agrees to one: it costs as much as all its Jobs. Saves each Job's files locally and returns them under one Comparison id.`,
-      inputSchema: {
+      inputSchema: z.strictObject({
         variants: z
           .array(
-            z.object({
+            z.strictObject({
               prompt: z.string().min(1).describe("Sent to this variant's Model verbatim."),
               model: z.string().optional().describe("Alias of this variant's Model. Omit to use the default Model of the Comparison's Modality."),
               n: z
@@ -888,12 +768,6 @@ export function createServer(deps: ServerDeps): McpServer {
           .enum(modalities)
           .optional()
           .describe("image or video. Omit to take it from the variants' Models; when no variant names one, image."),
-        aspect_ratio: z
-          .enum(aspectRatios)
-          .optional()
-          .describe(
-            "Wanted aspect ratio for every Job, translated to each Model's own size field; a variant's `provider_options` override it. Omit for each Model's default.",
-          ),
         references: z
           .array(z.string().min(1))
           .default([])
@@ -903,13 +777,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .min(1)
           .optional()
           .describe("Folder to save every Job's files in; created if missing. Omit to save under a dated folder in the User's home directory."),
-        duration: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe("Video Comparisons only: wanted length in seconds. Omit for each Model's default."),
-      },
+      }),
       outputSchema: {
         comparison_id: z.string(),
         modality: z.enum(modalities),
@@ -920,15 +788,12 @@ export function createServer(deps: ServerDeps): McpServer {
           ),
       },
     },
-    async ({ variants, modality: wanted, aspect_ratio, references, output_path, duration }) => {
+    async ({ variants, modality: wanted, references, output_path }) => {
       let prepared: PreparedJob[];
       let modality: Modality;
       try {
         const config = await loadConfig(deps.dirs);
         modality = comparisonModality(config, variants, wanted);
-        if (modality === "image" && duration !== undefined) {
-          throw new ConfigError("`duration` applies only to a video Comparison; leave it out for images.");
-        }
         if (modality === "video" && variants.some((variant) => (variant.n ?? 1) > 1)) {
           throw new ConfigError("A video Job makes one video, so leave `n` out of a video Comparison's variants.");
         }
@@ -938,8 +803,8 @@ export function createServer(deps: ServerDeps): McpServer {
             const resolved = resolveModel(config, variant.model, modality);
             const shared = { prompt: variant.prompt, references, provider_options: variant.provider_options, ...(output_path === undefined ? {} : { output_path }) };
             return modality === "video"
-              ? prepareVideo(resolved, { ...shared, ...(aspect_ratio === undefined ? {} : { aspect_ratio }), ...(duration === undefined ? {} : { duration }) })
-              : prepareImage(resolved, { ...shared, n: variant.n ?? 1, ...(aspect_ratio === undefined ? {} : { aspect_ratio }) });
+              ? prepareVideo(resolved, shared)
+              : prepareImage(resolved, { ...shared, n: variant.n ?? 1 });
           }),
         );
       } catch (error) {
@@ -1106,7 +971,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "list_models",
     {
       description:
-        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, capabilities, Model Notes, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model when the request needs something the default may lack. Pass `model` for one Model in detail, with the values of its Known-good and suspect options, its five most recent Ratings, the Picks of up to five Comparisons it took part in (most recently picked first), and the Provider's parameter schema.",
+        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, Model Notes, Standing Options, a summary of each Model's Parameter Guide, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model by what it accepts and costs. Pass `model` for one Model in detail: its full Parameter Guide (or the Provider's own parameter schema, which wins), the values of its Known-good and suspect options, its five most recent Ratings, and the Picks of up to five Comparisons it took part in (most recently picked first).",
       inputSchema: {
         model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
       },
