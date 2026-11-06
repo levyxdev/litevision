@@ -36,6 +36,8 @@ export const modelSchema = z.object({
   modality: z.enum(modalities).default("image"),
   notes: z.string().optional(),
   notesHistory: notesHistorySchema.optional(),
+  /** Standing Options (ADR 0010): request fields every Job on the Model sends, under the Agent's `provider_options`. */
+  standingOptions: z.record(z.string(), z.unknown()).optional(),
 });
 
 const configSchema = z.object({

@@ -41,6 +41,7 @@ import { JobFailedError, JobRunner, type JobState } from "./jobs.ts";
 import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
+import { mergeOptions } from "./standing-options.ts";
 import { describeCapabilities, describeVideoCapabilities, normaliseImageRequest, normaliseVideoRequest } from "./protocols/capabilities.ts";
 import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
 import { guideOutput, guideSummary, guideText, type ParameterGuide } from "./protocols/parameter-guide.ts";
@@ -96,6 +97,11 @@ const listedModelSchema = z.object({
   modality: z.enum(modalities).describe("What the Model generates: images with `generate_image`, videos with `generate_video`."),
   default: z.boolean().describe("True for the default Model of its Modality."),
   notes: z.string().describe("Model Notes: what the Model is good or bad at, agreed with the User."),
+  standing_options: z
+    .record(z.string(), z.unknown())
+    .describe(
+      "Standing Options the User set: request fields every Job on this Model sends. Your `provider_options` are merged over them: your values win, objects merge key by key, and `null` removes a key for that Job.",
+    ),
   capabilities: z
     .object({
       aspect_ratios: z.array(z.object({ aspect_ratio: z.enum(aspectRatios), size: z.string() })),
@@ -211,9 +217,10 @@ async function listedModel(
     modality: model.modality,
     default: isDefault,
     notes: model.notes ?? "",
+    standing_options: model.standingOptions ?? {},
   };
   const heading = `${model.alias}${isDefault ? ` (default ${model.modality})` : ""}: ${model.modality} Model ${model.modelId} on ${model.provider} via ${model.protocol}.`;
-  const notes = model.notes ? ` Notes: ${model.notes}` : "";
+  const notes = `${model.notes ? ` Notes: ${model.notes}` : ""}${model.standingOptions ? ` Standing Options: ${JSON.stringify(model.standingOptions)}.` : ""}`;
 
   let described: {
     output: Partial<z.infer<typeof listedModelSchema>>;
@@ -626,7 +633,13 @@ export function createServer(deps: ServerDeps): McpServer {
     const credential = await requireCredential(deps.dirs, resolved.provider);
     const info = await modelInfo(infoDeps, resolved);
     const normalised = await normaliseImageRequest(
-      { prompt: args.prompt, n: args.n, aspectRatio: args.aspect_ratio, references: args.references, providerOptions: args.provider_options },
+      {
+        prompt: args.prompt,
+        n: args.n,
+        aspectRatio: args.aspect_ratio,
+        references: args.references,
+        providerOptions: mergeOptions(model.standingOptions ?? {}, args.provider_options),
+      },
       model,
       adapter,
       info,
@@ -673,7 +686,7 @@ export function createServer(deps: ServerDeps): McpServer {
         ...(args.first_frame === undefined ? {} : { firstFrame: args.first_frame }),
         ...(args.last_frame === undefined ? {} : { lastFrame: args.last_frame }),
         references: args.references,
-        providerOptions: args.provider_options,
+        providerOptions: mergeOptions(model.standingOptions ?? {}, args.provider_options),
       },
       model,
       adapter,

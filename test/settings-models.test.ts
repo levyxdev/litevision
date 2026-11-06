@@ -265,6 +265,63 @@ describe("Model Notes", () => {
   });
 });
 
+describe("Standing Options (ADR 0010)", () => {
+  const withModel = { config: { providers: [openai], models: [gptImage] }, credentials: { openai: { apiKey } } };
+  const edit = (standingOptions: unknown) => harness!.send("PATCH", "/api/models/gpt-image", { body: { standingOptions } });
+
+  test("saving Standing Options stores them on the Model and shows them again; clearing them removes them", async () => {
+    const h = await start(withModel);
+    const saved = await edit({ quality: "high", background: "opaque" });
+    expect(saved.status).toBe(200);
+    expect(saved.json().model.standingOptions).toEqual({ quality: "high", background: "opaque" });
+    expect((await h.readConfig()).models[0].standingOptions).toEqual({ quality: "high", background: "opaque" });
+    expect((await h.send("GET", "/api/models")).json().models[0].standingOptions).toEqual({ quality: "high", background: "opaque" });
+
+    const cleared = await edit(null);
+    expect(cleared.status).toBe(200);
+    expect(cleared.json().model).not.toHaveProperty("standingOptions");
+    expect((await h.readConfig()).models[0]).toEqual(gptImage);
+  });
+
+  test("an empty object clears them too", async () => {
+    const h = await start(withModel);
+    await edit({ quality: "high" });
+    expect((await edit({})).status).toBe(200);
+    expect((await h.readConfig()).models[0]).toEqual(gptImage);
+  });
+
+  test("rejects Standing Options that are not a JSON object, and says why", async () => {
+    const h = await start(withModel);
+    for (const value of [["quality", "high"], "quality=high", 3]) {
+      const response = await edit(value);
+      expect(response.status).toBe(400);
+      expect(response.json().error).toContain("Standing Options must be a JSON object");
+    }
+    expect((await h.readConfig()).models[0]).toEqual(gptImage);
+  });
+
+  test("rejects Standing Options that set a field the Model's Protocol fills itself, naming it", async () => {
+    const h = await start(withModel);
+    const response = await edit({ prompt: "always a fox", quality: "high" });
+    expect(response.status).toBe(400);
+    expect(response.json().error).toContain("`prompt`");
+    expect(response.json().error).toContain("litevision fills");
+    expect((await h.readConfig()).models[0]).toEqual(gptImage);
+  });
+
+  test("can be set when adding a Model", async () => {
+    const h = await start(withModel);
+    const response = await h.send("POST", "/api/models", { body: { ...gptImage, alias: "hq", standingOptions: { quality: "high" } } });
+    expect(response.status).toBe(201);
+    expect((await h.readConfig()).models[1].standingOptions).toEqual({ quality: "high" });
+  });
+
+  test("the Model form edits them", async () => {
+    const h = await start();
+    expect((await h.send("GET", "/")).text).toContain("Standing Options");
+  });
+});
+
 describe("Models area", () => {
   test("the settings page has a Models area", async () => {
     const h = await start();
