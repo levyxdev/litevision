@@ -417,6 +417,11 @@ const observedSchema = z
   .array(z.object({ width: z.number(), height: z.number(), seconds: z.number().optional() }).nullable())
   .describe("What each saved file turned out to be, in the order of `files`, read from the file itself; null where litevision could not tell.");
 
+const requestedResolutionSchema = z
+  .string()
+  .nullable()
+  .describe("The resolution tier the request sent asks for, as written in its Protocol's tier field, e.g. 4K or 1080P; null when it sets none. Not checked against the result.");
+
 const mismatchSchema = z
   .string()
   .optional()
@@ -542,10 +547,7 @@ const imageJobShape = {
     .describe(
       "The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 16:9 or 3840x2160; null when it asks for none litevision can read, so the result's shape is not checked. Compare it with `observed`.",
     ),
-  requested_resolution: z
-    .string()
-    .nullable()
-    .describe("The resolution tier the request sent asks for, as written in the Model's own field, e.g. 4K or 1080P; null when it sets none. Not checked against the result."),
+  requested_resolution: requestedResolutionSchema,
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
   mismatch: mismatchSchema,
@@ -564,10 +566,7 @@ const videoJobShape = {
     .number()
     .nullable()
     .describe("The length in seconds the request sent asks for, as litevision read it; null when unreadable, so the length is not checked."),
-  requested_resolution: z
-    .string()
-    .nullable()
-    .describe("The resolution tier the request sent asks for, as written in the Model's own field, e.g. 4K or 1080P; null when it sets none. Not checked against the result."),
+  requested_resolution: requestedResolutionSchema,
   observed: observedSchema,
   mismatch: mismatchSchema,
 };
@@ -887,11 +886,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .nullable()
           .optional()
           .describe("Video Jobs: the length in seconds the request sent asks for, as litevision read it; null when unreadable."),
-        requested_resolution: z
-          .string()
-          .nullable()
-          .optional()
-          .describe("The resolution tier the request sent asks for, e.g. 4K or 1080P; null when it set none. Not checked against the result."),
+        requested_resolution: requestedResolutionSchema.optional(),
         observed: observedSchema,
         mismatch: mismatchSchema,
       },

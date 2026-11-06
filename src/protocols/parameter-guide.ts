@@ -1,3 +1,5 @@
+import type { ProtocolAdapter } from "./protocol.ts";
+
 /**
  * The Parameter Guide (ADR 0010): what litevision knows in advance about a Model's request parameters, written from
  * the Provider's docs and shipped with each release. It informs the Agent; nothing is checked or refused against it.
@@ -76,7 +78,7 @@ export function guideFor(entries: Array<{ matches: RegExp; guide: ParameterGuide
 export interface RequestFields {
   shape: ShapeField[];
   duration?: string;
-  /** The field holding the resolution tier, e.g. `resolution` (`4K`, `1080P`); shown to the User, never checked. */
+  /** The field holding the resolution tier, e.g. `resolution` (`4K`, `1080P`); reported to the Agent, never checked. */
   resolution?: string;
 }
 
@@ -85,7 +87,7 @@ export interface RequestFields {
  * its Protocol's; the tier always from its Protocol, which names the one field every model of it uses.
  */
 export function fieldsToRead(
-  adapter: { parameterGuide?(modelId: string, modality: "image" | "video"): ParameterGuide | undefined; requestFields: { image: RequestFields; video?: RequestFields } },
+  adapter: Pick<ProtocolAdapter, "parameterGuide" | "requestFields">,
   modelId: string,
   modality: "image" | "video",
 ): RequestFields {
@@ -142,9 +144,7 @@ export function readShape(fields: ShapeField[], body: Record<string, unknown>): 
 
 /** The resolution tier a request asks for, as written, e.g. `4K`; null when the field is missing or not text. */
 export function readResolution(field: string | undefined, body: Record<string, unknown>): string | null {
-  if (field === undefined) return null;
-  const value = valueAt(body, field);
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  const value = field === undefined ? undefined : valueAt(body, field);
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
