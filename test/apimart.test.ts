@@ -10,6 +10,7 @@ const submitUrl = `POST ${base}/images/generations`;
 const taskId = "task_01KPQ7J7DWB7QZ3WCEK3YVPBRA";
 const taskUrl = (id = taskId) => `GET ${base}/tasks/${id}?language=en`;
 const imageUrl = "https://upload.apimart.ai/f/image/9998236911693428-e8d7441f-image_task_01KPQ7J7DWB7QZ3WCEK3YVPBRA_0.png";
+const uploadUrl = `POST ${base}/uploads/images`;
 const schemaUrl = (modelId: string) => `GET ${base}/models/${modelId}/schema`;
 
 const png: Route = () => new Response(tinyPng, { headers: { "content-type": "image/png" } });
@@ -97,19 +98,56 @@ describe("apimart Protocol", () => {
     expect(JSON.stringify(lines)).not.toContain(apiKey);
   });
 
-  test("sends reference images as data URIs", async () => {
-    harness = await startHarness(apimartSetup());
+  test("uploads each reference image through APIMart's own upload endpoint and sends the returned links, never a data URI", async () => {
+    let uploaded = 0;
+    harness = await startHarness(
+      apimartSetup({ [uploadUrl]: () => Response.json({ url: `https://upload.apimart.ai/f/ref-${++uploaded}.png`, filename: "ref.png" }) }),
+    );
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
-    const result = await generate(harness, { references: ["fox.png"], aspect_ratio: "16:9" });
+    await writeFile(join(harness.cwd, "owl.png"), tinyPng);
+    const result = await generate(harness, { references: ["fox.png", "owl.png"], aspect_ratio: "16:9" });
 
     expect(result.isError).toBeFalsy();
-    expect(await submits(harness)[0]!.json()).toEqual({
-      model: "gpt-image-2",
-      prompt: "a red fox",
-      size: "16:9",
-      n: 1,
-      image_urls: [`data:image/png;base64,${tinyPng.toString("base64")}`],
-    });
+    const uploads = harness.requests.filter((request) => `${request.method} ${request.url}` === uploadUrl);
+    expect(uploads).toHaveLength(2);
+    expect(uploads[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+    const form = await uploads[0]!.formData();
+    const file = form.get("file") as File;
+    expect(file.name).toBe("fox.png");
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(tinyPng);
+
+    const body = (await submits(harness)[0]!.json()) as { image_urls: string[] };
+    expect(body.image_urls).toEqual(["https://upload.apimart.ai/f/ref-1.png", "https://upload.apimart.ai/f/ref-2.png"]);
+    expect(JSON.stringify(body)).not.toContain("data:");
+    // Every request but the download of the result goes to the Provider's base URL, and nothing else carries the images.
+    const sent = harness.requests.filter((request) => request.url !== imageUrl);
+    for (const request of sent) expect(request.url.startsWith(`${base}/`)).toBe(true);
+  });
+
+  test("an upload answered by a gateway (503) is sent again", async () => {
+    let attempts = 0;
+    harness = await startHarness(
+      apimartSetup({
+        [uploadUrl]: () => (++attempts === 1 ? new Response("unavailable", { status: 503 }) : Response.json({ url: "https://upload.apimart.ai/f/ref.png" })),
+      }),
+    );
+    await writeFile(join(harness.cwd, "fox.png"), tinyPng);
+    const result = await generate(harness, { references: ["fox.png"] });
+
+    expect(result.isError).toBeFalsy();
+    expect(attempts).toBe(2);
+    expect(((await submits(harness)[0]!.json()) as { image_urls: string[] }).image_urls).toEqual(["https://upload.apimart.ai/f/ref.png"]);
+  });
+
+  test("a failed upload fails the Job, naming APIMart, before any generation request is sent", async () => {
+    harness = await startHarness(apimartSetup({ [uploadUrl]: recorded("apimart/insufficient-balance.json", 402) }));
+    await writeFile(join(harness.cwd, "fox.png"), tinyPng);
+    const result = await generate(harness, { references: ["fox.png"] });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Provider "apimart"');
+    expect(textOf(result)).toContain("reference image");
+    expect(submits(harness)).toHaveLength(0);
   });
 
   test("passes provider_options through untouched", async () => {

@@ -14,8 +14,10 @@ import {
   type ModelTarget,
   type ProtocolAdapter,
   type ProviderTarget,
+  type ReferenceImage,
   type SubmittedJob,
 } from "./protocol.ts";
+import { multipartBody } from "./multipart.ts";
 import { sendToProvider } from "./send.ts";
 
 /**
@@ -97,8 +99,8 @@ const knownModels: KnownModel[] = [
         ["3:2", 1536, 1024],
         ["2:3", 1024, 1536],
       ]),
-      // Its docs page asks for public image links; litevision sends data URIs, so it claims none until that is confirmed.
-      maxReferences: 0,
+      // Public links only, which the upload endpoint gives.
+      maxReferences: 15,
       maxImages: maxImagesPerJob,
     },
     batches: true,
@@ -164,6 +166,29 @@ async function errorOf(response: Response, providerId: string, options: readonly
     message: error?.message ?? (response.statusText || undefined),
     options,
   });
+}
+
+const uploadedSchema = z.object({ url: z.string().min(1) });
+
+/**
+ * Uploads one reference image through APIMart's own `POST /uploads/images`, which answers with a public link: some
+ * models take only links, and the User's images then reach no host but APIMart (ADR 0010).
+ */
+async function uploadReference(reference: ReferenceImage, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<string> {
+  const { body, contentType } = multipartBody([], [{ name: "file", ...reference }]);
+  const init = { method: "POST", headers: { ...headers(target.credential), "content-type": contentType }, body };
+  const failed = (error: Error) =>
+    new ProviderError(error instanceof ProviderError ? error.kind : "other", `Could not upload the reference image ${reference.fileName} to APIMart. ${error.message}`);
+  let response: Response;
+  try {
+    response = await sendToProvider(http, target.providerId, `${baseUrlOf(target)}/uploads/images`, init, { context });
+  } catch (error) {
+    throw error instanceof ProviderError ? failed(error) : error;
+  }
+  if (!response.ok) throw failed(await errorOf(response, target.providerId));
+  const parsed = uploadedSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw failed(providerError("other", target.providerId, "its answer to the upload had no link."));
+  return parsed.data.url;
 }
 
 async function submitTask(
@@ -334,14 +359,14 @@ export const apimart: ProtocolAdapter = {
 
   async submit(request, target, http, context) {
     const batches = known(target.modelId)?.batches ?? false;
+    // Every upload finishes before any generation request, so a failed one costs nothing.
+    const imageUrls = await Promise.all(request.references.map((reference) => uploadReference(reference, target, http, context)));
     const body = {
       model: target.modelId,
       prompt: request.prompt,
       size: request.size.aspectRatio,
       n: batches ? request.n : 1,
-      ...(request.references.length === 0
-        ? {}
-        : { image_urls: request.references.map((reference) => `data:${reference.mimeType};base64,${Buffer.from(reference.bytes).toString("base64")}`) }),
+      ...(imageUrls.length === 0 ? {} : { image_urls: imageUrls }),
       ...request.providerOptions,
     };
     const settled = await Promise.allSettled(Array.from({ length: batches ? 1 : request.n }, () => submitTask(body, Object.keys(request.providerOptions), target, http, context)));
