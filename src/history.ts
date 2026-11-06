@@ -25,13 +25,18 @@ export interface JobParameters {
    * null when it could not read one, so the result's shape went unchecked. Absent on Jobs recorded before.
    */
   requestedShape?: string | null;
+  /**
+   * Video Jobs only: the length in seconds the final request asked for, as litevision read it (ADR 0010); null when
+   * it could not read one, so the length went unchecked. Absent on Jobs recorded before.
+   */
+  requestedSeconds?: number | null;
   /** Absolute paths of the reference images. */
   references: string[];
-  /** Video Jobs only: the length requested from the Provider, in seconds. */
+  /** Video Jobs only: what the Agent gave as `duration`, in seconds; absent when it gave none. */
   seconds?: number;
-  /** Video Jobs only: the resolution tier requested, when the Model takes one by name. */
+  /** Video Jobs only: what the Agent gave as `resolution`; absent when it gave none. */
   resolution?: string;
-  /** Video Jobs only: true when the first frame decides the video's shape, so it is not checked (ADR 0006). */
+  /** Video Jobs recorded before ADR 0010 only: true when the first frame decided the video's shape, so it was not checked. */
   followsFirstFrame?: true;
   /** Video Jobs only: absolute paths of the first and last frames, when given. */
   firstFrame?: string;

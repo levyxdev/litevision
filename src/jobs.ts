@@ -70,6 +70,8 @@ export interface CompletedJob {
   mismatch?: string;
   /** The shape the final request asked for, as litevision read it (ADR 0010); null when unreadable, omitted on older Jobs. */
   requestedShape?: string | null;
+  /** Video Jobs only: the length the final request asked for, as litevision read it; null when unreadable. */
+  requestedSeconds?: number | null;
 }
 
 /** Where a Job stands once the wait limit has passed or it has finished. A failed Job is thrown as {@link JobFailedError}. */
@@ -152,12 +154,12 @@ export class JobRunner {
     }
     const base = this.baseFor(spec, "video", request.prompt, {
       n: 1,
-      aspectRatio: spec.normalised.requestedAspectRatio,
-      size: request.size,
+      ...(request.aspectRatio === undefined ? {} : { aspectRatio: request.aspectRatio }),
+      requestedShape: spec.normalised.requestedShape,
+      requestedSeconds: spec.normalised.requestedSeconds,
       references: request.references.map((reference) => reference.path),
-      seconds: request.seconds,
+      ...(request.seconds === undefined ? {} : { seconds: request.seconds }),
       ...(request.resolution === undefined ? {} : { resolution: request.resolution }),
-      ...(spec.normalised.followsFirstFrame ? { followsFirstFrame: true as const } : {}),
       ...(request.firstFrame === undefined ? {} : { firstFrame: request.firstFrame.path }),
       ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame.path }),
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
@@ -210,6 +212,7 @@ export class JobRunner {
           ...(record.shortfall === undefined ? {} : { shortfall: record.shortfall }),
           ...(record.mismatch === undefined ? {} : { mismatch: record.mismatch }),
           ...(record.parameters.requestedShape === undefined ? {} : { requestedShape: record.parameters.requestedShape }),
+          ...(record.parameters.requestedSeconds === undefined ? {} : { requestedSeconds: record.parameters.requestedSeconds }),
         };
       }
       if (record.outcome === "failed") {
@@ -329,6 +332,7 @@ export class JobRunner {
         ...(shortfall === undefined ? {} : { shortfall }),
         ...(mismatch === undefined ? {} : { mismatch }),
         ...(base.parameters.requestedShape === undefined ? {} : { requestedShape: base.parameters.requestedShape }),
+        ...(base.parameters.requestedSeconds === undefined ? {} : { requestedSeconds: base.parameters.requestedSeconds }),
       };
     } catch (error) {
       if (error instanceof JobAbandoned || this.closed) throw new JobAbandoned();
@@ -396,7 +400,9 @@ function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; as
  */
 
 function mismatchOf(parameters: JobRecord["parameters"], observed: Array<MediaFacts | null>): string | undefined {
-  const { seconds, followsFirstFrame } = parameters;
+  const { followsFirstFrame } = parameters;
+  // What the final request asked for (ADR 0010); Jobs recorded before, what litevision chose.
+  const seconds = parameters.requestedSeconds !== undefined ? (parameters.requestedSeconds ?? undefined) : parameters.seconds;
   const expected = expectedShape(parameters);
   const problems = new Set<string>();
   for (const facts of observed) {

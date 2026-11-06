@@ -486,6 +486,16 @@ function requestedText(shape: string | null): string {
     : `The request asks for ${shape}.`;
 }
 
+/** What litevision read from a video's final request; whatever it could not read is not checked. */
+function requestedVideoText(shape: string | null, seconds: number | null): string {
+  const read = [shape, seconds === null ? null : `${seconds} s`].filter((part) => part !== null);
+  const unread = [shape === null ? "shape" : null, seconds === null ? "length" : null].filter((part) => part !== null);
+  const asked = read.length === 0 ? "" : `The request asks for ${read.join(", ")}.`;
+  const unchecked =
+    unread.length === 0 ? "" : `The request asks for no ${unread.join(" or ")} litevision can read, so the result's ${unread.join(" and ")} ${unread.length === 1 ? "was" : "were"} not checked.`;
+  return [asked, unchecked].filter(Boolean).join(" ");
+}
+
 function mismatchText(mismatch: string | undefined, docsUrl: string): string {
   if (mismatch === undefined) return "";
   return ` The result does not match the request: ${mismatch}. A provider_option may not have taken effect, so these options are not recorded as Known-good; check ${docsUrl} before trying again.`;
@@ -506,6 +516,7 @@ function jobOutput(job: JobState) {
     ...(job.status === "completed" && job.shortfall !== undefined ? { shortfall: job.shortfall } : {}),
     ...(job.status === "completed" && job.mismatch !== undefined ? { mismatch: job.mismatch } : {}),
     ...(job.status === "completed" && job.requestedShape !== undefined ? { requested_shape: job.requestedShape } : {}),
+    ...(job.status === "completed" && job.requestedSeconds !== undefined ? { requested_duration: job.requestedSeconds } : {}),
   };
 }
 
@@ -594,13 +605,21 @@ const videoJobShape = {
   status: jobStatusSchema,
   model: z.string().describe("Alias of the Model that ran the Job."),
   files: z.array(z.string()).describe("Path of the saved video; empty while the Job is running."),
-  aspect_ratio: z.enum(aspectRatios).describe("Aspect ratio actually used."),
-  size: z.string().describe("Size the request implies, e.g. 1280x720."),
-  resolution: z.string().nullable().describe("Resolution tier actually requested; null when the Model takes none."),
-  duration: z.number().describe("Length in seconds actually requested."),
-  requested_aspect_ratio: z.enum(aspectRatios),
-  aspect_ratio_adjusted: z.boolean(),
-  duration_adjusted: z.boolean().describe("True when the Model cannot make the requested length and the closest one was used."),
+  requested_shape: z
+    .string()
+    .nullable()
+    .describe("The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 9:16; null when unreadable, so the shape is not checked."),
+  requested_duration: z
+    .number()
+    .nullable()
+    .describe("The length in seconds the request sent asks for, as litevision read it; null when unreadable, so the length is not checked."),
+  aspect_ratio: z.enum(aspectRatios).nullable().describe("The `aspect_ratio` given; null when none was."),
+  size: z.null().describe("Always null: litevision chooses no size."),
+  resolution: z.string().nullable().describe("The `resolution` given; null when none was."),
+  duration: z.number().nullable().describe("The `duration` given; null when none was."),
+  requested_aspect_ratio: z.enum(aspectRatios).nullable(),
+  aspect_ratio_adjusted: z.boolean().describe("Always false: nothing is adjusted."),
+  duration_adjusted: z.boolean().describe("Always false: nothing is rounded."),
   observed: observedSchema,
   mismatch: mismatchSchema,
 };
@@ -705,7 +724,6 @@ export function createServer(deps: ServerDeps): McpServer {
       },
       model,
       adapter,
-      info.capabilities,
       cwd,
     );
     const outputDir = args.output_path === undefined ? undefined : resolve(cwd, args.output_path);
@@ -715,29 +733,24 @@ export function createServer(deps: ServerDeps): McpServer {
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
-        const { size, seconds } = normalised.request;
+        const { request } = normalised;
         const output = {
           ...jobOutput(job),
-          aspect_ratio: size.aspectRatio,
-          size: formatSize(size),
-          resolution: normalised.request.resolution ?? null,
-          duration: seconds,
-          requested_aspect_ratio: normalised.requestedAspectRatio,
-          aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
-          duration_adjusted: normalised.durationAdjusted,
+          requested_shape: normalised.requestedShape,
+          requested_duration: normalised.requestedSeconds,
+          aspect_ratio: request.aspectRatio ?? null,
+          size: null,
+          resolution: request.resolution ?? null,
+          duration: request.seconds ?? null,
+          requested_aspect_ratio: normalised.requestedAspectRatio ?? null,
+          aspect_ratio_adjusted: false,
+          duration_adjusted: false,
         };
-        const asked = `${seconds} s at ${size.aspectRatio}${normalised.request.resolution === undefined ? "" : ` ${normalised.request.resolution}`} (${formatSize(size)})`;
-        const adjustments = [
-          normalised.aspectRatioAdjusted ? `${model.alias} does not support ${normalised.requestedAspectRatio}, so the closest supported aspect ratio was used.` : "",
-          normalised.durationAdjusted ? `${model.alias} cannot make ${normalised.requestedDuration} s, so the closest length it can was used.` : "",
-        ]
-          .filter(Boolean)
-          .map((sentence) => ` ${sentence}`)
-          .join("");
+        const asked = requestedVideoText(normalised.requestedShape, normalised.requestedSeconds);
         const text =
           job.status === "running"
-            ? `${jobText(job)} It asks ${model.alias} for ${asked}.${adjustments}`
-            : `Saved a video from ${model.alias}, ${asked}, Job ${job.id}.${adjustments}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}\n${job.files.join("\n")}`;
+            ? `${jobText(job)} ${asked}`
+            : `Saved a video from ${model.alias}, Job ${job.id}. ${asked}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}\n${job.files.join("\n")}`;
         return { output, text };
       },
     };
@@ -810,19 +823,19 @@ export function createServer(deps: ServerDeps): McpServer {
           .enum(aspectRatios)
           .optional()
           .describe(
-            "Wanted aspect ratio. Omit for 16:9, or for the first frame's shape when `first_frame` is given. If the Model does not support it, the closest supported one is used and reported.",
+            "Wanted aspect ratio, sent in the Model's own shape field; a shape in `provider_options` overrides it. Omit for the Model's default. Nothing is adjusted.",
           ),
         duration: z
           .number()
           .int()
           .positive()
           .optional()
-          .describe("Wanted length in seconds. Omit for the Model's default. If the Model cannot make it, the closest length it can is used and reported."),
+          .describe("Wanted length in seconds, sent as given in the Model's own length field. Omit for the Model's default. Nothing is rounded."),
         resolution: z
           .string()
           .min(1)
           .optional()
-          .describe("A resolution tier the Model lists in `list_models`, e.g. 720P. Omit for the Model's default."),
+          .describe("A resolution tier, e.g. 720P, sent as given; see the Model's Parameter Guide. Omit for the Model's default."),
         first_frame: z.string().min(1).optional().describe("Local path of an image the video starts from."),
         last_frame: z.string().min(1).optional().describe("Local path of an image the video ends on."),
         references: z
@@ -837,7 +850,9 @@ export function createServer(deps: ServerDeps): McpServer {
         provider_options: z
           .record(z.string(), z.unknown())
           .default({})
-          .describe("Provider-specific request fields passed through untouched, e.g. { \"generate_audio\": true }. Reuse the Model's Known-good Options from `list_models`."),
+          .describe(
+            "The Model's own request fields, passed through untouched, e.g. { \"resolution\": \"1080P\", \"ratio\": \"9:16\", \"seconds\": \"10\" } for Wan 2.7: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt and media fields are litevision's.",
+          ),
       },
       outputSchema: videoJobShape,
     },
@@ -978,6 +993,11 @@ export function createServer(deps: ServerDeps): McpServer {
           .nullable()
           .optional()
           .describe("The shape the request sent asks for, as litevision read it; null when unreadable, so the shape was not checked."),
+        requested_duration: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Video Jobs: the length in seconds the request sent asks for, as litevision read it; null when unreadable."),
         observed: observedSchema,
         mismatch: mismatchSchema,
       },

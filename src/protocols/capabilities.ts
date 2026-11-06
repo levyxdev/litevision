@@ -1,7 +1,7 @@
 import { ConfigError, type Model } from "../config.ts";
 import { readReferences } from "../images.ts";
 import { mediaFactsOf } from "../media.ts";
-import { fieldsToRead, readShape } from "./parameter-guide.ts";
+import { fieldsToRead, readSeconds, readShape } from "./parameter-guide.ts";
 import {
   formatSize,
   type AspectRatio,
@@ -112,11 +112,10 @@ export async function normaliseImageRequest(
 /** The `generate_video` parameters, before they are checked against a Model's capabilities. */
 export interface VideoParameters {
   prompt: string;
-  /** Omitted for the first frame's shape when there is one, else 16:9. */
+  /** Each omitted for none: the video Model's own default applies (ADR 0010). */
   aspectRatio?: AspectRatio;
-  /** Whole seconds; omitted for the Model's default. */
+  /** Whole seconds. */
   duration?: number;
-  /** A resolution tier's name; omitted for the Model's default. */
   resolution?: string;
   /** Local paths as the Agent gave them. */
   firstFrame?: string;
@@ -127,17 +126,15 @@ export interface VideoParameters {
 
 export interface NormalisedVideoRequest {
   request: VideoRequest;
-  requestedAspectRatio: AspectRatio;
-  aspectRatioAdjusted: boolean;
-  /**
-   * True when a first frame decides the video's shape: the Agent gave no aspect ratio, or one the Model cannot take
-   * (Seedance takes no shape at all and follows the frame).
-   */
-  followsFirstFrame: boolean;
-  /** What the Agent asked for; omitted when it left the length to the Model. */
+  /** What the Agent gave as `aspect_ratio`, `duration` and `resolution`; each omitted when it gave none. */
+  requestedAspectRatio?: AspectRatio;
   requestedDuration?: number;
-  /** True when the Model cannot make the requested length and the closest one was used instead. */
-  durationAdjusted: boolean;
+  /**
+   * The shape and length the final request asks for, as litevision read them from the fields the Parameter Guide
+   * names (ADR 0010); null when it asks for none litevision can read, which then goes unchecked.
+   */
+  requestedShape: string | null;
+  requestedSeconds: number | null;
 }
 
 /** One sentence describing a video Model's capabilities, for errors and tool output. */
@@ -164,41 +161,21 @@ function isRun(values: number[]): boolean {
 }
 
 /**
- * Checks `generate_video` parameters against a video Model's capabilities and turns them into a VideoRequest.
- * Everything that would fail here fails before any Provider request.
+ * Turns `generate_video` parameters into a VideoRequest (ADR 0010): reads the frames and reference images, refuses
+ * only `provider_options` that set a field litevision fills, and checks, defaults and rounds nothing. Everything that
+ * would fail here fails before any Provider request.
  */
 export async function normaliseVideoRequest(
   parameters: VideoParameters,
   model: Model,
   adapter: ProtocolAdapter,
-  capabilities: VideoCapabilities,
   cwd: string,
 ): Promise<NormalisedVideoRequest> {
-  const unsupported = (problem: string) =>
-    new ConfigError(
-      `${problem} Model "${model.alias}" supports: ${describeVideoCapabilities(capabilities)} Choose another Model or change the request.`,
-    );
-
-  const [defaultTier] = capabilities.resolutions;
-  if (defaultTier === undefined) throw new Error("A Protocol adapter declared no video resolutions.");
-  let tier = defaultTier;
-  if (parameters.resolution !== undefined) {
-    const wanted = parameters.resolution.toLowerCase();
-    const named = capabilities.resolutions.find((candidate) => candidate.name?.toLowerCase() === wanted);
-    if (named === undefined) throw unsupported(`Model "${model.alias}" has no resolution "${parameters.resolution}".`);
-    tier = named;
-  }
-  if (parameters.firstFrame !== undefined && !capabilities.firstFrame) throw unsupported(`Model "${model.alias}" cannot start from a given first frame.`);
-  if (parameters.lastFrame !== undefined && !capabilities.lastFrame) throw unsupported(`Model "${model.alias}" cannot end on a given last frame.`);
-  if (parameters.references.length > 0 && capabilities.maxReferences === 0) throw unsupported(`Model "${model.alias}" cannot take reference images.`);
-  if (parameters.references.length > capabilities.maxReferences) {
-    throw unsupported(`Model "${model.alias}" cannot take ${parameters.references.length} reference images.`);
-  }
   const reservedOptions = adapter.reservedVideoOptions ?? [];
   const reserved = Object.keys(parameters.providerOptions).filter((key) => reservedOptions.includes(key));
   if (reserved.length > 0) {
     throw new ConfigError(
-      `provider_options may not set ${reserved.map((key) => `\`${key}\``).join(", ")}: litevision sets ${reserved.length === 1 ? "it" : "them"} from the \`generate_video\` parameters. Use those instead.`,
+      `provider_options may not set ${reserved.map((key) => `\`${key}\``).join(", ")}: litevision fills ${reserved.length === 1 ? "that field" : "those fields"} itself, from the prompt, \`first_frame\`, \`last_frame\`, \`references\` and \`model\`. Use those instead.`,
     );
   }
 
@@ -208,33 +185,25 @@ export async function normaliseVideoRequest(
     frame(parameters.lastFrame),
     readReferences(parameters.references, cwd),
   ]);
-  // A video made from a first frame keeps that frame's shape unless the Agent asked for another.
-  const frameFacts = parameters.aspectRatio === undefined && firstFrame !== undefined ? mediaFactsOf(firstFrame.bytes) : undefined;
-  const { size, adjusted } =
-    frameFacts === undefined
-      ? closestSize(tier.sizes, parameters.aspectRatio ?? "16:9")
-      : { size: sizeClosestTo(tier.sizes, frameFacts.width / frameFacts.height), adjusted: false };
-  const seconds =
-    parameters.duration === undefined
-      ? capabilities.defaultDuration
-      : capabilities.durations.reduce((best, candidate) =>
-          Math.abs(candidate - parameters.duration!) < Math.abs(best - parameters.duration!) ? candidate : best,
-        );
+  // Fields in provider_options override the translated parameters, which are otherwise what is sent.
+  const fields = fieldsToRead(adapter, model.modelId, "video");
+  const shape = readShape(fields.shape, parameters.providerOptions);
+  const seconds = readSeconds(fields.duration, parameters.providerOptions);
   return {
     request: {
       prompt: parameters.prompt,
-      size,
-      ...(tier.name === undefined ? {} : { resolution: tier.name }),
-      seconds,
+      ...(parameters.aspectRatio === undefined ? {} : { aspectRatio: parameters.aspectRatio }),
+      ...(parameters.resolution === undefined ? {} : { resolution: parameters.resolution }),
+      ...(parameters.duration === undefined ? {} : { seconds: parameters.duration }),
       ...(firstFrame === undefined ? {} : { firstFrame }),
       ...(lastFrame === undefined ? {} : { lastFrame }),
       references,
       providerOptions: parameters.providerOptions,
     },
-    requestedAspectRatio: frameFacts === undefined ? (parameters.aspectRatio ?? "16:9") : size.aspectRatio,
-    aspectRatioAdjusted: adjusted,
-    followsFirstFrame: frameFacts !== undefined || (firstFrame !== undefined && adjusted),
+    ...(parameters.aspectRatio === undefined ? {} : { requestedAspectRatio: parameters.aspectRatio }),
     ...(parameters.duration === undefined ? {} : { requestedDuration: parameters.duration }),
-    durationAdjusted: parameters.duration !== undefined && seconds !== parameters.duration,
+    // A Model whose guide names no shape field (Seedance follows its first frame) is not sent the translated ratio.
+    requestedShape: shape.set ? shape.shape : fields.shape.length === 0 ? null : (parameters.aspectRatio ?? null),
+    requestedSeconds: seconds.set ? seconds.seconds : (parameters.duration ?? null),
   };
 }

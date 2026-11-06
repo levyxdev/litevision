@@ -295,7 +295,7 @@ describe("Known-good Options and Ratings", () => {
 });
 
 describe("generate_video with the together Protocol", () => {
-  test("submits Wan 2.7 at its default 1080P and 5 s, polls until it completes, and saves the MP4", async () => {
+  test("submits Wan 2.7 with no shape, tier or length of litevision's own, polls until it completes, and saves the MP4", async () => {
     let polls = 0;
     const status: Route = (request) => (++polls < 3 ? recorded("together/video-submitted.json")(request) : recorded("together/video-completed.json")(request));
     harness = await startHarness(togetherSetup({ [videoStatusUrl]: status }));
@@ -305,18 +305,17 @@ describe("generate_video with the together Protocol", () => {
     expect(await bodyOf(videosUrl)).toEqual({
       model: "Wan-AI/wan2.7-t2v",
       prompt: "a fox runs through snow",
-      seconds: "5",
-      resolution: "1080P",
-      ratio: "16:9",
     });
     expect(polls).toBe(3);
     expect(output).toMatchObject({
       status: "completed",
       model: "wan",
-      aspect_ratio: "16:9",
-      size: "1920x1080",
-      resolution: "1080P",
-      duration: 5,
+      requested_shape: null,
+      requested_duration: null,
+      aspect_ratio: null,
+      size: null,
+      resolution: null,
+      duration: null,
       duration_adjusted: false,
       observed: [{ width: 1920, height: 1080, seconds: 5 }],
     });
@@ -325,22 +324,23 @@ describe("generate_video with the together Protocol", () => {
     expect((await readHistory(harness))[0]).toMatchObject({
       modality: "video",
       outcome: "completed",
-      parameters: { n: 1, seconds: 5, resolution: "1080P" },
+      parameters: { n: 1, requestedShape: null, requestedSeconds: null },
     });
   });
 
-  test("uses the closest length and the named resolution tier, and reports the adjustment", async () => {
-    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 15) }));
+  test("sends the length and resolution tier as given, neither rounded nor checked (ADR 0010)", async () => {
+    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 20) }));
     const output = ok(await video({ duration: 20, resolution: "720p" }));
-    expect(await bodyOf(videosUrl)).toMatchObject({ seconds: "15", resolution: "720P" });
-    expect(output).toMatchObject({ duration: 15, duration_adjusted: true, size: "1280x720" });
+    expect(await bodyOf(videosUrl)).toMatchObject({ seconds: "20", resolution: "720p" });
+    expect(output).toMatchObject({ duration: 20, duration_adjusted: false, requested_duration: 20 });
+    expect(output.mismatch).toBeUndefined();
   });
 
-  test("Seedance 2.5 takes a resolution tier without a ratio", async () => {
+  test("Seedance 2.5 is sent a resolution tier, never a ratio", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 5) }));
-    ok(await video({ model: "seedance" }));
+    ok(await video({ model: "seedance", aspect_ratio: "16:9", resolution: "720p" }));
     const body = await bodyOf(videosUrl);
-    expect(body).toMatchObject({ resolution: "720p", seconds: "5" });
+    expect(body).toMatchObject({ resolution: "720p" });
     expect(body).not.toHaveProperty("ratio");
   });
 
@@ -381,12 +381,10 @@ describe("generate_video with the together Protocol", () => {
     expect(sentTo(videoStatusUrl)).toHaveLength(2);
   });
 
-  test("a frame the Model cannot take is refused before calling Together", async () => {
+  test("a frame the old tables said the Model cannot take is sent anyway, for Together to decide (ADR 0010)", async () => {
     harness = await startHarness(togetherSetup());
-    const result = await video({ first_frame: await referenceImage() });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot start from a given first frame");
-    expect(harness.requests).toHaveLength(0);
+    ok(await video({ first_frame: await referenceImage() }));
+    expect((await bodyOf(videosUrl)).media).toEqual({ frame_images: [{ input_image: tinyPngDataUrl, frame: "first" }] });
   });
 
   test("a failed video says why, with the docs link", async () => {
@@ -406,12 +404,12 @@ describe("generate_video with the together Protocol", () => {
     expect(again).toContain("Known-good Options:");
   });
 
-  test("a video from a first frame at an aspect ratio the Model cannot take follows the frame, which is not then a mismatch", async () => {
-    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 5) }));
-    const frame = join(harness.cwd, "portrait.png");
-    await writeFile(frame, pngOfSize(720, 1280));
+  test("a Model that takes no shape is not checked against an aspect ratio it was never sent", async () => {
+    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 5) }));
+    const frame = join(harness.cwd, "landscape.png");
+    await writeFile(frame, pngOfSize(1280, 720));
     const output = ok(await video({ model: "seedance", aspect_ratio: "9:16", first_frame: frame }));
-    expect(output.aspect_ratio_adjusted).toBe(true);
+    expect(output.requested_shape).toBeNull();
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -422,13 +420,13 @@ describe("generate_video with the together Protocol", () => {
     expect(output.mismatch).toBeUndefined();
   });
 
-  test("without an aspect ratio, a video from a first frame takes the frame's shape, which is not then a mismatch", async () => {
+  test("without an aspect ratio, a video from a first frame is sent no shape and its shape is not checked", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 5) }));
     const frame = join(harness.cwd, "portrait.png");
     await writeFile(frame, pngOfSize(720, 1280));
     const output = ok(await video({ model: "wan-i2v", first_frame: frame }));
-    expect((await bodyOf(videosUrl)).ratio).toBe("9:16");
-    expect(output.aspect_ratio).toBe("9:16");
+    expect(await bodyOf(videosUrl)).not.toHaveProperty("ratio");
+    expect(output.requested_shape).toBeNull();
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -457,7 +455,7 @@ describe("generate_video with the together Protocol", () => {
 
   test("a video shorter than requested is reported as a mismatch", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1920, 1080, 2) }));
-    const output = ok(await video());
+    const output = ok(await video({ duration: 5 }));
     expect(output.mismatch).toBe("asked for 5 s, got 2 s");
   });
 });

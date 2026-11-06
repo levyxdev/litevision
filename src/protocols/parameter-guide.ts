@@ -130,7 +130,8 @@ export function readShape(fields: ShapeField[], body: Record<string, unknown>): 
   return { set: false, shape: null };
 }
 
-/** The requested length in seconds; null when the field is missing or cannot be read. */
-export function readSeconds(field: string | undefined, body: Record<string, unknown>): number | null {
-  return field === undefined ? null : (positive(valueAt(body, field)) ?? null);
+/** The requested length in seconds: `set` is false when the field is not in the request, `seconds` null when unreadable. */
+export function readSeconds(field: string | undefined, body: Record<string, unknown>): { set: boolean; seconds: number | null } {
+  const value = field === undefined ? undefined : valueAt(body, field);
+  return { set: value !== undefined, seconds: positive(value) ?? null };
 }

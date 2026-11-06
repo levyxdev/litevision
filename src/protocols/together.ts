@@ -426,8 +426,7 @@ export const together: ProtocolAdapter = {
 
   reservedOptions: ["model", "prompt", "response_format", "reference_images", "image_url"],
 
-  // `width` and `height` stay open, for video models litevision has no table for.
-  reservedVideoOptions: ["model", "prompt", "seconds", "resolution", "ratio", "media"],
+  reservedVideoOptions: ["model", "prompt", "media"],
 
   async submit(request, target, http, context) {
     const family = imageFamily(target.modelId);
@@ -463,7 +462,7 @@ export const together: ProtocolAdapter = {
 
   async submitVideo(request, target, http, context) {
     const family = videoFamily(target.modelId);
-    const { size } = request;
+    const { aspectRatio, resolution } = request;
     const frames = [
       ...(request.firstFrame === undefined ? [] : [{ input_image: dataUrl(request.firstFrame), frame: "first" }]),
       ...(request.lastFrame === undefined ? [] : [{ input_image: dataUrl(request.lastFrame), frame: "last" }]),
@@ -472,15 +471,22 @@ export const together: ProtocolAdapter = {
       ...(frames.length === 0 ? {} : { frame_images: frames }),
       ...(request.references.length === 0 ? {} : { reference_images: request.references.map(dataUrl) }),
     };
-    const sizing =
-      family.sizing === "pixels"
-        ? { width: size.width, height: size.height }
-        : { resolution: request.resolution, ...(family.sizing === "tier+ratio" ? { ratio: size.aspectRatio } : {}) };
+    // A translated aspect ratio goes where the family takes a shape: `ratio`, or a 720p width and height.
+    const pixels = aspectRatio === undefined ? undefined : otherVideos.capabilities.resolutions[0]!.sizes.find((size) => size.aspectRatio === aspectRatio);
+    const shape =
+      aspectRatio === undefined || family.sizing === "tier"
+        ? {}
+        : family.sizing === "tier+ratio"
+          ? { ratio: aspectRatio }
+          : pixels === undefined
+            ? {}
+            : { width: pixels.width, height: pixels.height };
     const body = {
       model: target.modelId,
       prompt: request.prompt,
-      seconds: String(request.seconds),
-      ...sizing,
+      ...(request.seconds === undefined ? {} : { seconds: String(request.seconds) }),
+      ...(resolution === undefined ? {} : { resolution }),
+      ...shape,
       ...(Object.keys(media).length === 0 ? {} : { media }),
       ...request.providerOptions,
     };

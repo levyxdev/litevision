@@ -90,18 +90,19 @@ export interface VideoCapabilities {
   maxReferences: number;
 }
 
-/** A video generation request in litevision's own terms, already checked against the Model's VideoCapabilities. */
+/**
+ * A video generation request in litevision's own terms (ADR 0010): nothing in it is checked, defaulted or rounded.
+ * The shape, tier and length are what the Agent gave, until those parameters go; each is omitted when it gave none,
+ * so the video Model's own default applies. Fields in `providerOptions` override them.
+ */
 export interface VideoRequest {
   prompt: string;
-  /** One of the sizes of the chosen resolution tier. */
-  size: ImageSize;
-  /** The chosen tier's name; omitted when the tier has none. */
+  aspectRatio?: AspectRatio;
   resolution?: string;
-  /** One of the Model's `durations`. */
-  seconds: number;
+  /** Whole seconds. */
+  seconds?: number;
   firstFrame?: ReferenceImage;
   lastFrame?: ReferenceImage;
-  /** At most the Model's `maxReferences`. */
   references: ReferenceImage[];
   /** Merged into the Provider request untouched. Never contains an adapter's `reservedVideoOptions`. */
   providerOptions: Record<string, unknown>;
