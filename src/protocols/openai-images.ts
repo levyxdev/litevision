@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
+import { openaiImagesGuide } from "./guides/openai-images.ts";
 import { httpProviderError, providerError } from "./errors.ts";
 import { multipartBody } from "./multipart.ts";
 import { sendToProvider } from "./send.ts";
@@ -94,6 +95,8 @@ export const openaiImages: ProtocolAdapter = {
   // OpenAI's `/models` says nothing about image sizes or limits, so there is no `fetchModelInfo`.
 
   docsUrl: () => "https://platform.openai.com/docs/api-reference/images/create",
+
+  parameterGuide: (modelId, modality) => (modality === "image" ? openaiImagesGuide(modelId) : undefined),
 
   reservedOptions: ["model", "prompt", "n", "size", "image", "image[]"],
 

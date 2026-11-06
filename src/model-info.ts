@@ -6,6 +6,7 @@ import { serialised, writeFileAtomic } from "./config-store.ts";
 import type { Dirs } from "./dirs.ts";
 import type { HttpTransport } from "./http.ts";
 import { adapterFor } from "./protocols/index.ts";
+import type { ParameterGuide } from "./protocols/parameter-guide.ts";
 import { aspectRatios, type ImageCapabilities, type ProviderModelInfo, type VideoCapabilities } from "./protocols/protocol.ts";
 
 /**
@@ -26,14 +27,17 @@ export interface ModelInfo {
   /** "provider" when the Provider reported the capabilities, "built-in" when they come from the adapter's own table. */
   source: "provider" | "built-in";
   docsUrl: string;
-  /** The Provider's own description of the Model's parameters, when it publishes one. */
+  /** The Provider's own description of the Model's parameters, when it publishes one; it wins over `guide` (ADR 0010). */
   parameterSchema?: unknown;
+  /** The built-in Parameter Guide entry for the Model's family; omitted when litevision knows none. */
+  guide?: ParameterGuide;
 }
 
 /** What litevision knows about one video Model: the adapter's own table, since no Provider describes its video Models yet. */
 export interface VideoModelInfo {
   capabilities: VideoCapabilities;
   docsUrl: string;
+  guide?: ParameterGuide;
 }
 
 /** Everything known about a video Model. Throws a ConfigError when its Protocol makes no videos. */
@@ -42,7 +46,12 @@ export function videoModelInfo({ model }: ResolvedModel): VideoModelInfo {
   if (adapter.builtInVideoCapabilities === undefined || adapter.submitVideo === undefined) {
     throw new ConfigError(`Model "${model.alias}" is a video Model, but its Protocol "${model.protocol}" makes no videos in litevision.`);
   }
-  return { capabilities: adapter.builtInVideoCapabilities(model.modelId), docsUrl: adapter.docsUrl(model.modelId, "video") };
+  const guide = adapter.parameterGuide?.(model.modelId, "video");
+  return {
+    capabilities: adapter.builtInVideoCapabilities(model.modelId),
+    docsUrl: adapter.docsUrl(model.modelId, "video"),
+    ...(guide === undefined ? {} : { guide }),
+  };
 }
 
 /** A day: Providers change their Models rarely, and the settings page refreshes whenever the User touches one. */
@@ -84,10 +93,12 @@ function cacheKey({ model, provider }: ResolvedModel): string {
  */
 export async function modelInfo(deps: ModelInfoDeps, resolved: ResolvedModel, options: { refresh?: boolean } = {}): Promise<ModelInfo> {
   const adapter = adapterFor(resolved.model);
+  const guide = adapter.parameterGuide?.(resolved.model.modelId, "image");
   const builtIn: ModelInfo = {
     capabilities: adapter.builtInCapabilities(resolved.model.modelId),
     source: "built-in",
     docsUrl: adapter.docsUrl(resolved.model.modelId, "image"),
+    ...(guide === undefined ? {} : { guide }),
   };
   const fetchModelInfo = adapter.fetchModelInfo;
   if (fetchModelInfo === undefined) return builtIn;

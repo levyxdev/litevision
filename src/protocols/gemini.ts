@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
+import { geminiGuide } from "./guides/gemini.ts";
 import { classifyProviderError, providerError, providerLabel } from "./errors.ts";
 import { inParallel } from "./parallel.ts";
 import type {
@@ -200,6 +201,8 @@ export const gemini: ProtocolAdapter = {
 
   // The image generation guide documents `image_size` and the other response format fields `provider_options` may set.
   docsUrl: () => "https://ai.google.dev/gemini-api/docs/image-generation",
+
+  parameterGuide: (modelId, modality) => (modality === "image" ? geminiGuide(modelId) : undefined),
 
   reservedOptions: ["model", "input"],
 

@@ -1,4 +1,5 @@
 import type { HttpTransport } from "../http.ts";
+import type { ParameterGuide } from "./parameter-guide.ts";
 
 /** The aspect ratios the Agent may ask for. Each Model supports some of them. */
 export const aspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
@@ -226,6 +227,11 @@ export interface ProtocolAdapter {
    * adapter knows one, else the Provider's API reference (ADR 0006).
    */
   docsUrl(modelId: string, modality?: Modality): string;
+  /**
+   * The built-in Parameter Guide entry for the model id's family (ADR 0010); undefined when litevision knows no family
+   * for it, never a guessed entry.
+   */
+  parameterGuide?(modelId: string, modality: Modality): ParameterGuide | undefined;
   /** Request fields the adapter sets itself; `provider_options` may not set them. */
   reservedOptions: readonly string[];
   submit(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedJob>;

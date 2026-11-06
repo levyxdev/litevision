@@ -43,6 +43,7 @@ describe("list_models", () => {
           default: true,
           notes: "photoreal, legible text",
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
+          parameters: expect.stringContaining("Parameter Guide for GPT Image 1.x"),
           known_good_options: {},
           suspect_options: {},
           capabilities: {
@@ -65,6 +66,7 @@ describe("list_models", () => {
           default: false,
           notes: "",
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
+          parameters: expect.stringContaining("litevision has no Parameter Guide for this model id"),
           known_good_options: {},
           suspect_options: {},
           capabilities: {

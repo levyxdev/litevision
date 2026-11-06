@@ -43,7 +43,8 @@ import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
 import { describeCapabilities, describeVideoCapabilities, normaliseImageRequest, normaliseVideoRequest } from "./protocols/capabilities.ts";
 import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
-import { aspectRatios, formatSize, modalities, type AspectRatio, type Modality } from "./protocols/protocol.ts";
+import { guideOutput, guideSummary, guideText, type ParameterGuide } from "./protocols/parameter-guide.ts";
+import { aspectRatios, formatSize, modalities, type AspectRatio, type Modality, type ProviderErrorKind } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
 import { settingsOpener } from "./settings/opener.ts";
 import { defaultSettingsIdleMs } from "./settings/server.ts";
@@ -121,6 +122,30 @@ const listedModelSchema = z.object({
     .optional()
     .describe("A video Model's capabilities; the first resolution is the default."),
   docs_url: z.string().nullable().describe("Where to read which `provider_options` this Model accepts."),
+  parameters: z
+    .string()
+    .optional()
+    .describe("In brief, what litevision knows about the Model's request parameters: its Parameter Guide, the Provider's own description, or that it knows neither."),
+  parameter_guide: z
+    .object({
+      family: z.string(),
+      checked: z.string().describe("When the sources were last checked; read the docs first when this is old."),
+      sources: z.array(z.string()),
+      parameters: z.array(
+        z.object({
+          name: z.string().describe("The Provider's own field name for `provider_options`, dotted for nested fields."),
+          values: z.string(),
+          default: z.string(),
+          price: z.string().describe("How the value changes the price."),
+        }),
+      ),
+      notes: z.array(z.string()),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "Only with `model`: the built-in Parameter Guide for the Model's family. Null when litevision has none, or when the Provider describes the Model itself (see `parameter_schema`).",
+    ),
   known_good_options: z
     .record(z.string(), z.unknown())
     .optional()
@@ -190,7 +215,13 @@ async function listedModel(
   const heading = `${model.alias}${isDefault ? ` (default ${model.modality})` : ""}: ${model.modality} Model ${model.modelId} on ${model.provider} via ${model.protocol}.`;
   const notes = model.notes ? ` Notes: ${model.notes}` : "";
 
-  let described: { output: Partial<z.infer<typeof listedModelSchema>>; summary: string; docsUrl: string; parameterSchema?: unknown };
+  let described: {
+    output: Partial<z.infer<typeof listedModelSchema>>;
+    summary: string;
+    docsUrl: string;
+    parameterSchema?: unknown;
+    guide?: ParameterGuide;
+  };
   try {
     const provider = config.providers.find((candidate) => candidate.id === model.provider);
     if (provider === undefined) throw needsSettings(`Model "${model.alias}" refers to Provider "${model.provider}", which is not configured.`);
@@ -200,6 +231,7 @@ async function listedModel(
         output: { capabilities: null, video_capabilities: videoCapabilitiesOutput(info.capabilities) },
         summary: describeVideoCapabilities(info.capabilities),
         docsUrl: info.docsUrl,
+        ...(info.guide === undefined ? {} : { guide: info.guide }),
       };
     } else {
       const info = await modelInfo(deps, { model, provider });
@@ -216,6 +248,7 @@ async function listedModel(
         summary: describeCapabilities(capabilities),
         docsUrl: info.docsUrl,
         ...(info.parameterSchema === undefined ? {} : { parameterSchema: info.parameterSchema }),
+        ...(info.guide === undefined ? {} : { guide: info.guide }),
       };
     }
   } catch (error) {
@@ -232,10 +265,12 @@ async function listedModel(
     capabilities: null,
     ...described.output,
     docs_url: described.docsUrl,
+    parameters: parametersSummary(described, model.provider),
     known_good_options: record.knownGood,
     suspect_options: suspectOutput(record),
   };
   let text = `${heading} Supports ${described.summary}${notes} provider_options docs: ${described.docsUrl}`;
+  if (!detailed) text += ` ${output.parameters}`;
   const goodKeys = Object.keys(record.knownGood);
   const suspectKeys = Object.keys(record.suspect);
   if (detailed) {
@@ -251,15 +286,44 @@ async function listedModel(
     output.recent_picks = picks.map(recentPickOutput);
     text += picks.length === 0 ? "\nRecent Picks: none recorded yet." : "\nRecent Picks in Comparisons, newest first:";
     for (const picked of picks) text += `\n- ${describeRecentPick(picked)}`;
-    if (described.parameterSchema !== undefined) {
-      output.parameter_schema = described.parameterSchema;
-      text += `\nParameter schema from the Provider: ${JSON.stringify(described.parameterSchema)}`;
-    }
+    output.parameter_guide = described.parameterSchema === undefined && described.guide !== undefined ? guideOutput(described.guide) : null;
+    if (described.parameterSchema !== undefined) output.parameter_schema = described.parameterSchema;
+    text += `\n${parameterHelp(described, model.provider)}`;
   } else {
     if (goodKeys.length > 0) text += ` Known-good Options: ${goodKeys.join(", ")}.`;
     if (suspectKeys.length > 0) text += ` Suspect options: ${suspectKeys.join(", ")}.`;
   }
   return { output, text };
+}
+
+/** What litevision knows about a Model's parameters, as `list_models` and failed Jobs report it. */
+interface ParameterKnowledge {
+  docsUrl: string;
+  /** The Provider's own description; it wins over the built-in guide (ADR 0010). */
+  parameterSchema?: unknown;
+  guide?: ParameterGuide;
+}
+
+/** One sentence: the guide's family and parameter names, or where else to look. */
+function parametersSummary(known: ParameterKnowledge, providerId: string): string {
+  if (known.parameterSchema !== undefined) {
+    return `Provider "${providerId}" describes this Model's parameters itself; \`list_models\` with \`model\` shows its description.`;
+  }
+  if (known.guide !== undefined) return guideSummary(known.guide);
+  return noGuide(known.docsUrl);
+}
+
+/** Everything known about a Model's parameters: the Provider's description, else the full built-in guide. */
+function parameterHelp(known: ParameterKnowledge, providerId: string): string {
+  if (known.parameterSchema !== undefined) {
+    return `Parameter schema from Provider "${providerId}", which wins over litevision's own Parameter Guide: ${JSON.stringify(known.parameterSchema)}`;
+  }
+  if (known.guide !== undefined) return guideText(known.guide);
+  return noGuide(known.docsUrl);
+}
+
+function noGuide(docsUrl: string): string {
+  return `litevision has no Parameter Guide for this model id; read ${docsUrl} before setting provider_options.`;
 }
 
 /** A Rating as `rate_job` and `list_models` report it. */
@@ -353,12 +417,15 @@ function optionsOf(ratedJobs: RatedJob[], model: Model): OptionsRecord {
   return optionsRecord(ratedJobs, { provider: model.provider, protocol: model.protocol, modelId: model.modelId });
 }
 
-/** The docs link and recorded options for the Model a Job ran on, read from the Job history. */
-async function jobDocs(dirs: Dirs, jobId: string): Promise<{ docsUrl: string; options: OptionsRecord } | undefined> {
+/** The docs link, built-in Parameter Guide and recorded options for the Model a Job ran on, read from the Job history. */
+async function jobDocs(dirs: Dirs, jobId: string): Promise<{ known: ParameterKnowledge; provider: string; options: OptionsRecord } | undefined> {
   const job = await readJob(dirs, jobId);
-  const docsUrl = job === undefined ? undefined : adapterForProtocol(job.protocol)?.docsUrl(job.modelId, job.modality ?? "image");
-  if (job === undefined || docsUrl === undefined) return undefined;
-  return { docsUrl, options: optionsRecord(await readRatedJobs(dirs), job) };
+  const adapter = job === undefined ? undefined : adapterForProtocol(job.protocol);
+  if (job === undefined || adapter === undefined) return undefined;
+  const modality = job.modality ?? "image";
+  const guide = adapter.parameterGuide?.(job.modelId, modality);
+  const known = { docsUrl: adapter.docsUrl(job.modelId, modality), ...(guide === undefined ? {} : { guide }) };
+  return { known, provider: job.provider, options: optionsRecord(await readRatedJobs(dirs), job) };
 }
 
 function suspectWhy(suspect: SuspectOption): string {
@@ -368,9 +435,15 @@ function suspectWhy(suspect: SuspectOption): string {
 }
 
 /**
- * Where the Agent should look when a Provider rejected a request or a result did not match it: the docs link, and the
- * Known-good Options (ADR 0006).
+ * Where the Agent should look when a Provider rejected a request: the docs link and Known-good Options (ADR 0006), and
+ * for a rejected or unsupported request also what litevision knows of the Model's parameters (ADR 0010).
  */
+function failureHint(known: ParameterKnowledge, providerId: string, record: OptionsRecord, kind: ProviderErrorKind): string {
+  const help = kind === "rejected_option" || kind === "unsupported" ? `\n${parameterHelp(known, providerId)}` : "";
+  return `${optionsHint(known.docsUrl, record)}${help}`;
+}
+
+/** The docs link and the Known-good Options (ADR 0006). */
 function optionsHint(docsUrl: string, record: OptionsRecord): string {
   const good = Object.keys(record.knownGood).length === 0 ? "none recorded yet" : JSON.stringify(record.knownGood);
   const suspect = Object.entries(record.suspect)
@@ -433,17 +506,20 @@ function toolError(text: string) {
  * A generation tool's error. When the Provider rejected the request or failed it for a reason it did not classify,
  * the error carries the Model's docs link and Known-good Options, so the Agent need not look them up (ADR 0006).
  */
-async function failure(error: unknown, hint: (() => Promise<string>) | undefined) {
+async function failure(error: unknown, hint: Hint | undefined) {
   const reason = await failureReason(error, hint);
   return toolError(error instanceof JobFailedError ? `Job ${error.jobId} failed: ${reason}` : reason);
 }
 
+/** What to add to a failed Job's error, given how it failed. */
+type Hint = (kind: ProviderErrorKind) => Promise<string>;
+
 /** Why a Job failed or could not start, safe to show the Agent; any other error is rethrown. */
-async function failureReason(error: unknown, hint: (() => Promise<string>) | undefined): Promise<string> {
+async function failureReason(error: unknown, hint: Hint | undefined): Promise<string> {
   if (error instanceof ConfigError) return error.message;
   if (error instanceof JobFailedError) {
     const helpful = hint !== undefined && (error.kind === "unsupported" || error.kind === "rejected_option" || error.kind === "other");
-    return `${error.message}${helpful ? await hint() : ""}`;
+    return `${error.message}${helpful ? await hint(error.kind) : ""}`;
   }
   throw error;
 }
@@ -453,8 +529,8 @@ interface PreparedJob {
   model: Model;
   start(comparison?: string): Promise<JobState>;
   report(job: JobState): { output: Record<string, unknown>; text: string };
-  /** The Model's docs link and Known-good Options, for a failed Job's error (ADR 0006). */
-  hint(): Promise<string>;
+  /** The Model's docs link, Known-good Options and Parameter Guide, for a failed Job's error (ADR 0006, ADR 0010). */
+  hint: Hint;
 }
 
 interface ImageArgs {
@@ -560,7 +636,7 @@ export function createServer(deps: ServerDeps): McpServer {
     return {
       model,
       start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
-      hint: async () => optionsHint(info.docsUrl, await modelOptions(deps, model)),
+      hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
         const { size } = normalised.request;
         const output = {
@@ -609,7 +685,7 @@ export function createServer(deps: ServerDeps): McpServer {
       model,
       start: (comparison) =>
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
-      hint: async () => optionsHint(info.docsUrl, await modelOptions(deps, model)),
+      hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
         const { size, seconds } = normalised.request;
         const output = {
@@ -865,7 +941,7 @@ export function createServer(deps: ServerDeps): McpServer {
         const job = await jobs.get(job_id);
         const docsUrl =
           job.status === "completed" && job.mismatch !== undefined
-            ? ((await jobDocs(deps.dirs, job_id))?.docsUrl ?? "the Model's docs link in `list_models`")
+            ? ((await jobDocs(deps.dirs, job_id))?.known.docsUrl ?? "the Model's docs link in `list_models`")
             : "";
         const text =
           job.status === "running"
@@ -874,9 +950,9 @@ export function createServer(deps: ServerDeps): McpServer {
         return { content: [{ type: "text", text }], structuredContent: jobOutput(job) };
       } catch (error) {
         // A video often outlasts `generate_video`'s wait, so its rejection may first reach the Agent here.
-        return failure(error, async () => {
+        return failure(error, async (kind) => {
           const docs = await jobDocs(deps.dirs, job_id);
-          return docs === undefined ? "" : optionsHint(docs.docsUrl, docs.options);
+          return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.options, kind);
         });
       }
     },
