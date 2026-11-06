@@ -94,6 +94,69 @@ describe("list_models: the Parameter Guide (ADR 0010)", () => {
   });
 });
 
+describe("list_models: Parameter Guide entries for Venice, APIMart and Together (ADR 0010)", () => {
+  const together = { id: "together-ai", baseUrl: "https://api.together.ai/v1" };
+  const apimart = { id: "apimart", baseUrl: "https://api.apimart.ai/v1" };
+  const venice = { id: "venice", baseUrl: "https://api.venice.ai/api/v1" };
+  const keys = { "together-ai": { apiKey: "together-test-0000secret0000" }, apimart: { apiKey: "sk-apimart-0000secret" }, venice: { apiKey: "venice-0000secret" } };
+
+  async function guideOf(model: Record<string, unknown>, routes: Record<string, () => Response> = {}) {
+    harness = await startHarness({ config: { providers: [together, apimart, venice], models: [{ alias: "m", ...model }] }, credentials: keys, routes });
+    const result = await harness.client.callTool({ name: "list_models", arguments: { model: "m" } });
+    expect(result.isError).toBeFalsy();
+    return { result, model: (result.structuredContent as { models: Array<Listed & { parameter_schema?: unknown }> }).models[0]! };
+  }
+  const parameter = (guide: GuideOutput, name: string) => guide.parameters.find((candidate) => candidate.name === name)!;
+
+  test("a Together FLUX Model's guide gives width and height", async () => {
+    const { model } = await guideOf({ provider: "together-ai", modelId: "black-forest-labs/FLUX.2-pro", protocol: "together" });
+    const guide = model.parameter_guide!;
+    expect(parameter(guide, "width").values).toContain("1920");
+    expect(guide.checked).toBe("2026-11-05");
+    expect(guide.sources.some((source) => source.startsWith("https://docs.together.ai/"))).toBe(true);
+  });
+
+  test("a Together Wan 2.7 video Model's guide gives resolution, ratio and seconds with their defaults", async () => {
+    const { model } = await guideOf({ provider: "together-ai", modelId: "Wan-AI/wan2.7-t2v", protocol: "together", modality: "video" });
+    const guide = model.parameter_guide!;
+    expect(parameter(guide, "resolution")).toMatchObject({ default: "1080P" });
+    expect(parameter(guide, "resolution").values).toContain("720P");
+    expect(parameter(guide, "ratio")).toMatchObject({ default: "16:9" });
+    expect(parameter(guide, "seconds").values).toContain("2–15");
+    expect(parameter(guide, "seconds").default).toContain("5");
+  });
+
+  test("an APIMart GPT Image Model shows the built-in entry when the schema endpoint does not answer", async () => {
+    const { model } = await guideOf(
+      { provider: "apimart", modelId: "gpt-image-2.5-flare", protocol: "apimart" },
+      { "GET https://api.apimart.ai/v1/models/gpt-image-2.5-flare/schema": () => new Response("unavailable", { status: 503 }) },
+    );
+    expect(model.parameter_schema).toBeUndefined();
+    expect(parameter(model.parameter_guide!, "resolution").values).toContain("4k");
+    expect(parameter(model.parameter_guide!, "size").default).toBe("auto");
+  });
+
+  test("a Venice Model shows the built-in entry when its model list does not answer", async () => {
+    const down = () => new Response("unavailable", { status: 503 });
+    const { model } = await guideOf(
+      { provider: "venice", modelId: "nano-banana-pro", protocol: "venice" },
+      { "GET https://api.venice.ai/api/v1/models?type=image": down, "GET https://api.venice.ai/api/v1/models?type=inpaint": down },
+    );
+    expect(model.parameter_schema).toBeUndefined();
+    expect(parameter(model.parameter_guide!, "resolution").values).toContain("4K");
+    expect(parameter(model.parameter_guide!, "resolution").price).toContain("nano-banana-pro $0.18");
+  });
+
+  test("a Venice Model shows Venice's own description when its model list answers", async () => {
+    const { model } = await guideOf(
+      { provider: "venice", modelId: "venice-sd35", protocol: "venice" },
+      { "GET https://api.venice.ai/api/v1/models?type=image": recorded("venice/models-image.json") as () => Response },
+    );
+    expect(model.parameter_guide).toBeNull();
+    expect(model.parameter_schema).toBeDefined();
+  });
+});
+
 describe("list_models: a Model the Provider describes itself (ADR 0010)", () => {
   test("shows the Provider's description in place of a built-in entry", async () => {
     const base = "https://api.apimart.ai/v1";

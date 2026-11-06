@@ -18,6 +18,7 @@ import {
   type SubmittedVideoJob,
   type VideoCapabilities,
 } from "./protocol.ts";
+import { togetherGuide } from "./guides/together.ts";
 import { sendToProvider } from "./send.ts";
 
 /**
@@ -413,6 +414,8 @@ export const together: ProtocolAdapter = {
   builtInVideoCapabilities: (modelId) => videoFamily(modelId).capabilities,
 
   // Together's model list gives each model's type and price, but not its sizes or limits, so there is no `fetchModelInfo`.
+
+  parameterGuide: (modelId, modality) => togetherGuide(modelId, modality),
 
   docsUrl: (modelId, modality = "image") => (modality === "video" ? videoFamily(modelId) : imageFamily(modelId)).docsUrl,
 

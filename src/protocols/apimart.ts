@@ -17,6 +17,7 @@ import {
   type ReferenceImage,
   type SubmittedJob,
 } from "./protocol.ts";
+import { apimartGuide } from "./guides/apimart.ts";
 import { multipartBody } from "./multipart.ts";
 import { sendToProvider } from "./send.ts";
 
@@ -354,6 +355,8 @@ export const apimart: ProtocolAdapter = {
     const model = known(modelId);
     return model === undefined ? "https://docs.apimart.ai/en" : `${docsBase}/${model.docsPage}`;
   },
+
+  parameterGuide: (modelId, modality) => (modality === "image" ? apimartGuide(modelId) : undefined),
 
   reservedOptions: ["model", "prompt", "size", "n", "image_urls"],
 

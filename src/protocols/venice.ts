@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
 import { httpProviderError, providerError, providerLabel } from "./errors.ts";
+import { veniceGuide } from "./guides/venice.ts";
 import { inParallel } from "./parallel.ts";
 import {
   aspectRatios,
@@ -341,6 +342,8 @@ export const venice: ProtocolAdapter = {
   },
 
   docsUrl: (modelId) => (looksLikeEdit(modelId) ? editDocs : generateDocs),
+
+  parameterGuide: (modelId, modality) => (modality === "image" ? veniceGuide(modelId) : undefined),
 
   reservedOptions: ["model", "modelId", "prompt", "variants", "return_binary", "width", "height", "aspect_ratio", "image", "images"],
 
