@@ -309,6 +309,18 @@ describe("Standing Options (ADR 0010)", () => {
     expect((await h.readConfig()).models[0]).toEqual(gptImage);
   });
 
+  test("rejects a nested field the Protocol fills itself, such as Gemini's response format type", async () => {
+    const google = { id: "google", baseUrl: "https://generativelanguage.googleapis.com/v1beta" };
+    const banana = { alias: "banana", provider: "google", modelId: "gemini-3-pro-image", protocol: "gemini", modality: "image" };
+    const h = await start({ config: { providers: [google], models: [banana] }, credentials: { google: { apiKey } } });
+    const send = (standingOptions: unknown) => h.send("PATCH", "/api/models/banana", { body: { standingOptions } });
+
+    const typed = await send({ response_format: { type: "text", image_size: "2K" } });
+    expect(typed.status).toBe(400);
+    expect(typed.json().error).toContain("`response_format.type`");
+    expect((await send({ response_format: { image_size: "2K" } })).status).toBe(200);
+  });
+
   test("can be set when adding a Model", async () => {
     const h = await start(withModel);
     const response = await h.send("POST", "/api/models", { body: { ...gptImage, alias: "hq", standingOptions: { quality: "high" } } });

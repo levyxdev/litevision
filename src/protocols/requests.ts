@@ -1,4 +1,5 @@
 import { ConfigError, type Model } from "../config.ts";
+import { isPlainObject } from "../config-store.ts";
 import { readReferences } from "../images.ts";
 import { fieldsToRead, readResolution, readSeconds, readShape } from "./parameter-guide.ts";
 import type { ImageRequest, ProtocolAdapter, VideoRequest } from "./protocol.ts";
@@ -51,12 +52,34 @@ export interface NormalisedVideoRequest {
   requestedResolution: string | null;
 }
 
-/** Refuses `provider_options` that set a field litevision fills itself, naming each. */
+/**
+ * The reserved fields that options set, each in words for an error, e.g. `` `prompt` ``. A reserved field may be dotted
+ * one level deep (`response_format.type`): options then set it by setting that key, or by making its parent anything
+ * but an object, which would replace the field litevision fills.
+ */
+export function reservedConflicts(options: Record<string, unknown>, reservedFields: readonly string[]): string[] {
+  const conflictOf = (field: string): string | undefined => {
+    const [parent, child] = field.split(".") as [string, string | undefined];
+    if (!Object.hasOwn(options, parent)) return undefined;
+    const value = options[parent];
+    if (child === undefined) return `\`${field}\``;
+    if (!isPlainObject(value)) return `\`${parent}\` as anything but an object (litevision sets \`${field}\` in it)`;
+    return Object.hasOwn(value, child) ? `\`${field}\`` : undefined;
+  };
+  // In the order the options name them, so the error reads like what was sent.
+  const order = Object.keys(options);
+  return [...reservedFields]
+    .sort((a, b) => order.indexOf(a.split(".")[0]!) - order.indexOf(b.split(".")[0]!))
+    .map(conflictOf)
+    .filter((conflict) => conflict !== undefined);
+}
+
+/** Refuses merged options that set a field litevision fills itself, naming each. */
 function refuseReserved(providerOptions: Record<string, unknown>, reservedFields: readonly string[], fromWhat: string): void {
-  const reserved = Object.keys(providerOptions).filter((key) => reservedFields.includes(key));
-  if (reserved.length === 0) return;
+  const conflicts = reservedConflicts(providerOptions, reservedFields);
+  if (conflicts.length === 0) return;
   throw new ConfigError(
-    `provider_options may not set ${reserved.map((key) => `\`${key}\``).join(", ")}: litevision fills ${reserved.length === 1 ? "that field" : "those fields"} itself, from ${fromWhat}. Use those instead.`,
+    `provider_options, and the Model's Standing Options they are merged over, may not set ${conflicts.join(", ")}: litevision fills ${conflicts.length === 1 ? "that field" : "those fields"} itself, from ${fromWhat}. Use those instead.`,
   );
 }
 

@@ -180,11 +180,24 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(await bodiesTo(urls.gemini)).toHaveLength(3);
   });
 
-  test("Gemini's response format takes the Agent's aspect ratio and size, and keeps the image type", async () => {
+  test("Gemini's response format takes the Agent's aspect ratio and size alongside litevision's image type", async () => {
     harness = await startHarness(setup());
-    await generate({ model: "banana", provider_options: { response_format: { aspect_ratio: "21:9", image_size: "4K", type: "text" } } });
+    await generate({ model: "banana", provider_options: { response_format: { aspect_ratio: "21:9", image_size: "4K" } } });
     const [body] = await bodiesTo(urls.gemini);
     expect(body!.response_format).toEqual({ type: "image", aspect_ratio: "21:9", image_size: "4K" });
+  });
+
+  test("Gemini's response format type is refused by name, not silently replaced; so is a response format that is not an object", async () => {
+    harness = await startHarness(setup());
+    const typed = await generate({ model: "banana", provider_options: { response_format: { aspect_ratio: "21:9", type: "text" } } });
+    expect(typed.isError).toBe(true);
+    expect(textOf(typed)).toContain("`response_format.type`");
+
+    const flat = await generate({ model: "banana", provider_options: { response_format: "16:9" } });
+    expect(flat.isError).toBe(true);
+    expect(textOf(flat)).toContain("`response_format`");
+    expect(textOf(flat)).toContain("object");
+    expect(harness.requests).toHaveLength(0);
   });
 
   test("the Job history records what litevision read from the final request", async () => {

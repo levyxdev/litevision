@@ -121,6 +121,7 @@ describe("Standing Options (ADR 0010)", () => {
     const result = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a fox", provider_options: { model: "other" } } });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("`model`");
+    expect(textOf(result)).toContain("Standing Options");
     expect(h.requests).toHaveLength(0);
   });
 });

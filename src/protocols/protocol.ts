@@ -169,7 +169,7 @@ export interface ProtocolAdapter {
    * when the Model's Parameter Guide entry names none of its own, and the resolution tier, which is only reported.
    */
   requestFields: { image: RequestFields; video?: RequestFields };
-  /** Request fields the adapter sets itself; `provider_options` may not set them. */
+  /** Request fields the adapter sets itself, dotted one level deep for a nested one; `provider_options` may not set them. */
   reservedOptions: readonly string[];
   submit(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedJob>;
   /** Video Protocols only (ADR 0005): request fields the adapter sets itself for a video Job. */

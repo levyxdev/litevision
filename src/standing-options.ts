@@ -1,5 +1,6 @@
 import { isPlainObject } from "./config-store.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
+import { reservedConflicts } from "./protocols/requests.ts";
 import type { Modality } from "./protocols/protocol.ts";
 
 /**
@@ -33,8 +34,7 @@ export function standingOptionsProblem(value: unknown, protocol: string, modalit
   if (!isPlainObject(value)) {
     return 'Standing Options must be a JSON object of request fields, such as { "quality": "high" }.';
   }
-  const reserved = Object.keys(value).filter((key) => reservedFields(protocol, modality).includes(key));
-  if (reserved.length === 0) return undefined;
-  const names = reserved.map((key) => `\`${key}\``).join(", ");
-  return `Standing Options may not set ${names}: litevision fills ${reserved.length === 1 ? "that field" : "those fields"} itself for Protocol "${protocol}".`;
+  const conflicts = reservedConflicts(value, reservedFields(protocol, modality));
+  if (conflicts.length === 0) return undefined;
+  return `Standing Options may not set ${conflicts.join(", ")}: litevision fills ${conflicts.length === 1 ? "that field" : "those fields"} itself for Protocol "${protocol}".`;
 }

@@ -213,7 +213,7 @@ describe("provider_options", () => {
     const result = await generate({ provider_options: { prompt: "something else", model: "dall-e-3", size: "auto" } });
 
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("provider_options may not set `prompt`, `model`");
+    expect(textOf(result)).toContain("may not set `prompt`, `model`");
     expect(textOf(result)).not.toContain("`size`");
     expect(harness.requests).toHaveLength(0);
 

@@ -158,7 +158,7 @@ describe("generate_image with a gemini Model", () => {
   });
 
 
-  test("provider_options reach the Interaction; their response_format is merged with litevision's image type, which they cannot change", async () => {
+  test("provider_options reach the Interaction; their response_format is merged with litevision's image type", async () => {
     harness = await startHarness(geminiSetup());
     const safety = [{ type: "hate_speech", threshold: "block_only_high" }];
     outputOf(
@@ -166,7 +166,7 @@ describe("generate_image with a gemini Model", () => {
         provider_options: {
           generation_config: { thinking_level: "high" },
           safety_settings: safety,
-          response_format: { image_size: "2K", mime_type: "image/jpeg", aspect_ratio: "21:9", type: "text" },
+          response_format: { image_size: "2K", mime_type: "image/jpeg", aspect_ratio: "21:9" },
         },
       }),
     );
@@ -184,7 +184,7 @@ describe("generate_image with a gemini Model", () => {
     harness = await startHarness(geminiSetup());
     const result = await generate({ provider_options: { input: "something else", model: "gemini-3-pro-image" } });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("provider_options may not set `input`, `model`");
+    expect(textOf(result)).toContain("may not set `input`, `model`");
     expect(harness.requests).toHaveLength(0);
   });
 

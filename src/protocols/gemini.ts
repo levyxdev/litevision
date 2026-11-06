@@ -67,7 +67,7 @@ function interactionBody(request: ImageRequest, target: ModelTarget): Record<str
     ],
     ...options,
     // provider_options set the rest of the response format (`aspect_ratio`, `image_size`, `mime_type`); the image
-    // type is always litevision's, since it reads an image back.
+    // type is litevision's, since it reads an image back, and `response_format.type` is reserved so it is never replaced.
     response_format: { ...(isObject(extraFormat) ? extraFormat : {}), type: "image" },
   };
 }
@@ -140,7 +140,7 @@ export const gemini: ProtocolAdapter = {
 
   requestFields: { image: { shape: ["response_format.aspect_ratio"], resolution: "response_format.image_size" } },
 
-  reservedOptions: ["model", "input"],
+  reservedOptions: ["model", "input", "response_format.type"],
 
   async submit(request, target, http, context) {
     return { wait: () => inParallel(request.n, target.providerId, () => sendInteraction(request, target, http, context)) };
