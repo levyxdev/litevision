@@ -110,28 +110,27 @@ export function parseShape(text: string): { label: string; ratio: number } | und
 }
 
 /**
- * What a request asks for, read from its fields: `set` is false when none of the shape fields is in it, and `shape` is
- * null when one is but cannot be read (e.g. `auto`).
+ * The shape a request asks for, from the first of its shape fields it sets, e.g. `16:9` or `2048x1152`; null when it
+ * sets none, or one that says no shape (e.g. `auto`).
  */
-export function readShape(fields: ShapeField[], body: Record<string, unknown>): { set: boolean; shape: string | null } {
+export function readShape(fields: ShapeField[], body: Record<string, unknown>): string | null {
   for (const field of fields) {
     if (typeof field === "string") {
       const value = valueAt(body, field);
       if (value === undefined) continue;
-      return { set: true, shape: typeof value === "string" ? (parseShape(value)?.label ?? null) : null };
+      return typeof value === "string" ? (parseShape(value)?.label ?? null) : null;
     }
     const width = valueAt(body, field.width);
     const height = valueAt(body, field.height);
     if (width === undefined && height === undefined) continue;
     const w = positive(width);
     const h = positive(height);
-    return { set: true, shape: w === undefined || h === undefined ? null : `${w}x${h}` };
+    return w === undefined || h === undefined ? null : `${w}x${h}`;
   }
-  return { set: false, shape: null };
+  return null;
 }
 
-/** The requested length in seconds: `set` is false when the field is not in the request, `seconds` null when unreadable. */
-export function readSeconds(field: string | undefined, body: Record<string, unknown>): { set: boolean; seconds: number | null } {
-  const value = field === undefined ? undefined : valueAt(body, field);
-  return { set: value !== undefined, seconds: positive(value) ?? null };
+/** The length in seconds a request asks for; null when the field is missing or cannot be read. */
+export function readSeconds(field: string | undefined, body: Record<string, unknown>): number | null {
+  return field === undefined ? null : (positive(valueAt(body, field)) ?? null);
 }

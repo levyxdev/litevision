@@ -67,7 +67,7 @@ export async function normaliseImageRequest(
   const shape = readShape(fieldsToRead(adapter, model.modelId, "image").shape, parameters.providerOptions);
   return {
     request: { prompt: parameters.prompt, n: parameters.n, references, providerOptions: parameters.providerOptions },
-    requestedShape: shape.shape,
+    requestedShape: shape,
   };
 }
 
@@ -93,7 +93,7 @@ export async function normaliseVideoRequest(
       references,
       providerOptions: parameters.providerOptions,
     },
-    requestedShape: readShape(fields.shape, parameters.providerOptions).shape,
-    requestedSeconds: readSeconds(fields.duration, parameters.providerOptions).seconds,
+    requestedShape: readShape(fields.shape, parameters.providerOptions),
+    requestedSeconds: readSeconds(fields.duration, parameters.providerOptions),
   };
 }

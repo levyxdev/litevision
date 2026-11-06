@@ -60,11 +60,22 @@ interface KnownModel {
   batches: boolean;
 }
 
-/** The models whose docs page and batching litevision knows; any other model gets one task per image. */
+/**
+ * The models whose docs page litevision knows, and whether one task makes all `n` images (their docs give `n` a
+ * range, as their Parameter Guide entries say). Any other model gets one task per image, which always works.
+ */
 const knownModels: KnownModel[] = [
-  { matches: /^gpt-image-2(-ext|-official)?$/, docsPage: "gpt-image-2/generation", batches: false },
+  { matches: /^gpt-image-2-official$/, docsPage: "gpt-image-2/official", batches: true },
+  { matches: /^gpt-image-2(-ext)?$/, docsPage: "gpt-image-2/generation", batches: false },
+  { matches: /^gpt-image-2\.5-(flare|sunburst)$/, docsPage: "gpt-image-2.5/generation", batches: true },
+  { matches: /^gpt-image-2\.6-(flare|sunburst)$/, docsPage: "gpt-image-2.6/generation", batches: true },
+  { matches: /^gpt-image-2\.5-ext$/, docsPage: "gpt-image-2.5-ext/generation", batches: true },
+  { matches: /^gpt-image-2\.6-ext$/, docsPage: "gpt-image-2.6-ext/generation", batches: false },
   { matches: /^gpt-image-1(\.5)?(-official)?$/, docsPage: "gpt-image-1/generation", batches: true },
+  { matches: /^gemini-nano-banana-2\.1$/, docsPage: "gemini-nano-banana-2.1/generation", batches: true },
+  { matches: /^(gemini-3\.1-flash-lite-image(-ext)?|nano-banana-2-lite)$/, docsPage: "gemini-3.1-flash/generation-lite", batches: true },
   { matches: /^(gemini-3-pro-image-preview(-official)?|nano-banana-pro(-ext)?)$/, docsPage: "gemini-3-pro/generation", batches: false },
+  // Seedream takes `n` up to 15, but text-to-image alone cannot make several in one task, so each image is its own.
   { matches: /^seedream-4[.-]5$/i, docsPage: "seedream-4.5/generation", batches: false },
 ];
 

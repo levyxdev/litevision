@@ -393,7 +393,6 @@ function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; as
  * How the saved files differ from what was requested, as far as their headers tell (ADR 0006). Pixel counts are not
  * compared, since `provider_options` such as a resolution tier are meant to change them; the shape and length are.
  */
-
 function mismatchOf(parameters: JobRecord["parameters"], observed: Array<MediaFacts | null>): string | undefined {
   const { followsFirstFrame } = parameters;
   // What the final request asked for (ADR 0010); Jobs recorded before, what litevision chose.

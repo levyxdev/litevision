@@ -314,6 +314,22 @@ describe("apimart Protocol", () => {
   });
 });
 
+describe("`n` on APIMart (ADR 0010)", () => {
+  test("goes into the count field of a model whose docs give one, in one task", async () => {
+    harness = await startHarness(apimartSetup({}, "gpt-image-2.5-flare"));
+    await generate(harness, { n: 2 });
+    expect(submits(harness)).toHaveLength(1);
+    expect(await submits(harness)[0]!.json()).toMatchObject({ n: 2 });
+  });
+
+  test("is split into one task per image for a model that makes one at a time", async () => {
+    harness = await startHarness(apimartSetup({}, "gpt-image-2"));
+    await generate(harness, { n: 2 });
+    expect(submits(harness)).toHaveLength(2);
+    expect(await submits(harness)[0]!.json()).toMatchObject({ n: 1 });
+  });
+});
+
 describe("what list_models knows about an APIMart Model", () => {
   test("APIMart's own schema for the Model, which wins over the Parameter Guide", async () => {
     harness = await startHarness(apimartSetup({ [schemaUrl("gpt-image-2")]: recorded("apimart/schema-gpt-image-2.json") }));
@@ -326,6 +342,19 @@ describe("what list_models knows about an APIMart Model", () => {
     expect(model.docs_url).toBe("https://docs.apimart.ai/en/api-reference/images/gpt-image-2/generation");
     const [schemaRequest] = harness.requests;
     expect(schemaRequest!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+  });
+
+  test("a rejection get_job reports later carries APIMart's own schema, not the built-in guide", async () => {
+    harness = await startHarness(
+      apimartSetup({ [schemaUrl("gpt-image-2")]: recorded("apimart/schema-gpt-image-2.json"), [submitUrl]: recorded("apimart/invalid-parameter.json", 400) }),
+    );
+    const failed = await generate(harness, { provider_options: { resolution: "8k" } });
+    const jobId = /Job (\S+) failed/.exec(textOf(failed))![1]!;
+
+    const again = textOf(await getJob(harness, jobId));
+    expect(again).toContain("rejected an option");
+    expect(again).toContain('Parameter schema from Provider "apimart"');
+    expect(again).not.toContain("Parameter Guide for");
   });
 
   test("the built-in Parameter Guide when the schema cannot be fetched", async () => {

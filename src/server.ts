@@ -369,15 +369,23 @@ function optionsOf(ratedJobs: RatedJob[], model: Model): OptionsRecord {
   return optionsRecord(ratedJobs, { provider: model.provider, protocol: model.protocol, modelId: model.modelId });
 }
 
-/** The docs link, built-in Parameter Guide and recorded options for the Model a Job ran on, read from the Job history. */
-async function jobDocs(dirs: Dirs, jobId: string): Promise<{ known: ParameterKnowledge; provider: string; options: OptionsRecord } | undefined> {
-  const job = await readJob(dirs, jobId);
+/**
+ * What litevision knows about the parameters of the Model a Job ran on, read from the Job history: the docs link, the
+ * built-in Parameter Guide and, where the Provider is still configured, its own description, which wins (ADR 0010).
+ */
+async function jobDocs(deps: ModelInfoDeps, jobId: string): Promise<{ known: ParameterKnowledge; provider: string; options: OptionsRecord } | undefined> {
+  const job = await readJob(deps.dirs, jobId);
   const adapter = job === undefined ? undefined : adapterForProtocol(job.protocol);
   if (job === undefined || adapter === undefined) return undefined;
   const modality = job.modality ?? "image";
   const guide = adapter.parameterGuide?.(job.modelId, modality);
-  const known = { docsUrl: adapter.docsUrl(job.modelId, modality), ...(guide === undefined ? {} : { guide }) };
-  return { known, provider: job.provider, options: optionsRecord(await readRatedJobs(dirs), job) };
+  let known: ParameterKnowledge = { docsUrl: adapter.docsUrl(job.modelId, modality), ...(guide === undefined ? {} : { guide }) };
+  const provider = modality === "image" ? (await loadConfig(deps.dirs).catch(() => undefined))?.providers.find((candidate) => candidate.id === job.provider) : undefined;
+  if (provider !== undefined) {
+    const model = { alias: job.model, provider: job.provider, modelId: job.modelId, protocol: job.protocol, modality };
+    known = await modelInfo(deps, { model, provider });
+  }
+  return { known, provider: job.provider, options: optionsRecord(await readRatedJobs(deps.dirs), job) };
 }
 
 function suspectWhy(suspect: SuspectOption): string {
@@ -872,7 +880,7 @@ export function createServer(deps: ServerDeps): McpServer {
         const job = await jobs.get(job_id);
         const docsUrl =
           job.status === "completed" && job.mismatch !== undefined
-            ? ((await jobDocs(deps.dirs, job_id))?.known.docsUrl ?? "the Model's docs link in `list_models`")
+            ? ((await jobDocs(infoDeps, job_id))?.known.docsUrl ?? "the Model's docs link in `list_models`")
             : "";
         const text =
           job.status === "running"
@@ -882,7 +890,7 @@ export function createServer(deps: ServerDeps): McpServer {
       } catch (error) {
         // A video often outlasts `generate_video`'s wait, so its rejection may first reach the Agent here.
         return failure(error, async (kind) => {
-          const docs = await jobDocs(deps.dirs, job_id);
+          const docs = await jobDocs(infoDeps, job_id);
           return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.options, kind);
         });
       }
