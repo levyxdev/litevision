@@ -10,6 +10,7 @@ const submitUrl = `POST ${base}/images/generations`;
 const taskId = "task_01KPQ7J7DWB7QZ3WCEK3YVPBRA";
 const taskUrl = (id = taskId) => `GET ${base}/tasks/${id}?language=en`;
 const imageUrl = "https://upload.apimart.ai/f/image/9998236911693428-e8d7441f-image_task_01KPQ7J7DWB7QZ3WCEK3YVPBRA_0.png";
+const uploadUrl = `POST ${base}/uploads/images`;
 const schemaUrl = (modelId: string) => `GET ${base}/models/${modelId}/schema`;
 
 const png: Route = () => new Response(tinyPng, { headers: { "content-type": "image/png" } });
@@ -81,7 +82,7 @@ describe("apimart Protocol", () => {
 
     const [submit] = submits(harness);
     expect(submit!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
-    expect(await submit!.json()).toEqual({ model: "gpt-image-2", prompt: "a red fox", size: "1:1", n: 1 });
+    expect(await submit!.json()).toEqual({ model: "gpt-image-2", prompt: "a red fox", n: 1 });
     expect(polls(harness)).toHaveLength(3);
     expect(polls(harness)[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
   });
@@ -97,19 +98,56 @@ describe("apimart Protocol", () => {
     expect(JSON.stringify(lines)).not.toContain(apiKey);
   });
 
-  test("sends reference images as data URIs", async () => {
-    harness = await startHarness(apimartSetup());
+  test("uploads each reference image through APIMart's own upload endpoint and sends the returned links, never a data URI", async () => {
+    let uploaded = 0;
+    harness = await startHarness(
+      apimartSetup({ [uploadUrl]: () => Response.json({ url: `https://upload.apimart.ai/f/ref-${++uploaded}.png`, filename: "ref.png" }) }),
+    );
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
-    const result = await generate(harness, { references: ["fox.png"], aspect_ratio: "16:9" });
+    await writeFile(join(harness.cwd, "owl.png"), tinyPng);
+    const result = await generate(harness, { references: ["fox.png", "owl.png"], provider_options: { size: "16:9" } });
 
     expect(result.isError).toBeFalsy();
-    expect(await submits(harness)[0]!.json()).toEqual({
-      model: "gpt-image-2",
-      prompt: "a red fox",
-      size: "16:9",
-      n: 1,
-      image_urls: [`data:image/png;base64,${tinyPng.toString("base64")}`],
-    });
+    const uploads = harness.requests.filter((request) => `${request.method} ${request.url}` === uploadUrl);
+    expect(uploads).toHaveLength(2);
+    expect(uploads[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+    const form = await uploads[0]!.formData();
+    const file = form.get("file") as File;
+    expect(file.name).toBe("fox.png");
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(tinyPng);
+
+    const body = (await submits(harness)[0]!.json()) as { image_urls: string[] };
+    expect(body.image_urls).toEqual(["https://upload.apimart.ai/f/ref-1.png", "https://upload.apimart.ai/f/ref-2.png"]);
+    expect(JSON.stringify(body)).not.toContain("data:");
+    // Every request but the download of the result goes to the Provider's base URL, and nothing else carries the images.
+    const sent = harness.requests.filter((request) => request.url !== imageUrl);
+    for (const request of sent) expect(request.url.startsWith(`${base}/`)).toBe(true);
+  });
+
+  test("an upload answered by a gateway (503) is sent again", async () => {
+    let attempts = 0;
+    harness = await startHarness(
+      apimartSetup({
+        [uploadUrl]: () => (++attempts === 1 ? new Response("unavailable", { status: 503 }) : Response.json({ url: "https://upload.apimart.ai/f/ref.png" })),
+      }),
+    );
+    await writeFile(join(harness.cwd, "fox.png"), tinyPng);
+    const result = await generate(harness, { references: ["fox.png"] });
+
+    expect(result.isError).toBeFalsy();
+    expect(attempts).toBe(2);
+    expect(((await submits(harness)[0]!.json()) as { image_urls: string[] }).image_urls).toEqual(["https://upload.apimart.ai/f/ref.png"]);
+  });
+
+  test("a failed upload fails the Job, naming APIMart, before any generation request is sent", async () => {
+    harness = await startHarness(apimartSetup({ [uploadUrl]: recorded("apimart/insufficient-balance.json", 402) }));
+    await writeFile(join(harness.cwd, "fox.png"), tinyPng);
+    const result = await generate(harness, { references: ["fox.png"] });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Provider "apimart"');
+    expect(textOf(result)).toContain("reference image");
+    expect(submits(harness)).toHaveLength(0);
   });
 
   test("passes provider_options through untouched", async () => {
@@ -276,33 +314,57 @@ describe("apimart Protocol", () => {
   });
 });
 
-describe("apimart capabilities", () => {
-  test("come live from the Model's schema, with its parameter schema for provider_options", async () => {
+describe("`n` on APIMart (ADR 0010)", () => {
+  test("goes into the count field of a model whose docs give one, in one task", async () => {
+    harness = await startHarness(apimartSetup({}, "gpt-image-2.5-flare"));
+    await generate(harness, { n: 2 });
+    expect(submits(harness)).toHaveLength(1);
+    expect(await submits(harness)[0]!.json()).toMatchObject({ n: 2 });
+  });
+
+  test("is split into one task per image for a model that makes one at a time", async () => {
+    harness = await startHarness(apimartSetup({}, "gpt-image-2"));
+    await generate(harness, { n: 2 });
+    expect(submits(harness)).toHaveLength(2);
+    expect(await submits(harness)[0]!.json()).toMatchObject({ n: 1 });
+  });
+});
+
+describe("what list_models knows about an APIMart Model", () => {
+  test("APIMart's own schema for the Model, which wins over the Parameter Guide", async () => {
     harness = await startHarness(apimartSetup({ [schemaUrl("gpt-image-2")]: recorded("apimart/schema-gpt-image-2.json") }));
     const result = await harness.client.callTool({ name: "list_models", arguments: { model: "gpt2" } });
 
     const [model] = (result.structuredContent as { models: any[] }).models;
-    expect(model.capabilities.aspect_ratios.map((ratio: { aspect_ratio: string }) => ratio.aspect_ratio).sort()).toEqual(
-      ["16:9", "1:1", "2:3", "3:2", "3:4", "4:3", "9:16"].sort(),
-    );
-    expect(model.capabilities.max_reference_images).toBe(15);
-    expect(model.capabilities.max_images_per_job).toBe(4);
     expect(model.parameter_schema.properties.resolution.enum).toEqual(["1k", "2k", "4k"]);
+    expect(model.parameter_guide).toBeNull();
+    expect(model).not.toHaveProperty("capabilities");
     expect(model.docs_url).toBe("https://docs.apimart.ai/en/api-reference/images/gpt-image-2/generation");
     const [schemaRequest] = harness.requests;
     expect(schemaRequest!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
   });
 
-  test("fall back to the built-in table when the schema cannot be fetched", async () => {
+  test("a rejection get_job reports later carries APIMart's own schema, not the built-in guide", async () => {
+    harness = await startHarness(
+      apimartSetup({ [schemaUrl("gpt-image-2")]: recorded("apimart/schema-gpt-image-2.json"), [submitUrl]: recorded("apimart/invalid-parameter.json", 400) }),
+    );
+    const failed = await generate(harness, { provider_options: { resolution: "8k" } });
+    const jobId = /Job (\S+) failed/.exec(textOf(failed))![1]!;
+
+    const again = textOf(await getJob(harness, jobId));
+    expect(again).toContain("rejected an option");
+    expect(again).toContain('Parameter schema from Provider "apimart"');
+    expect(again).not.toContain("Parameter Guide for");
+  });
+
+  test("the built-in Parameter Guide when the schema cannot be fetched", async () => {
     harness = await startHarness(
       apimartSetup({ [schemaUrl("seedream-4.5")]: recorded("apimart/invalid-api-key.json", 404) }, "seedream-4.5"),
     );
-    const result = await harness.client.callTool({ name: "list_models", arguments: {} });
+    const result = await harness.client.callTool({ name: "list_models", arguments: { model: "gpt2" } });
 
     const [model] = (result.structuredContent as { models: any[] }).models;
-    expect(model.capabilities.aspect_ratios).toContainEqual({ aspect_ratio: "1:1", size: "2048x2048" });
-    expect(model.capabilities.aspect_ratios).toContainEqual({ aspect_ratio: "16:9", size: "2560x1440" });
-    expect(model.capabilities.max_reference_images).toBe(14);
+    expect(model.parameter_guide.family).toBe("Seedream 4.5 on APIMart");
     expect(model.docs_url).toBe("https://docs.apimart.ai/en/api-reference/images/seedream-4.5/generation");
   });
 });

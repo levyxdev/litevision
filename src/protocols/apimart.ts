@@ -2,20 +2,19 @@ import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
 import { classifyProviderError, httpProviderError, providerError, providerLabel } from "./errors.ts";
 import {
-  aspectRatios,
   ProviderError,
-  type AspectRatio,
   type GeneratedImage,
-  type ImageCapabilities,
-  type ImageSize,
   type JobContext,
   type JobImages,
   type ModelIdsResult,
   type ModelTarget,
   type ProtocolAdapter,
   type ProviderTarget,
+  type ReferenceImage,
   type SubmittedJob,
 } from "./protocol.ts";
+import { apimartGuide } from "./guides/apimart.ts";
+import { multipartBody } from "./multipart.ts";
 import { sendToProvider } from "./send.ts";
 
 /**
@@ -26,9 +25,6 @@ import { sendToProvider } from "./send.ts";
  */
 
 const docsBase = "https://docs.apimart.ai/en/api-reference/images";
-
-/** One task per image always works; only some models make several images in one task. */
-const maxImagesPerJob = 4;
 
 const errorSchema = z.object({
   error: z.object({
@@ -57,97 +53,31 @@ const taskSchema = z.object({
 
 const resumeSchema = z.object({ taskIds: z.array(z.string()).min(1) });
 
-const sizes = (entries: Array<[AspectRatio, number, number]>): ImageSize[] =>
-  entries.map(([aspectRatio, width, height]) => ({ aspectRatio, width, height }));
-
 interface KnownModel {
   matches: RegExp;
   docsPage: string;
-  capabilities: ImageCapabilities;
   /** True when one task makes all `n` images; otherwise each image is its own task. */
   batches: boolean;
 }
 
-/** The models litevision knows without asking APIMart, with sizes at each model's default resolution. */
+/**
+ * The models whose docs page litevision knows, and whether one task makes all `n` images (their docs give `n` a
+ * range, as their Parameter Guide entries say). Any other model gets one task per image, which always works.
+ */
 const knownModels: KnownModel[] = [
-  {
-    matches: /^gpt-image-2(-ext|-official)?$/,
-    docsPage: "gpt-image-2/generation",
-    capabilities: {
-      sizes: sizes([
-        ["1:1", 1024, 1024],
-        ["3:2", 1536, 1024],
-        ["2:3", 1024, 1536],
-        ["4:3", 1024, 768],
-        ["3:4", 768, 1024],
-        ["16:9", 1536, 864],
-        ["9:16", 864, 1536],
-      ]),
-      maxReferences: 15,
-      maxImages: maxImagesPerJob,
-    },
-    batches: false,
-  },
-  {
-    matches: /^gpt-image-1(\.5)?(-official)?$/,
-    docsPage: "gpt-image-1/generation",
-    capabilities: {
-      sizes: sizes([
-        ["1:1", 1024, 1024],
-        ["3:2", 1536, 1024],
-        ["2:3", 1024, 1536],
-      ]),
-      // Its docs page asks for public image links; litevision sends data URIs, so it claims none until that is confirmed.
-      maxReferences: 0,
-      maxImages: maxImagesPerJob,
-    },
-    batches: true,
-  },
-  {
-    matches: /^(gemini-3-pro-image-preview(-official)?|nano-banana-pro(-ext)?)$/,
-    docsPage: "gemini-3-pro/generation",
-    capabilities: {
-      sizes: sizes([
-        ["1:1", 1024, 1024],
-        ["3:2", 1264, 848],
-        ["2:3", 848, 1264],
-        ["4:3", 1200, 896],
-        ["3:4", 896, 1200],
-        ["16:9", 1376, 768],
-        ["9:16", 768, 1376],
-      ]),
-      maxReferences: 14,
-      maxImages: maxImagesPerJob,
-    },
-    batches: false,
-  },
-  {
-    matches: /^seedream-4[.-]5$/i,
-    docsPage: "seedream-4.5/generation",
-    capabilities: {
-      sizes: sizes([
-        ["1:1", 2048, 2048],
-        ["3:2", 2496, 1664],
-        ["2:3", 1664, 2496],
-        ["4:3", 2304, 1728],
-        ["3:4", 1728, 2304],
-        ["16:9", 2560, 1440],
-        ["9:16", 1440, 2560],
-      ]),
-      // References and images together may not exceed 15, and each task makes one image.
-      maxReferences: 14,
-      maxImages: maxImagesPerJob,
-    },
-    batches: false,
-  },
+  { matches: /^gpt-image-2-official$/, docsPage: "gpt-image-2/official", batches: true },
+  { matches: /^gpt-image-2(-ext)?$/, docsPage: "gpt-image-2/generation", batches: false },
+  { matches: /^gpt-image-2\.5-(flare|sunburst)$/, docsPage: "gpt-image-2.5/generation", batches: true },
+  { matches: /^gpt-image-2\.6-(flare|sunburst)$/, docsPage: "gpt-image-2.6/generation", batches: true },
+  { matches: /^gpt-image-2\.5-ext$/, docsPage: "gpt-image-2.5-ext/generation", batches: true },
+  { matches: /^gpt-image-2\.6-ext$/, docsPage: "gpt-image-2.6-ext/generation", batches: false },
+  { matches: /^gpt-image-1(\.5)?(-official)?$/, docsPage: "gpt-image-1/generation", batches: true },
+  { matches: /^gemini-nano-banana-2\.1$/, docsPage: "gemini-nano-banana-2.1/generation", batches: true },
+  { matches: /^(gemini-3\.1-flash-lite-image(-ext)?|nano-banana-2-lite)$/, docsPage: "gemini-3.1-flash/generation-lite", batches: true },
+  { matches: /^(gemini-3-pro-image-preview(-official)?|nano-banana-pro(-ext)?)$/, docsPage: "gemini-3-pro/generation", batches: false },
+  // Seedream takes `n` up to 15, but text-to-image alone cannot make several in one task, so each image is its own.
+  { matches: /^seedream-4[.-]5$/i, docsPage: "seedream-4.5/generation", batches: false },
 ];
-
-/** For a model litevision does not know: square only and no references, until APIMart's schema says otherwise. */
-const unknownModel: ImageCapabilities = {
-  sizes: sizes([["1:1", 1024, 1024]]),
-  maxReferences: 0,
-  maxImages: maxImagesPerJob,
-};
 
 const known = (modelId: string) => knownModels.find((model) => model.matches.test(modelId));
 
@@ -164,6 +94,29 @@ async function errorOf(response: Response, providerId: string, options: readonly
     message: error?.message ?? (response.statusText || undefined),
     options,
   });
+}
+
+const uploadedSchema = z.object({ url: z.string().min(1) });
+
+/**
+ * Uploads one reference image through APIMart's own `POST /uploads/images`, which answers with a public link: some
+ * models take only links, and the User's images then reach no host but APIMart (ADR 0010).
+ */
+async function uploadReference(reference: ReferenceImage, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<string> {
+  const { body, contentType } = multipartBody([], [{ name: "file", ...reference }]);
+  const init = { method: "POST", headers: { ...headers(target.credential), "content-type": contentType }, body };
+  const failed = (error: Error) =>
+    new ProviderError(error instanceof ProviderError ? error.kind : "other", `Could not upload the reference image ${reference.fileName} to APIMart. ${error.message}`);
+  let response: Response;
+  try {
+    response = await sendToProvider(http, target.providerId, `${baseUrlOf(target)}/uploads/images`, init, { context });
+  } catch (error) {
+    throw error instanceof ProviderError ? failed(error) : error;
+  }
+  if (!response.ok) throw failed(await errorOf(response, target.providerId));
+  const parsed = uploadedSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw failed(providerError("other", target.providerId, "its answer to the upload had no link."));
+  return parsed.data.url;
 }
 
 async function submitTask(
@@ -251,36 +204,6 @@ function waitForTasks(
   };
 }
 
-/** Reads the capabilities APIMart's JSON Schema for a model implies, filling sizes from the built-in table where it can. */
-function capabilitiesFromSchema(schema: unknown, modelId: string): ImageCapabilities | undefined {
-  const properties = z
-    .object({
-      properties: z.object({
-        size: z.object({ enum: z.array(z.unknown()) }).optional(),
-        image_urls: z.object({ maxItems: z.number().int().nonnegative().optional() }).optional(),
-      }),
-    })
-    .safeParse(schema);
-  if (!properties.success) return undefined;
-  const { size, image_urls } = properties.data.properties;
-  const ratios = aspectRatios.filter((ratio) => size?.enum.includes(ratio));
-  if (ratios.length === 0) return undefined;
-  const builtIn = known(modelId)?.capabilities ?? unknownModel;
-  return {
-    sizes: ratios.map((ratio) => builtIn.sizes.find((candidate) => candidate.aspectRatio === ratio) ?? nominalSize(ratio)),
-    maxReferences: image_urls === undefined ? 0 : (image_urls.maxItems ?? Math.max(builtIn.maxReferences, 1)),
-    maxImages: maxImagesPerJob,
-  };
-}
-
-/** About a megapixel at the given ratio, for a model whose sizes APIMart lists only as ratios. */
-function nominalSize(aspectRatio: AspectRatio): ImageSize {
-  const [width, height] = aspectRatio.split(":").map(Number) as [number, number];
-  const scale = Math.sqrt((1024 * 1024) / (width * height));
-  const round = (value: number) => Math.round((value * scale) / 16) * 16;
-  return { aspectRatio, width: round(width), height: round(height) };
-}
-
 const schemaResponse = z.object({ parameters: z.object({ input_schema: z.unknown() }).optional() });
 
 const modelListSchema = z.object({
@@ -308,8 +231,6 @@ async function fetchModelIds(target: ProviderTarget, http: HttpTransport): Promi
 }
 
 export const apimart: ProtocolAdapter = {
-  builtInCapabilities: (modelId) => known(modelId)?.capabilities ?? unknownModel,
-
   async fetchModelInfo(target, http) {
     const response = await http(`${baseUrlOf(target)}/models/${encodeURIComponent(target.modelId)}/schema`, {
       headers: headers(target.credential),
@@ -320,9 +241,7 @@ export const apimart: ProtocolAdapter = {
     // The single-model answer has the same shape as one item of the model list; tolerate it wrapped in `data`.
     const item = schemaResponse.safeParse((body as { data?: unknown } | null)?.data ?? body);
     const parameterSchema = item.success ? item.data.parameters?.input_schema : undefined;
-    if (parameterSchema === undefined) return undefined;
-    const capabilities = capabilitiesFromSchema(parameterSchema, target.modelId);
-    return { parameterSchema, ...(capabilities === undefined ? {} : { capabilities }) };
+    return parameterSchema === undefined ? undefined : { parameterSchema };
   },
 
   docsUrl: (modelId) => {
@@ -330,18 +249,21 @@ export const apimart: ProtocolAdapter = {
     return model === undefined ? "https://docs.apimart.ai/en" : `${docsBase}/${model.docsPage}`;
   },
 
-  reservedOptions: ["model", "prompt", "size", "n", "image_urls"],
+  parameterGuide: (modelId, modality) => (modality === "image" ? apimartGuide(modelId) : undefined),
+
+  requestFields: { image: { shape: ["size"], resolution: "resolution" } },
+
+  reservedOptions: ["model", "prompt", "image_urls"],
 
   async submit(request, target, http, context) {
     const batches = known(target.modelId)?.batches ?? false;
+    // Every upload finishes before any generation request, so a failed one costs nothing.
+    const imageUrls = await Promise.all(request.references.map((reference) => uploadReference(reference, target, http, context)));
     const body = {
       model: target.modelId,
       prompt: request.prompt,
-      size: request.size.aspectRatio,
       n: batches ? request.n : 1,
-      ...(request.references.length === 0
-        ? {}
-        : { image_urls: request.references.map((reference) => `data:${reference.mimeType};base64,${Buffer.from(reference.bytes).toString("base64")}`) }),
+      ...(imageUrls.length === 0 ? {} : { image_urls: imageUrls }),
       ...request.providerOptions,
     };
     const settled = await Promise.allSettled(Array.from({ length: batches ? 1 : request.n }, () => submitTask(body, Object.keys(request.providerOptions), target, http, context)));

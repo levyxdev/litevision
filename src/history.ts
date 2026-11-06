@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Dirs } from "./dirs.ts";
 import type { MediaFacts } from "./media.ts";
-import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
+import type { Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
 
 /**
  * The Job history, `jobs.jsonl`: append-only, one JSON record per line. A Job gets several records over its life
@@ -16,17 +16,32 @@ import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle 
 export interface JobParameters {
   /** Always 1 for a video Job. */
   n: number;
-  /** What the Agent asked for. */
-  aspectRatio: AspectRatio;
-  /** What was actually requested from the Provider. */
-  size: ImageSize;
+  /** Jobs recorded before ADR 0010 only: the `aspect_ratio` the Agent asked for. */
+  aspectRatio?: string;
+  /** Jobs recorded before ADR 0010 only: the size litevision chose and sent. */
+  size?: { aspectRatio: string; width: number; height: number };
+  /**
+   * The shape the final request asked for, as litevision read it from the request's fields (ADR 0010), e.g. `16:9`;
+   * null when it could not read one, so the result's shape went unchecked. Absent on Jobs recorded before.
+   */
+  requestedShape?: string | null;
+  /**
+   * Video Jobs only: the length in seconds the final request asked for, as litevision read it (ADR 0010); null when
+   * it could not read one, so the length went unchecked. Absent on Jobs recorded before.
+   */
+  requestedSeconds?: number | null;
+  /**
+   * The resolution tier the final request asked for, as written, e.g. `4K` (ADR 0010); null when it set none. Reported
+   * only, never checked. Absent on Jobs recorded before.
+   */
+  requestedResolution?: string | null;
   /** Absolute paths of the reference images. */
   references: string[];
-  /** Video Jobs only: the length requested from the Provider, in seconds. */
+  /** Video Jobs recorded before ADR 0010 only: the length litevision chose, in seconds. */
   seconds?: number;
-  /** Video Jobs only: the resolution tier requested, when the Model takes one by name. */
+  /** Video Jobs recorded before ADR 0010 only: the resolution tier litevision chose. */
   resolution?: string;
-  /** Video Jobs only: true when the first frame decides the video's shape, so it is not checked (ADR 0006). */
+  /** Video Jobs recorded before ADR 0010 only: true when the first frame decided the video's shape, so it was not checked. */
   followsFirstFrame?: true;
   /** Video Jobs only: absolute paths of the first and last frames, when given. */
   firstFrame?: string;

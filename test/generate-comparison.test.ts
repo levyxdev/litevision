@@ -81,10 +81,9 @@ describe("generate_comparison", () => {
     const output = ok(
       await compare({
         variants: [
-          { prompt: "a red fox, watercolour", model: "sdxl" },
-          { prompt: "a red fox, photograph", model: "flux2", n: 2 },
+          { prompt: "a red fox, watercolour", model: "sdxl", provider_options: { width: 1024, height: 576 } },
+          { prompt: "a red fox, photograph", model: "flux2", n: 2, provider_options: { width: 1344, height: 768 } },
         ],
-        aspect_ratio: "16:9",
       }),
     );
 
@@ -92,8 +91,8 @@ describe("generate_comparison", () => {
     expect(output.modality).toBe("image");
     expect(output.jobs).toHaveLength(2);
     const [first, second] = output.jobs;
-    expect(first).toMatchObject({ status: "completed", model: "sdxl", aspect_ratio: "16:9" });
-    expect(second).toMatchObject({ status: "completed", model: "flux2", aspect_ratio: "16:9" });
+    expect(first).toMatchObject({ status: "completed", model: "sdxl", requested_shape: "1024x576" });
+    expect(second).toMatchObject({ status: "completed", model: "flux2", requested_shape: "1344x768" });
     expect(first.job_id).not.toBe(second.job_id);
     expect(await readFile(first.files[0])).toEqual(tinyPng);
 
@@ -124,11 +123,11 @@ describe("generate_comparison", () => {
     expect(images.jobs.map((job: { model: string }) => job.model)).toEqual(["sdxl", "sdxl"]);
 
     const videos = ok(
-      await compare({ variants: [{ prompt: "a fox runs", model: "seedance" }, { prompt: "a fox runs" }], duration: 5 }),
+      await compare({ variants: [{ prompt: "a fox runs", model: "seedance", provider_options: { seconds: "5" } }, { prompt: "a fox runs" }] }),
     );
     expect(videos.modality).toBe("video");
     expect(videos.jobs.map((job: { model: string }) => job.model)).toEqual(["seedance", "wan"]);
-    expect(videos.jobs[0]).toMatchObject({ status: "completed", duration: 5 });
+    expect(videos.jobs[0]).toMatchObject({ status: "completed", requested_duration: 5 });
   });
 
   test("with no variant naming a Model, `modality` picks the default video Model", async () => {
@@ -166,14 +165,15 @@ describe("generate_comparison", () => {
     expect(await Bun.file(join(harness.dirs.data, "jobs.jsonl")).exists()).toBe(false);
   });
 
-  test("rejects a variant the Model cannot do without starting any Job", async () => {
+  test("rejects a variant whose provider_options set a field litevision fills, without starting any Job", async () => {
     harness = await startHarness(togetherSetup());
-    const result = await compare({ variants: [{ prompt: "a red fox" }, { prompt: "a red fox", model: "flux2", n: 99 }] });
+    const result = await compare({ variants: [{ prompt: "a red fox" }, { prompt: "a red fox", model: "flux2", provider_options: { prompt: "a wolf" } }] });
     expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("`prompt`");
     expect(harness.requests).toHaveLength(0);
   });
 
-  test("rejects video-only parameters on an image Comparison, and more than one video per variant", async () => {
+  test("rejects the removed `duration` parameter, and more than one video per variant", async () => {
     harness = await startHarness(togetherSetup());
     const duration = await compare({ variants: [{ prompt: "a red fox" }, { prompt: "a grey wolf" }], duration: 5 });
     expect(duration.isError).toBe(true);

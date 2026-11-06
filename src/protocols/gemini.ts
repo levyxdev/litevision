@@ -1,12 +1,11 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
+import { geminiGuide } from "./guides/gemini.ts";
 import { classifyProviderError, providerError, providerLabel } from "./errors.ts";
 import { inParallel } from "./parallel.ts";
 import type {
   GeneratedImage,
-  ImageCapabilities,
   ImageRequest,
-  ImageSize,
   JobContext,
   ModelIdsResult,
   ModelTarget,
@@ -54,65 +53,8 @@ const blockedCodes = new Set([
   "content_blocked",
 ]);
 
-interface GeminiModel {
-  capabilities: ImageCapabilities;
-  /** Sent as `response_format.image_size`; omitted for Models that take only one size. */
-  imageSize?: string;
-}
-
-const sizes = (entries: Array<[ImageSize["aspectRatio"], number, number]>): ImageSize[] =>
-  entries.map(([aspectRatio, width, height]) => ({ aspectRatio, width, height }));
-
-/** Gemini 3 image Models at the default 1K `image_size`; up to 14 reference images. */
-const gemini3: GeminiModel = {
-  capabilities: {
-    sizes: sizes([
-      ["1:1", 1024, 1024],
-      ["16:9", 1376, 768],
-      ["9:16", 768, 1376],
-      ["4:3", 1200, 896],
-      ["3:4", 896, 1200],
-      ["3:2", 1264, 848],
-      ["2:3", 848, 1264],
-    ]),
-    maxReferences: 14,
-    maxImages: 4,
-  },
-  imageSize: "1K",
-};
-
-/** `gemini-2.5-flash-image`: one size per ratio, best with up to 3 reference images. */
-const gemini25: GeminiModel = {
-  capabilities: {
-    sizes: sizes([
-      ["1:1", 1024, 1024],
-      ["16:9", 1344, 768],
-      ["9:16", 768, 1344],
-      ["4:3", 1184, 864],
-      ["3:4", 864, 1184],
-      ["3:2", 1248, 832],
-      ["2:3", 832, 1248],
-    ]),
-    maxReferences: 3,
-    maxImages: 4,
-  },
-};
-
-/** Unknown model ids: Gemini 3 sizes, without assuming they take `image_size` or many references. */
-const unknownModel: GeminiModel = { capabilities: { ...gemini3.capabilities, maxReferences: 3 } };
-
-const gemini3Ids = ["gemini-nano-banana-2.1", "gemini-3.1-flash-image", "gemini-3.1-flash-lite-image", "gemini-3-pro-image"];
-
-/** `includes` rather than equality, so `-preview` suffixes and relay prefixes such as `google/` still match. */
-function geminiModel(modelId: string): GeminiModel {
-  if (modelId.includes("gemini-2.5-flash-image")) return gemini25;
-  if (gemini3Ids.some((id) => modelId.includes(id))) return gemini3;
-  return unknownModel;
-}
-
 function interactionBody(request: ImageRequest, target: ModelTarget): Record<string, unknown> {
   const { response_format: extraFormat, ...options } = request.providerOptions;
-  const { imageSize } = geminiModel(target.modelId);
   return {
     model: target.modelId,
     input: [
@@ -124,14 +66,9 @@ function interactionBody(request: ImageRequest, target: ModelTarget): Record<str
       })),
     ],
     ...options,
-    // provider_options may add to the response format (a larger `image_size`, a `mime_type`), but the image type and
-    // aspect ratio are always litevision's.
-    response_format: {
-      ...(imageSize === undefined ? {} : { image_size: imageSize }),
-      ...(isObject(extraFormat) ? extraFormat : {}),
-      type: "image",
-      aspect_ratio: request.size.aspectRatio,
-    },
+    // provider_options set the rest of the response format (`aspect_ratio`, `image_size`, `mime_type`); the image
+    // type is litevision's, since it reads an image back, and `response_format.type` is reserved so it is never replaced.
+    response_format: { ...(isObject(extraFormat) ? extraFormat : {}), type: "image" },
   };
 }
 
@@ -194,14 +131,16 @@ async function sendInteraction(request: ImageRequest, target: ModelTarget, http:
 
 /** Gemini's Interactions API (`POST /interactions`): synchronous, one image per request, references sent inline. */
 export const gemini: ProtocolAdapter = {
-  builtInCapabilities: (modelId) => geminiModel(modelId).capabilities,
-
-  // Gemini's `/models` says nothing about image sizes or limits, so there is no `fetchModelInfo` (ADR 0004).
+  // Gemini's `/models` says nothing about a model's parameters, so there is no `fetchModelInfo` (ADR 0004).
 
   // The image generation guide documents `image_size` and the other response format fields `provider_options` may set.
   docsUrl: () => "https://ai.google.dev/gemini-api/docs/image-generation",
 
-  reservedOptions: ["model", "input"],
+  parameterGuide: (modelId, modality) => (modality === "image" ? geminiGuide(modelId) : undefined),
+
+  requestFields: { image: { shape: ["response_format.aspect_ratio"], resolution: "response_format.image_size" } },
+
+  reservedOptions: ["model", "input", "response_format.type"],
 
   async submit(request, target, http, context) {
     return { wait: () => inParallel(request.n, target.providerId, () => sendInteraction(request, target, http, context)) };

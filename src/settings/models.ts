@@ -4,6 +4,7 @@ import { isPlainObject, readConfigObject, updateConfig, type ConfigObject } from
 import type { Dirs } from "../dirs.ts";
 import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
+import { standingOptionsProblem } from "../standing-options.ts";
 import { modalities, type Modality } from "../protocols/protocol.ts";
 import { SettingsError, shortName } from "./providers.ts";
 
@@ -17,6 +18,8 @@ export interface ModelView {
   notes: string;
   /** Who changed the Model Notes last and when, and the previous version to undo to. Absent until they first change. */
   notesHistory?: NotesHistory;
+  /** Standing Options (ADR 0010); absent when none are set. */
+  standingOptions?: Record<string, unknown>;
   /** True for the default Model of its Modality. */
   default: boolean;
 }
@@ -34,6 +37,8 @@ export const addModelInput = z.object({
     .refine((value) => supportedProtocols().includes(value), { error: () => `Choose a supported Protocol: ${supportedProtocols().join(", ")}.` }),
   modality: z.enum(modalities, { error: () => "Choose whether the Model makes images or videos." }).default("image"),
   notes: notes.optional(),
+  /** Checked against the Model's Protocol once it is known; `null` or `{}` clears them. */
+  standingOptions: z.unknown().optional(),
 });
 
 export const updateModelInput = addModelInput.omit({ modality: true }).partial().extend({ modality: addModelInput.shape.modality.unwrap().optional() });
@@ -77,6 +82,7 @@ export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>,
       stored.notes = input.notes;
       stored.notesHistory = { changedBy: "User", changedAt: at.toISOString() };
     }
+    if (input.standingOptions !== undefined) setStandingOptions(stored, input.standingOptions);
     config.models = [...models, stored];
   });
   return getModel(dirs, input.alias);
@@ -107,6 +113,7 @@ export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typ
     if (input.modelId !== undefined) model.modelId = input.modelId;
     if (input.protocol !== undefined) model.protocol = input.protocol;
     if (input.notes !== undefined) replaceNotes(model, input.notes, "User", at);
+    if (input.standingOptions !== undefined) setStandingOptions(model, input.standingOptions);
   });
   return getModel(dirs, input.alias ?? wanted);
 }
@@ -151,6 +158,17 @@ export async function setDefaultModel(dirs: Dirs, modality: Modality, wanted: st
   return { alias: wanted };
 }
 
+/** Stores a Model's Standing Options, or with `null` or `{}` removes them; rejects what could never apply. */
+function setStandingOptions(model: StoredModel, value: unknown): void {
+  if (value === null || (isPlainObject(value) && Object.keys(value).length === 0)) {
+    delete model.standingOptions;
+    return;
+  }
+  const problem = standingOptionsProblem(value, model.protocol, modalityOf(model));
+  if (problem !== undefined) throw new SettingsError(400, problem);
+  model.standingOptions = value as Record<string, unknown>;
+}
+
 function requireFreeAlias(models: StoredModel[], wanted: string): void {
   if (models.some((model) => model.alias === wanted)) {
     throw new SettingsError(409, `A Model with the Alias "${wanted}" already exists. Choose another Alias.`);
@@ -187,6 +205,7 @@ function view(model: StoredModel, defaults: { defaultImageModel: string | null; 
     modality,
     notes: model.notes ?? "",
     ...(model.notesHistory && { notesHistory: model.notesHistory }),
+    ...(model.standingOptions && { standingOptions: model.standingOptions }),
     default: model.alias === (modality === "video" ? defaults.defaultVideoModel : defaults.defaultImageModel),
   };
 }

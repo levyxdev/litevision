@@ -1,42 +1,9 @@
 import type { HttpTransport } from "../http.ts";
-
-/** The aspect ratios the Agent may ask for. Each Model supports some of them. */
-export const aspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
-export type AspectRatio = (typeof aspectRatios)[number];
+import type { ParameterGuide, RequestFields, ShapeField } from "./parameter-guide.ts";
 
 /** What a Model generates (ADR 0005). */
 export const modalities = ["image", "video"] as const;
 export type Modality = (typeof modalities)[number];
-
-/** One aspect ratio a Model supports, and the concrete size it produces. */
-export interface ImageSize {
-  aspectRatio: AspectRatio;
-  width: number;
-  height: number;
-}
-
-/** A size as Providers usually write it, e.g. `1536x1024`. */
-export function formatSize(size: ImageSize): string {
-  return `${size.width}x${size.height}`;
-}
-
-/** What one Model can do, as declared by its Protocol adapter. */
-export interface ImageCapabilities {
-  /** Every supported aspect ratio with the size it maps to; never empty. */
-  sizes: ImageSize[];
-  /** How many reference images one Job may take; 0 when the Model cannot take any. */
-  maxReferences: number;
-  /** How many images one Job may produce. */
-  maxImages: number;
-}
-
-/** What litevision knows about a Model when a Job starts: the Provider's cached answer where there is one (ADR 0004). */
-export interface ModelDescription {
-  /** The capabilities the request was checked against. */
-  capabilities: ImageCapabilities;
-  /** The Provider's own description of the Model's parameters, as `fetchModelInfo` reported it; omitted when none is known. */
-  parameterSchema?: unknown;
-}
 
 /** A reference image, already read from disk. */
 export interface ReferenceImage {
@@ -49,55 +16,28 @@ export interface ReferenceImage {
 }
 
 /**
- * A generation request in litevision's own terms, independent of any Protocol.
- * The shared normalisation has already checked it against the adapter's capabilities.
+ * A generation request in litevision's own terms, independent of any Protocol (ADR 0010). It carries no size: the
+ * Agent sets the Model's own size fields in `providerOptions`, and without them the Provider's default applies.
  */
 export interface ImageRequest {
   /** Sent verbatim. */
   prompt: string;
-  /** At most the Model's `maxImages`. */
+  /** How many images the Job brings back: the Provider's count field where it has one, else as many requests. */
   n: number;
-  /** One of the Model's supported sizes. */
-  size: ImageSize;
-  /** At most the Model's `maxReferences`; empty for text-to-image. */
+  /** Empty for text-to-image; never checked against a count. */
   references: ReferenceImage[];
-  /** Merged into the Provider request untouched. Never contains an adapter's `reservedOptions`. */
+  /** The Agent's options merged over the Standing Options, sent untouched. Never contains an adapter's `reservedOptions`. */
   providerOptions: Record<string, unknown>;
-  /** So an adapter need not ask the Provider about the Model again for every Job. */
-  model: ModelDescription;
 }
 
-/** What one video Model can do, as declared by its Protocol adapter. */
-export interface VideoCapabilities {
-  /**
-   * The resolution tiers, the default first, each with every aspect ratio it supports and the size it makes there;
-   * never empty. A tier has a `name` (e.g. `720P`) when the Model takes it by name; a Model sized only in pixels has a
-   * single tier without one.
-   */
-  resolutions: Array<{ name?: string; sizes: ImageSize[] }>;
-  /** Every clip length in whole seconds the Model can make, shortest first; never empty. */
-  durations: number[];
-  /** Used when the Agent asks for no particular length; one of `durations`. */
-  defaultDuration: number;
-  /** Whether the Model can start from a given image, and end on one. */
-  firstFrame: boolean;
-  lastFrame: boolean;
-  /** How many reference images (characters, objects, style) one Job may take; 0 when the Model cannot take any. */
-  maxReferences: number;
-}
-
-/** A video generation request in litevision's own terms, already checked against the Model's VideoCapabilities. */
+/**
+ * A video generation request in litevision's own terms (ADR 0010). It carries no shape, tier or length: the Agent
+ * sets the Model's own fields in `providerOptions`, and without them the video Model's defaults apply.
+ */
 export interface VideoRequest {
   prompt: string;
-  /** One of the sizes of the chosen resolution tier. */
-  size: ImageSize;
-  /** The chosen tier's name; omitted when the tier has none. */
-  resolution?: string;
-  /** One of the Model's `durations`. */
-  seconds: number;
   firstFrame?: ReferenceImage;
   lastFrame?: ReferenceImage;
-  /** At most the Model's `maxReferences`. */
   references: ReferenceImage[];
   /** Merged into the Provider request untouched. Never contains an adapter's `reservedVideoOptions`. */
   providerOptions: Record<string, unknown>;
@@ -203,8 +143,6 @@ export type ModelIdsResult =
 
 /** What a Provider itself reports about one of its Models. */
 export interface ProviderModelInfo {
-  /** Omitted when the Provider describes the Model's parameters but not in terms litevision can map. */
-  capabilities?: ImageCapabilities;
   /** The Provider's own description of the Model's request parameters (usually JSON Schema), shown to the Agent as is. */
   parameterSchema?: unknown;
 }
@@ -212,13 +150,8 @@ export interface ProviderModelInfo {
 /** The code that speaks one Protocol (ADR 0002). */
 export interface ProtocolAdapter {
   /**
-   * What a Model with this model id can do, from the adapter's own table: used whenever the Provider cannot be asked
-   * (ADR 0004). Unknown model ids get the Protocol's most common capabilities.
-   */
-  builtInCapabilities(modelId: string): ImageCapabilities;
-  /**
-   * Asks the Provider what one Model can do. Optional: without it, `builtInCapabilities` always apply.
-   * Resolves to undefined when the Provider knows nothing about the model id; a failure is thrown.
+   * Asks the Provider to describe one Model's parameters; its answer wins over the built-in Parameter Guide (ADR 0010).
+   * Optional. Resolves to undefined when the Provider knows nothing about the model id; a failure is thrown.
    */
   fetchModelInfo?(target: ModelTarget, http: HttpTransport): Promise<ProviderModelInfo | undefined>;
   /**
@@ -226,15 +159,20 @@ export interface ProtocolAdapter {
    * adapter knows one, else the Provider's API reference (ADR 0006).
    */
   docsUrl(modelId: string, modality?: Modality): string;
-  /** Request fields the adapter sets itself; `provider_options` may not set them. */
+  /**
+   * The built-in Parameter Guide entry for the model id's family (ADR 0010); undefined when litevision knows no family
+   * for it, never a guessed entry.
+   */
+  parameterGuide?(modelId: string, modality: Modality): ParameterGuide | undefined;
+  /**
+   * The request fields this Protocol carries the shape (and, for video, the length) in, which the result check reads
+   * when the Model's Parameter Guide entry names none of its own, and the resolution tier, which is only reported.
+   */
+  requestFields: { image: RequestFields; video?: RequestFields };
+  /** Request fields the adapter sets itself, dotted one level deep for a nested one; `provider_options` may not set them. */
   reservedOptions: readonly string[];
   submit(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedJob>;
-  /**
-   * Video Protocols only (ADR 0005): what a video Model with this model id can do. Unknown model ids get the
-   * Protocol's most permissive guess, so the Provider's own error says what it does not support.
-   */
-  builtInVideoCapabilities?(modelId: string): VideoCapabilities;
-  /** Video Protocols only: request fields the adapter sets itself for a video Job. */
+  /** Video Protocols only (ADR 0005): request fields the adapter sets itself for a video Job. */
   reservedVideoOptions?: readonly string[];
   /** Video Protocols only: submits a video Job. */
   submitVideo?(request: VideoRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedVideoJob>;

@@ -1,22 +1,18 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
 import { httpProviderError, providerError, providerLabel } from "./errors.ts";
+import { veniceGuide } from "./guides/venice.ts";
 import { inParallel } from "./parallel.ts";
-import {
-  aspectRatios,
-  type AspectRatio,
-  type GeneratedImage,
-  type ImageCapabilities,
-  type ImageRequest,
-  type ImageSize,
-  type JobContext,
-  type JobImages,
-  type ModelDescription,
-  type ModelIdsResult,
-  type ModelTarget,
-  type ProtocolAdapter,
-  type ProviderModelInfo,
-  type ProviderTarget,
+import type {
+  GeneratedImage,
+  ImageRequest,
+  JobContext,
+  JobImages,
+  ModelIdsResult,
+  ModelTarget,
+  ProtocolAdapter,
+  ProviderModelInfo,
+  ProviderTarget,
 } from "./protocol.ts";
 import { sendToProvider } from "./send.ts";
 
@@ -29,46 +25,13 @@ import { sendToProvider } from "./send.ts";
 const generateDocs = "https://docs.venice.ai/api-reference/endpoint/image/generate";
 const editDocs = "https://docs.venice.ai/api-reference/endpoint/image/edit";
 
-/** `/image/generate` takes 1–4 `variants`; the edit endpoints get one request per image, capped the same way. */
-const maxImages = 4;
-
-/** What litevision needs to know to call one Venice model. */
-interface VeniceModel {
-  /** "generate" models take a prompt alone; "edit" models need at least one reference image. */
-  kind: "generate" | "edit";
-  /** How `/image/generate` sizes the image: `width`/`height` ("pixels") or `aspect_ratio` ("ratio"). Edits always use `aspect_ratio`. */
-  sizing: "pixels" | "ratio";
-  /** Undefined when Venice's constraints cannot be mapped onto litevision's aspect ratios. */
-  capabilities?: ImageCapabilities;
-  /** Venice's own constraints for the model, shown to the Agent as its parameter schema. */
-  constraints?: unknown;
-}
-
-const constraintsSchema = z.object({
-  aspectRatios: z.array(z.string()).optional(),
-  widthHeightDivisor: z.number().positive().optional(),
-  combineImages: z.boolean().optional(),
-  maxInputImages: z.number().int().positive().optional(),
-});
-
-type Constraints = z.infer<typeof constraintsSchema>;
-
-/** Pixel-sized models are the ones with a `widthHeightDivisor` above 1; the rest take `aspect_ratio`. */
-const sizingOf = (constraints: Constraints): VeniceModel["sizing"] => ((constraints.widthHeightDivisor ?? 1) > 1 ? "pixels" : "ratio");
-
 const modelListSchema = z.object({
   data: z.array(
     z.object({
       id: z.string(),
       type: z.string().optional(),
-      model_spec: z
-        .object({
-          constraints: z.record(z.string(), z.unknown()).optional(),
-          // The multi-edit docs also name `capabilities.maxInputImages`; the model schema puts it in `constraints`.
-          capabilities: z.object({ maxInputImages: z.number().int().positive().optional() }).passthrough().optional(),
-        })
-        .passthrough()
-        .optional(),
+      // Each model's sizes, tiers and reference limit, which litevision shows the Agent as its parameter schema.
+      model_spec: z.object({ constraints: z.record(z.string(), z.unknown()).optional() }).passthrough().optional(),
     }),
   ),
 });
@@ -89,84 +52,9 @@ const generateSchema = z.object({
   content_policy_violation_count: z.number().int().nonnegative().optional(),
 });
 
-/** A nominal size of about a megapixel for an aspect ratio, divisible by `divisor`; at most `maxSide` on either side. */
-function sizeFor(aspectRatio: AspectRatio, divisor: number, maxSide = Infinity): ImageSize {
-  const [w, h] = aspectRatio.split(":").map(Number) as [number, number];
-  const area = 1024 * 1024;
-  let width = Math.sqrt((area * w) / h);
-  let height = Math.sqrt((area * h) / w);
-  const scale = Math.min(1, maxSide / width, maxSide / height);
-  width *= scale;
-  height *= scale;
-  const snap = (value: number) => Math.max(divisor, Math.round(value / divisor) * divisor);
-  return { aspectRatio, width: snap(width), height: snap(height) };
-}
-
-/** Pixel-sized models: every aspect ratio, within `/image/generate`'s 1280-pixel limit. */
-function pixelSizes(divisor: number): ImageSize[] {
-  return aspectRatios.map((ratio) => sizeFor(ratio, divisor, 1280));
-}
-
-/** Ratio-sized models: the ratios Venice lists that litevision knows. The sizes are nominal; Venice picks the pixels. */
-function ratioSizes(ratios: readonly string[]): ImageSize[] {
-  return aspectRatios.filter((ratio) => ratios.includes(ratio)).map((ratio) => sizeFor(ratio, 16));
-}
-
 /** Venice's edit models all end in `-edit` (or are `qwen-edit-…`). */
 function looksLikeEdit(modelId: string): boolean {
   return /(^|-)edit(-|$)/.test(modelId);
-}
-
-/** Known pixel-sized models; any other text-to-image model is assumed to size by aspect ratio, as most Venice models do. */
-const pixelModels = ["venice-sd35", "hidream", "lustify-sdxl", "flux-dev", "flux-dev-uncensored", "pony-realism"];
-
-/** What litevision assumes when Venice's model list cannot be asked (ADR 0004). */
-function builtInModel(modelId: string): VeniceModel & { capabilities: ImageCapabilities } {
-  if (looksLikeEdit(modelId)) {
-    // The edit endpoints' documented aspect ratios, and the documented default of 3 input images.
-    return { kind: "edit", sizing: "ratio", capabilities: { sizes: ratioSizes(aspectRatios), maxReferences: 3, maxImages } };
-  }
-  if (pixelModels.includes(modelId)) {
-    return { kind: "generate", sizing: "pixels", capabilities: { sizes: pixelSizes(16), maxReferences: 0, maxImages } };
-  }
-  return {
-    kind: "generate",
-    sizing: "ratio",
-    capabilities: { sizes: ratioSizes(["1:1", "16:9", "9:16", "3:2", "2:3"]), maxReferences: 0, maxImages },
-  };
-}
-
-/** Reads one entry of Venice's model list. */
-function describeModel(listed: ListedModel, listType: ModelType): VeniceModel {
-  const raw = listed.model_spec?.constraints;
-  const parsed = constraintsSchema.safeParse(raw ?? {});
-  const constraints = parsed.success ? parsed.data : {};
-  const nonEmpty = (capabilities: ImageCapabilities) => (capabilities.sizes.length === 0 ? undefined : capabilities);
-
-  if ((listed.type ?? listType) === "inpaint") {
-    const maxReferences =
-      constraints.maxInputImages ?? listed.model_spec?.capabilities?.maxInputImages ?? (constraints.combineImages === false ? 1 : 3);
-    return {
-      kind: "edit",
-      sizing: "ratio",
-      capabilities: nonEmpty({ sizes: ratioSizes(constraints.aspectRatios ?? []), maxReferences, maxImages }),
-      constraints: raw,
-    };
-  }
-  if (sizingOf(constraints) === "pixels") {
-    return {
-      kind: "generate",
-      sizing: "pixels",
-      capabilities: { sizes: pixelSizes(constraints.widthHeightDivisor!), maxReferences: 0, maxImages },
-      constraints: raw,
-    };
-  }
-  return {
-    kind: "generate",
-    sizing: "ratio",
-    capabilities: nonEmpty({ sizes: ratioSizes(constraints.aspectRatios ?? []), maxReferences: 0, maxImages }),
-    constraints: raw,
-  };
 }
 
 const apiUrl = (baseUrl: string, path: string) => `${baseUrl.replace(/\/+$/, "")}${path}`;
@@ -197,25 +85,16 @@ async function listModels(
 }
 
 /**
- * How to call a model, from what litevision already knows about it rather than another model list request: only edit
- * models take reference images, and Venice's constraints (the parameter schema) say how to size the rest. Without
- * them, the built-in guess.
+ * Venice's own constraints for a model (its sizes, tiers and reference limit), from its image and edit model lists;
+ * undefined when neither has it. Throws when a list cannot be read.
  */
-function describedModel(described: ModelDescription, modelId: string): Pick<VeniceModel, "kind" | "sizing"> {
-  const kind = described.capabilities.maxReferences > 0 ? "edit" : "generate";
-  const constraints = constraintsSchema.safeParse(described.parameterSchema);
-  if (described.parameterSchema === undefined || !constraints.success) return { kind, sizing: builtInModel(modelId).sizing };
-  return { kind, sizing: sizingOf(constraints.data) };
-}
-
-/** Finds a model in Venice's image and edit model lists; undefined when neither has it. Throws when a list cannot be read. */
-async function lookUpModel(target: ModelTarget, http: HttpTransport): Promise<VeniceModel | undefined> {
+async function lookUpModel(target: ModelTarget, http: HttpTransport): Promise<{ constraints?: unknown } | undefined> {
   const types: ModelType[] = looksLikeEdit(target.modelId) ? ["inpaint", "image"] : ["image", "inpaint"];
   for (const type of types) {
     const list = await listModels(target, type, http);
     if (!list.ok) throw new Error(list.message);
     const listed = list.models.find((model) => model.id === target.modelId);
-    if (listed !== undefined) return describeModel(listed, type);
+    if (listed !== undefined) return listed.model_spec?.constraints === undefined ? {} : { constraints: listed.model_spec.constraints };
   }
   return undefined;
 }
@@ -257,21 +136,12 @@ async function veniceError(response: Response, providerId: string, options: read
 /** Defaults litevision sets on every request; `provider_options` may override each. Prompts go out verbatim. */
 const sharedDefaults = { safe_mode: false, enhance_prompt: false };
 
-async function generate(
-  request: ImageRequest,
-  target: ModelTarget,
-  model: Pick<VeniceModel, "sizing">,
-  http: HttpTransport,
-  context: JobContext,
-): Promise<JobImages> {
-  const { size } = request;
-  const sizing = model.sizing === "pixels" ? { width: size.width, height: size.height } : { aspect_ratio: size.aspectRatio };
+async function generate(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<JobImages> {
   const body = {
     model: target.modelId,
     prompt: request.prompt,
     variants: request.n,
     return_binary: false,
-    ...sizing,
     ...sharedDefaults,
     hide_watermark: true,
     format: "png",
@@ -311,7 +181,6 @@ async function edit(request: ImageRequest, target: ModelTarget, http: HttpTransp
   const body = {
     ...inputs,
     prompt: request.prompt,
-    aspect_ratio: request.size.aspectRatio,
     ...sharedDefaults,
     output_format: "png",
     ...request.providerOptions,
@@ -329,35 +198,26 @@ async function edit(request: ImageRequest, target: ModelTarget, http: HttpTransp
 }
 
 export const venice: ProtocolAdapter = {
-  builtInCapabilities: (modelId) => builtInModel(modelId).capabilities,
-
   async fetchModelInfo(target, http): Promise<ProviderModelInfo | undefined> {
     const model = await lookUpModel(target, http);
     if (model === undefined) return undefined;
-    return {
-      ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
-      ...(model.constraints === undefined ? {} : { parameterSchema: model.constraints }),
-    };
+    return model.constraints === undefined ? {} : { parameterSchema: model.constraints };
   },
 
   docsUrl: (modelId) => (looksLikeEdit(modelId) ? editDocs : generateDocs),
 
-  reservedOptions: ["model", "modelId", "prompt", "variants", "return_binary", "width", "height", "aspect_ratio", "image", "images"],
+  parameterGuide: (modelId, modality) => (modality === "image" ? veniceGuide(modelId) : undefined),
 
+  requestFields: { image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"], resolution: "resolution" } },
+
+  reservedOptions: ["model", "modelId", "prompt", "return_binary", "image", "images"],
+
+  // Reference images go to the edit endpoints, a prompt alone to `/image/generate`; Venice says which a model takes.
   async submit(request, target, http, context) {
-    const model = describedModel(request.model, target.modelId);
-
     if (request.references.length > 0) {
       return { wait: () => inParallel(request.n, target.providerId, () => edit(request, target, http, context)) };
     }
-    if (model.kind === "edit") {
-      throw providerError(
-        "unsupported",
-        target.providerId,
-        `"${target.modelId}" is an edit model and needs at least one reference image. Pass \`references\`, or choose a text-to-image Model.`,
-      );
-    }
-    const images = await generate(request, target, model, http, context);
+    const images = await generate(request, target, http, context);
     return { wait: async () => images };
   },
 

@@ -369,6 +369,31 @@ function notesHistoryRow(model, path) {
   return [el("div", { className: "note" }, ...parts)];
 }
 
+/** A JSON textarea for a Model's Standing Options: request fields every Job on it sends unless the Agent overrides them. */
+function standingOptionsField(value) {
+  const textarea = el("textarea", {
+    value: value ? JSON.stringify(value, null, 2) : "",
+    spellcheck: false,
+    placeholder: '{ "quality": "high" }',
+  });
+  const wrapper = field("Standing Options", textarea);
+  wrapper.classList.add("wide");
+  wrapper.append(el("div", { className: "note", textContent: "A JSON object of the Provider's own request fields, sent with every Job on this Model. Your Agent's provider_options override them for a Job. Leave empty for none." }));
+  /** The value to save: null when empty; throws when the text is not a JSON object. */
+  const read = () => {
+    const text = textarea.value.trim();
+    if (text === "") return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error('Standing Options must be a JSON object, such as { "quality": "high" }. This is not valid JSON: ' + text.slice(0, 40));
+    }
+    return parsed;
+  };
+  return { wrapper, read };
+}
+
 function modelCard(model) {
   const alias = el("input", { value: model.alias, spellcheck: false });
   const provider = el("select", {}, ...options(providerIds.includes(model.provider) ? providerIds : [model.provider, ...providerIds], model.provider));
@@ -376,11 +401,12 @@ function modelCard(model) {
   const protocol = el("select", {}, ...options(protocols.includes(model.protocol) ? protocols : [model.protocol, ...protocols], model.protocol));
   const modality = el("select", {}, ...options(["image", "video"], model.modality));
   const notes = notesField(model.notes);
+  const standing = standingOptionsField(model.standingOptions);
   const path = "/api/models/" + encodeURIComponent(model.alias);
 
   const save = el("button", { type: "button", className: "primary", textContent: "Save" });
   save.onclick = () => act(save, async () => {
-    await api("PATCH", path, { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value, modality: modality.value, notes: notes.textarea.value });
+    await api("PATCH", path, { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value, modality: modality.value, notes: notes.textarea.value, standingOptions: standing.read() });
     await loadModels();
   }, "Model saved.");
 
@@ -405,7 +431,7 @@ function modelCard(model) {
     el("div", { className: "card-head" }, el("h3", { textContent: model.alias }),
       model.default ? el("span", { className: "chip accent", textContent: "Default " + model.modality }) : makeDefault),
     el("div", { className: "fields" },
-      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), field("Makes", modality), notes.wrapper),
+      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), field("Makes", modality), notes.wrapper, standing.wrapper),
     el("div", { className: "actions" }, save, el("span", { className: "spacer" }), remove),
   );
 }

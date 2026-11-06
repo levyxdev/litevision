@@ -87,7 +87,7 @@ async function referenceImage(name = "fox.png"): Promise<string> {
 const tinyPngDataUrl = `data:image/png;base64,${tinyPng.toString("base64")}`;
 
 describe("generate_image with the together Protocol", () => {
-  test("asks for base64 at the Model's size, at the API root even when the base URL ends in /v1, and saves the image", async () => {
+  test("asks for base64 and no size of its own, at the API root even when the base URL ends in /v1, and saves the image", async () => {
     harness = await startHarness(togetherSetup());
     const output = ok(await generate({ n: 2 }));
 
@@ -95,8 +95,6 @@ describe("generate_image with the together Protocol", () => {
       model: "stabilityai/stable-diffusion-xl-base-1.0",
       prompt: "a red fox",
       n: 2,
-      width: 1024,
-      height: 1024,
       response_format: "base64",
     });
     expect(harness.requests[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
@@ -112,10 +110,10 @@ describe("generate_image with the together Protocol", () => {
     expect(harness.requests[0]!.url).toBe(`${root}/v1/images/generations`);
   });
 
-  test("FLUX.1 Kontext gets an aspect ratio and its reference as a single data URL in image_url", async () => {
+  test("FLUX.1 Kontext gets its reference as a single data URL in image_url, and its aspect ratio from provider_options", async () => {
     harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1344, 768) }));
     const reference = await referenceImage();
-    ok(await generate({ model: "kontext", aspect_ratio: "16:9", references: [reference] }));
+    ok(await generate({ model: "kontext", references: [reference], provider_options: { aspect_ratio: "16:9" } }));
 
     const body = await bodyOf(imagesUrl);
     expect(body).toMatchObject({ aspect_ratio: "16:9", image_url: tinyPngDataUrl });
@@ -125,22 +123,15 @@ describe("generate_image with the together Protocol", () => {
   test("FLUX.2 gets its references as data URLs in reference_images, since Together rejects bare base64", async () => {
     harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1344, 768) }));
     const reference = await referenceImage();
-    ok(await generate({ model: "flux2", aspect_ratio: "16:9", references: [reference, reference] }));
+    ok(await generate({ model: "flux2", references: [reference, reference], provider_options: { width: 1344, height: 768 } }));
     expect(await bodyOf(imagesUrl)).toMatchObject({ width: 1344, height: 768, reference_images: [tinyPngDataUrl, tinyPngDataUrl] });
   });
 
-  test("a model litevision has no table for is asked for at most 1024 a side, which Stable Diffusion XL requires", async () => {
-    harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1024, 576) }));
-    ok(await generate({ aspect_ratio: "16:9" }));
-    expect(await bodyOf(imagesUrl)).toMatchObject({ width: 1024, height: 576 });
-  });
 
-  test("a model with no documented references refuses them before calling Together", async () => {
+  test("a model with no documented references is sent them anyway, for Together to decide (ADR 0010)", async () => {
     harness = await startHarness(togetherSetup());
-    const result = await generate({ references: [await referenceImage()] });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot take reference images");
-    expect(harness.requests).toHaveLength(0);
+    ok(await generate({ references: [await referenceImage()] }));
+    expect(await bodyOf(imagesUrl)).toMatchObject({ reference_images: [tinyPngDataUrl] });
   });
 
   test("a rejected Credential is an auth error that sends the User to the settings page", async () => {
@@ -208,9 +199,9 @@ describe("generate_image with the together Protocol", () => {
 
   test("an image whose shape differs from the request is reported, and its options are not Known-good", async () => {
     harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1024, 1024) }));
-    const result = await generate({ aspect_ratio: "16:9", provider_options: { aspect: "wide" } });
+    const result = await generate({ provider_options: { width: 1024, height: 576 } });
     const output = ok(result);
-    expect(output.mismatch).toBe("asked for 16:9 (1024x576), got 1024x1024");
+    expect(output.mismatch).toBe("asked for 1024x576, got 1024x1024");
     expect(textOf(result)).toContain("does not match the request");
     expect(textOf(result)).toContain("https://docs.together.ai/docs/inference/images/parameters");
 
@@ -218,13 +209,13 @@ describe("generate_image with the together Protocol", () => {
     expect(listed.models[0].known_good_options).toEqual({});
   });
 
-  test("a result is checked against the asked aspect ratio, not the size table's rounding", async () => {
-    // FLUX.1 Kontext answers 16:9 with 1392x752, which is 16:9 within 5% though 5.8% off the table's 1344x768.
+  test("a result is checked against the asked aspect ratio, within rounding to the Model's grid", async () => {
+    // FLUX.1 Kontext answers 16:9 with 1392x752, which is 16:9 within 5%.
     harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1392, 752) }));
-    const output = ok(await generate({ model: "kontext", aspect_ratio: "16:9", provider_options: { steps: 30 } }));
+    const output = ok(await generate({ model: "kontext", provider_options: { aspect_ratio: "16:9", steps: 30 } }));
     expect(output.mismatch).toBeUndefined();
     const listed = ok(await call("list_models", { model: "kontext" }));
-    expect(listed.models[0].known_good_options).toEqual({ steps: 30 });
+    expect(listed.models[0].known_good_options).toEqual({ aspect_ratio: "16:9", steps: 30 });
   });
 });
 
@@ -232,39 +223,42 @@ describe("Known-good Options and Ratings", () => {
   test("only a good Rating clears the User's bad Rating, whatever matching or mismatched Jobs send in between", async () => {
     let size = [1024, 576];
     harness = await startHarness(togetherSetup({ [imagesUrl]: (request) => imageOfSize(size[0]!, size[1]!)(request) }));
-    const rated = ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30, style: "a" } }));
+    const rated = ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30, style: "a" } }));
     ok(await call("rate_job", { job_id: rated.job_id, verdict: "bad", reason: "muddy colours" }));
     size = [1024, 1024];
-    ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30 } }));
+    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
     size = [1024, 576];
-    ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30, style: "b" } }));
-    ok(await generate({ aspect_ratio: "16:9", provider_options: { style: "a" } }));
+    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30, style: "b" } }));
+    ok(await generate({ provider_options: { width: 1024, height: 576, style: "a" } }));
 
     const sdxl = ok(await call("list_models", { model: "sdxl" })).models[0];
     expect(sdxl.known_good_options).toEqual({});
+    const bad = { reason: "muddy colours", job_id: rated.job_id, cause: "rating" };
     expect(sdxl.suspect_options).toEqual({
-      steps: { value: 30, reason: "muddy colours", job_id: rated.job_id, cause: "rating" },
-      style: { value: "a", reason: "muddy colours", job_id: rated.job_id, cause: "rating" },
+      width: { value: 1024, ...bad },
+      height: { value: 576, ...bad },
+      steps: { value: 30, ...bad },
+      style: { value: "a", ...bad },
     });
   });
 
   test("a result that does not match its request makes Known-good Options it sent suspect, until a matching result sends them again", async () => {
     let size = [1024, 576];
     harness = await startHarness(togetherSetup({ [imagesUrl]: (request) => imageOfSize(size[0]!, size[1]!)(request) }));
-    ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30 } }));
+    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
     size = [1024, 1024];
-    const wrong = ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30 } }));
+    const wrong = ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
 
     let listed = await call("list_models", { model: "sdxl" });
     let sdxl = ok(listed).models[0];
     expect(sdxl.known_good_options).toEqual({});
     expect(sdxl.suspect_options.steps).toMatchObject({ value: 30, job_id: wrong.job_id, cause: "mismatch" });
-    expect(textOf(listed)).toContain("whose result did not match the request: asked for 16:9 (1024x576), got 1024x1024");
+    expect(textOf(listed)).toContain("whose result did not match the request: asked for 1024x576, got 1024x1024");
 
     size = [1024, 576];
-    ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30 } }));
+    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
     sdxl = ok(await call("list_models", { model: "sdxl" })).models[0];
-    expect(sdxl.known_good_options).toEqual({ steps: 30 });
+    expect(sdxl.known_good_options).toEqual({ width: 1024, height: 576, steps: 30 });
     expect(sdxl.suspect_options).toEqual({});
   });
 
@@ -299,7 +293,7 @@ describe("Known-good Options and Ratings", () => {
 });
 
 describe("generate_video with the together Protocol", () => {
-  test("submits Wan 2.7 at its default 1080P and 5 s, polls until it completes, and saves the MP4", async () => {
+  test("submits Wan 2.7 with no shape, tier or length of litevision's own, polls until it completes, and saves the MP4", async () => {
     let polls = 0;
     const status: Route = (request) => (++polls < 3 ? recorded("together/video-submitted.json")(request) : recorded("together/video-completed.json")(request));
     harness = await startHarness(togetherSetup({ [videoStatusUrl]: status }));
@@ -309,19 +303,13 @@ describe("generate_video with the together Protocol", () => {
     expect(await bodyOf(videosUrl)).toEqual({
       model: "Wan-AI/wan2.7-t2v",
       prompt: "a fox runs through snow",
-      seconds: "5",
-      resolution: "1080P",
-      ratio: "16:9",
     });
     expect(polls).toBe(3);
     expect(output).toMatchObject({
       status: "completed",
       model: "wan",
-      aspect_ratio: "16:9",
-      size: "1920x1080",
-      resolution: "1080P",
-      duration: 5,
-      duration_adjusted: false,
+      requested_shape: null,
+      requested_duration: null,
       observed: [{ width: 1920, height: 1080, seconds: 5 }],
     });
     expect(output.files[0]).toEndWith(".mp4");
@@ -329,28 +317,22 @@ describe("generate_video with the together Protocol", () => {
     expect((await readHistory(harness))[0]).toMatchObject({
       modality: "video",
       outcome: "completed",
-      parameters: { n: 1, seconds: 5, resolution: "1080P" },
+      parameters: { n: 1, requestedShape: null, requestedSeconds: null },
     });
   });
 
-  test("uses the closest length and the named resolution tier, and reports the adjustment", async () => {
-    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 15) }));
-    const output = ok(await video({ duration: 20, resolution: "720p" }));
-    expect(await bodyOf(videosUrl)).toMatchObject({ seconds: "15", resolution: "720P" });
-    expect(output).toMatchObject({ duration: 15, duration_adjusted: true, size: "1280x720" });
+  test("sends the length and resolution tier as given, neither rounded nor checked (ADR 0010)", async () => {
+    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 20) }));
+    const output = ok(await video({ provider_options: { seconds: "20", resolution: "720p" } }));
+    expect(await bodyOf(videosUrl)).toMatchObject({ seconds: "20", resolution: "720p" });
+    expect(output).toMatchObject({ requested_duration: 20 });
+    expect(output.mismatch).toBeUndefined();
   });
 
-  test("Seedance 2.5 takes a resolution tier without a ratio", async () => {
-    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 5) }));
-    ok(await video({ model: "seedance" }));
-    const body = await bodyOf(videosUrl);
-    expect(body).toMatchObject({ resolution: "720p", seconds: "5" });
-    expect(body).not.toHaveProperty("ratio");
-  });
 
-  test("a video model litevision has no table for gets width and height, which provider_options may override", async () => {
+  test("a video model litevision has no guide for takes Together's generic fields in provider_options", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 6) }));
-    ok(await video({ model: "veo", aspect_ratio: "9:16", duration: 6, provider_options: { generate_audio: true } }));
+    const output = ok(await video({ model: "veo", provider_options: { width: 720, height: 1280, seconds: "6", generate_audio: true } }));
     expect(await bodyOf(videosUrl)).toEqual({
       model: "google/veo-3.1",
       prompt: "a fox runs through snow",
@@ -359,6 +341,8 @@ describe("generate_video with the together Protocol", () => {
       height: 1280,
       generate_audio: true,
     });
+    expect(output).toMatchObject({ requested_shape: "720x1280", requested_duration: 6 });
+    expect(output.mismatch).toBeUndefined();
   });
 
   test("sends first and last frames as data URLs in media.frame_images", async () => {
@@ -385,12 +369,10 @@ describe("generate_video with the together Protocol", () => {
     expect(sentTo(videoStatusUrl)).toHaveLength(2);
   });
 
-  test("a frame the Model cannot take is refused before calling Together", async () => {
+  test("a frame the old tables said the Model cannot take is sent anyway, for Together to decide (ADR 0010)", async () => {
     harness = await startHarness(togetherSetup());
-    const result = await video({ first_frame: await referenceImage() });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot start from a given first frame");
-    expect(harness.requests).toHaveLength(0);
+    ok(await video({ first_frame: await referenceImage() }));
+    expect((await bodyOf(videosUrl)).media).toEqual({ frame_images: [{ input_image: tinyPngDataUrl, frame: "first" }] });
   });
 
   test("a failed video says why, with the docs link", async () => {
@@ -410,12 +392,12 @@ describe("generate_video with the together Protocol", () => {
     expect(again).toContain("Known-good Options:");
   });
 
-  test("a video from a first frame at an aspect ratio the Model cannot take follows the frame, which is not then a mismatch", async () => {
-    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 5) }));
-    const frame = join(harness.cwd, "portrait.png");
-    await writeFile(frame, pngOfSize(720, 1280));
-    const output = ok(await video({ model: "seedance", aspect_ratio: "9:16", first_frame: frame }));
-    expect(output.aspect_ratio_adjusted).toBe(true);
+  test("a Model that takes no shape is not checked for one", async () => {
+    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 5) }));
+    const frame = join(harness.cwd, "landscape.png");
+    await writeFile(frame, pngOfSize(1280, 720));
+    const output = ok(await video({ model: "seedance", first_frame: frame }));
+    expect(output.requested_shape).toBeNull();
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -426,13 +408,13 @@ describe("generate_video with the together Protocol", () => {
     expect(output.mismatch).toBeUndefined();
   });
 
-  test("without an aspect ratio, a video from a first frame takes the frame's shape, which is not then a mismatch", async () => {
+  test("without an aspect ratio, a video from a first frame is sent no shape and its shape is not checked", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 5) }));
     const frame = join(harness.cwd, "portrait.png");
     await writeFile(frame, pngOfSize(720, 1280));
     const output = ok(await video({ model: "wan-i2v", first_frame: frame }));
-    expect((await bodyOf(videosUrl)).ratio).toBe("9:16");
-    expect(output.aspect_ratio).toBe("9:16");
+    expect(await bodyOf(videosUrl)).not.toHaveProperty("ratio");
+    expect(output.requested_shape).toBeNull();
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -461,7 +443,7 @@ describe("generate_video with the together Protocol", () => {
 
   test("a video shorter than requested is reported as a mismatch", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1920, 1080, 2) }));
-    const output = ok(await video());
+    const output = ok(await video({ provider_options: { seconds: "5" } }));
     expect(output.mismatch).toBe("asked for 5 s, got 2 s");
   });
 });
@@ -478,7 +460,7 @@ describe("Modality", () => {
     expect(harness.requests).toHaveLength(0);
   });
 
-  test("list_models gives each Model's Modality, video capabilities and both defaults", async () => {
+  test("list_models gives each Model's Modality, Parameter Guide summary and both defaults", async () => {
     harness = await startHarness(togetherSetup());
     const result = await call("list_models", {});
     const listed = ok(result);
@@ -488,11 +470,10 @@ describe("Modality", () => {
     expect(wan).toMatchObject({
       modality: "video",
       default: true,
-      capabilities: null,
       docs_url: "https://docs.together.ai/docs/wan2.7-quickstart",
-      video_capabilities: { durations: Array.from({ length: 14 }, (_, index) => index + 2), default_duration: 5, first_frame: false },
     });
-    expect(wan.video_capabilities.resolutions.map((tier: { resolution: string }) => tier.resolution)).toEqual(["1080P", "720P"]);
+    expect(wan.parameters).toContain("resolution, ratio, seconds");
+    expect(wan).not.toHaveProperty("video_capabilities");
     expect(textOf(result)).toContain("wan (default video): video Model Wan-AI/wan2.7-t2v");
   });
 

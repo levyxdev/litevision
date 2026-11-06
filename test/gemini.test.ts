@@ -86,7 +86,8 @@ describe("generate_image with a gemini Model", () => {
     expect(await bodyOf(request!)).toEqual({
       model: "gemini-3.1-flash-image",
       input: [{ type: "text", text: "a red fox" }],
-      response_format: { type: "image", aspect_ratio: "1:1", image_size: "1K" },
+      // No size of litevision's own: Gemini's default applies (ADR 0010).
+      response_format: { type: "image" },
     });
   });
 
@@ -101,12 +102,11 @@ describe("generate_image with a gemini Model", () => {
     for (const request of harness.requests) expect((await bodyOf(request)).model).toBe("gemini-3.1-flash-image");
   });
 
-  test("n above 4 errors with what the Model supports, before any Provider request", async () => {
+  test("n above the old limit of 4 is sent as that many Interactions (ADR 0010)", async () => {
     harness = await startHarness(geminiSetup());
-    const result = await generate({ n: 5 });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("up to 4 images per Job");
-    expect(harness.requests).toHaveLength(0);
+    const output = outputOf(await generate({ n: 5 }));
+    expect(output.files).toHaveLength(5);
+    expect(harness.requests).toHaveLength(5);
   });
 
   test("when some of the n Interactions fail, the Job completes with the rest and says why", async () => {
@@ -128,7 +128,7 @@ describe("generate_image with a gemini Model", () => {
     const tinyJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0xff, 0xd9]);
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
     await writeFile(join(harness.cwd, "lamp.jpg"), tinyJpeg);
-    outputOf(await generate({ prompt: "put the fox under the lamp", references: ["fox.png", "lamp.jpg"], aspect_ratio: "16:9" }));
+    outputOf(await generate({ prompt: "put the fox under the lamp", references: ["fox.png", "lamp.jpg"] }));
 
     expect(await bodyOf(harness.requests[0]!)).toEqual({
       model: "gemini-3.1-flash-image",
@@ -137,45 +137,36 @@ describe("generate_image with a gemini Model", () => {
         { type: "image", mime_type: "image/png", data: tinyPng.toString("base64") },
         { type: "image", mime_type: "image/jpeg", data: tinyJpeg.toString("base64") },
       ],
-      response_format: { type: "image", aspect_ratio: "16:9", image_size: "1K" },
+      response_format: { type: "image" },
     });
   });
 
-  test("more reference images than the Model takes errors with its limit", async () => {
+  test("more reference images than the old table allowed are sent (ADR 0010)", async () => {
     harness = await startHarness(geminiSetup());
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
     const result = await generate({ model: "nano-banana-legacy", references: ["fox.png", "fox.png", "fox.png", "fox.png"] });
 
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot take 4 reference images");
-    expect(textOf(result)).toContain("up to 3 reference images");
-    expect(harness.requests).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect((await bodyOf(harness.requests[0]!)).input).toHaveLength(5);
   });
 
-  test("sends the aspect ratio as Gemini's own and reports the Model's 1K size for it", async () => {
+  test("the aspect ratio and size go in Gemini's own response_format, and the result is checked against them", async () => {
     harness = await startHarness(geminiSetup());
-    const output = outputOf(await generate({ aspect_ratio: "9:16" }));
-    expect((await bodyOf(harness.requests[0]!)).response_format).toMatchObject({ aspect_ratio: "9:16" });
-    expect(output).toMatchObject({ aspect_ratio: "9:16", size: "768x1376", aspect_ratio_adjusted: false });
+    const output = outputOf(await generate({ provider_options: { response_format: { aspect_ratio: "9:16", image_size: "2K" } } }));
+    expect((await bodyOf(harness.requests[0]!)).response_format).toEqual({ type: "image", aspect_ratio: "9:16", image_size: "2K" });
+    expect(output).toMatchObject({ requested_shape: "9:16" });
   });
 
-  test("the legacy Model has its own sizes and is sent no image_size", async () => {
-    harness = await startHarness(geminiSetup());
-    const output = outputOf(await generate({ model: "nano-banana-legacy", aspect_ratio: "3:2" }));
-    expect((await bodyOf(harness.requests[0]!)).response_format).toEqual({ type: "image", aspect_ratio: "3:2" });
-    expect(output).toMatchObject({ aspect_ratio: "3:2", size: "1248x832" });
-  });
 
-  test("provider_options reach the Interaction; response_format options are merged under litevision's own", async () => {
+  test("provider_options reach the Interaction; their response_format is merged with litevision's image type", async () => {
     harness = await startHarness(geminiSetup());
     const safety = [{ type: "hate_speech", threshold: "block_only_high" }];
     outputOf(
       await generate({
-        aspect_ratio: "4:3",
         provider_options: {
           generation_config: { thinking_level: "high" },
           safety_settings: safety,
-          response_format: { image_size: "2K", mime_type: "image/jpeg", aspect_ratio: "21:9", type: "text" },
+          response_format: { image_size: "2K", mime_type: "image/jpeg", aspect_ratio: "21:9" },
         },
       }),
     );
@@ -185,7 +176,7 @@ describe("generate_image with a gemini Model", () => {
       input: [{ type: "text", text: "a red fox" }],
       generation_config: { thinking_level: "high" },
       safety_settings: safety,
-      response_format: { type: "image", aspect_ratio: "4:3", image_size: "2K", mime_type: "image/jpeg" },
+      response_format: { type: "image", aspect_ratio: "21:9", image_size: "2K", mime_type: "image/jpeg" },
     });
   });
 
@@ -193,7 +184,7 @@ describe("generate_image with a gemini Model", () => {
     harness = await startHarness(geminiSetup());
     const result = await generate({ provider_options: { input: "something else", model: "gemini-3-pro-image" } });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("provider_options may not set `input`, `model`");
+    expect(textOf(result)).toContain("may not set `input`, `model`");
     expect(harness.requests).toHaveLength(0);
   });
 
@@ -255,32 +246,16 @@ describe("Gemini errors", () => {
 });
 
 describe("list_models with a gemini Model", () => {
-  test("reports the built-in capabilities and the image generation docs", async () => {
+  test("shows the Parameter Guide and the image generation docs, asking nothing of the Provider", async () => {
     harness = await startHarness(geminiSetup());
     const result = await harness.client.callTool({ name: "list_models", arguments: { model: "nano-banana" } });
 
     expect(result.isError).toBeFalsy();
-    const { models } = result.structuredContent as { models: Array<Record<string, unknown>> };
-    expect(models[0]).toMatchObject({
-      alias: "nano-banana",
-      protocol: "gemini",
-      docs_url: "https://ai.google.dev/gemini-api/docs/image-generation",
-      capabilities: {
-        aspect_ratios: [
-          { aspect_ratio: "1:1", size: "1024x1024" },
-          { aspect_ratio: "16:9", size: "1376x768" },
-          { aspect_ratio: "9:16", size: "768x1376" },
-          { aspect_ratio: "4:3", size: "1200x896" },
-          { aspect_ratio: "3:4", size: "896x1200" },
-          { aspect_ratio: "3:2", size: "1264x848" },
-          { aspect_ratio: "2:3", size: "848x1264" },
-        ],
-        reference_images: true,
-        max_reference_images: 14,
-        max_images_per_job: 4,
-      },
-    });
-    // Gemini describes no image capabilities, so nothing is asked of the Provider.
+    const { models } = result.structuredContent as { models: Array<Record<string, any>> };
+    expect(models[0]).toMatchObject({ alias: "nano-banana", protocol: "gemini", docs_url: "https://ai.google.dev/gemini-api/docs/image-generation" });
+    expect(models[0]!.parameter_guide.family).toContain("gemini-3.1-flash-image");
+    expect(models[0]).not.toHaveProperty("capabilities");
+    // Gemini does not describe its Models, so nothing is asked of the Provider.
     expect(harness.requests).toHaveLength(0);
   });
 });

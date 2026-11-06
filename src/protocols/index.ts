@@ -36,7 +36,7 @@ export function adapterFor(model: Model): ProtocolAdapter {
 
 /**
  * Test seam: makes `adapter` available as Protocol `name` until the returned function is called. Lets tests drive
- * shared behaviour (live capabilities, partial results) before every real Protocol has it.
+ * shared behaviour (Provider descriptions, partial results) before every real Protocol has it.
  */
 export function registerProtocol(name: string, adapter: ProtocolAdapter): () => void {
   if (Object.hasOwn(adapters, name)) throw new Error(`Protocol "${name}" is already registered.`);

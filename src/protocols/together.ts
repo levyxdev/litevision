@@ -3,10 +3,7 @@ import type { HttpTransport } from "../http.ts";
 import { classifyProviderError, httpProviderError, providerError, providerLabel } from "./errors.ts";
 import {
   ProviderError,
-  type AspectRatio,
   type GeneratedImage,
-  type ImageCapabilities,
-  type ImageSize,
   type JobContext,
   type JobVideo,
   type Modality,
@@ -16,8 +13,8 @@ import {
   type ProviderTarget,
   type ReferenceImage,
   type SubmittedVideoJob,
-  type VideoCapabilities,
 } from "./protocol.ts";
+import { togetherGuide } from "./guides/together.ts";
 import { sendToProvider } from "./send.ts";
 
 /**
@@ -36,230 +33,31 @@ const docs = {
   videoParameters: "https://docs.together.ai/docs/inference/videos/parameters",
 };
 
-const sizes = (entries: Array<[AspectRatio, number, number]>): ImageSize[] =>
-  entries.map(([aspectRatio, width, height]) => ({ aspectRatio, width, height }));
-
-/** About a megapixel at each ratio, in multiples of 64 as diffusion models prefer; Together asks for multiples of 8. */
-const megapixelSizes = sizes([
-  ["1:1", 1024, 1024],
-  ["16:9", 1344, 768],
-  ["9:16", 768, 1344],
-  ["4:3", 1152, 896],
-  ["3:4", 896, 1152],
-  ["3:2", 1216, 832],
-  ["2:3", 832, 1216],
-]);
-
-/**
- * At most 1024 a side, multiples of 8: the most an image model whose limits litevision does not know is safe to be
- * asked for. Stable Diffusion XL, for one, rejects a side above 1024.
- */
-const cappedSizes = sizes([
-  ["1:1", 1024, 1024],
-  ["16:9", 1024, 576],
-  ["9:16", 576, 1024],
-  ["4:3", 1024, 768],
-  ["3:4", 768, 1024],
-  ["3:2", 1024, 680],
-  ["2:3", 680, 1024],
-]);
-
-/** Together answers with at most four images per request. */
-const maxImagesPerJob = 4;
-
 interface ImageFamily {
   matches: RegExp;
-  capabilities: ImageCapabilities;
-  /** `pixels` sends `width` and `height`; `ratio` sends `aspect_ratio` (FLUX.1 Kontext). */
-  sizing: "pixels" | "ratio";
   /** How reference images are sent: an array, or Kontext's single `image_url`. */
   references: "reference_images" | "image_url";
   docsUrl: string;
 }
 
 const imageFamilies: ImageFamily[] = [
-  {
-    matches: /^black-forest-labs\/FLUX\.1-kontext-/i,
-    capabilities: { sizes: megapixelSizes, maxReferences: 1, maxImages: maxImagesPerJob },
-    sizing: "ratio",
-    references: "image_url",
-    docsUrl: docs.flux,
-  },
-  {
-    // Together documents `reference_images` for FLUX.2 [pro], [flex] and [dev], not [max].
-    matches: /^black-forest-labs\/FLUX\.2-(pro|flex|dev)$/i,
-    capabilities: { sizes: megapixelSizes, maxReferences: 4, maxImages: maxImagesPerJob },
-    sizing: "pixels",
-    references: "reference_images",
-    docsUrl: docs.flux,
-  },
-  {
-    matches: /^black-forest-labs\//i,
-    capabilities: { sizes: megapixelSizes, maxReferences: 0, maxImages: maxImagesPerJob },
-    sizing: "pixels",
-    references: "reference_images",
-    docsUrl: docs.flux,
-  },
-  {
-    // Google's fixed 1K sizes.
-    matches: /^google\/gemini-3-pro-image$/i,
-    capabilities: {
-      sizes: sizes([
-        ["1:1", 1024, 1024],
-        ["16:9", 1376, 768],
-        ["9:16", 768, 1376],
-        ["4:3", 1200, 896],
-        ["3:4", 896, 1200],
-        ["3:2", 1264, 848],
-        ["2:3", 848, 1264],
-      ]),
-      maxReferences: 14,
-      maxImages: maxImagesPerJob,
-    },
-    sizing: "pixels",
-    references: "reference_images",
-    docsUrl: docs.referenceImages,
-  },
-  {
-    matches: /^google\/flash-image-2\.5$/i,
-    capabilities: {
-      sizes: sizes([
-        ["1:1", 1024, 1024],
-        ["16:9", 1344, 768],
-        ["9:16", 768, 1344],
-        ["4:3", 1184, 864],
-        ["3:4", 864, 1184],
-        ["3:2", 1248, 832],
-        ["2:3", 832, 1248],
-      ]),
-      maxReferences: 3,
-      maxImages: maxImagesPerJob,
-    },
-    sizing: "pixels",
-    references: "reference_images",
-    docsUrl: docs.referenceImages,
-  },
+  { matches: /^black-forest-labs\/FLUX\.1-kontext-/i, references: "image_url", docsUrl: docs.flux },
+  { matches: /^black-forest-labs\//i, references: "reference_images", docsUrl: docs.flux },
+  { matches: /^google\/(gemini-3-pro-image|flash-image-2\.5)$/i, references: "reference_images", docsUrl: docs.referenceImages },
 ];
 
-/** Every other image model: sized in pixels within 1024 a side, no reference images until Together documents them for it. */
-const otherImages: ImageFamily = {
-  matches: /.*/,
-  capabilities: { sizes: cappedSizes, maxReferences: 0, maxImages: maxImagesPerJob },
-  sizing: "pixels",
-  references: "reference_images",
-  docsUrl: docs.imageParameters,
-};
+/** Every other image model: Together's generic fields. */
+const otherImages: ImageFamily = { matches: /.*/, references: "reference_images", docsUrl: docs.imageParameters };
 
 const imageFamily = (modelId: string) => imageFamilies.find((family) => family.matches.test(modelId)) ?? otherImages;
 
-interface VideoFamily {
-  matches: RegExp;
-  capabilities: VideoCapabilities;
-  /** `tier+ratio` sends `resolution` and `ratio` (Wan 2.7); `tier` sends `resolution` alone (Seedance 2.5); `pixels` sends `width` and `height`. */
-  sizing: "tier+ratio" | "tier" | "pixels";
-  docsUrl: string;
-}
-
-const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
-
-const wanResolutions = [
-  {
-    name: "1080P",
-    sizes: sizes([
-      ["16:9", 1920, 1080],
-      ["9:16", 1080, 1920],
-      ["1:1", 1440, 1440],
-      ["4:3", 1632, 1248],
-      ["3:4", 1248, 1632],
-    ]),
-  },
-  {
-    name: "720P",
-    sizes: sizes([
-      ["16:9", 1280, 720],
-      ["9:16", 720, 1280],
-      ["1:1", 960, 960],
-      ["4:3", 1088, 832],
-      ["3:4", 832, 1088],
-    ]),
-  },
+const videoFamilies = [
+  { matches: /^Wan-AI\/wan2\.7-/i, docsUrl: docs.wan },
+  { matches: /^ByteDance\/Seedance-2\.5$/i, docsUrl: docs.seedance },
 ];
 
-const wan = (capabilities: Pick<VideoCapabilities, "durations" | "firstFrame" | "lastFrame" | "maxReferences">): VideoCapabilities => ({
-  resolutions: wanResolutions,
-  defaultDuration: 5,
-  ...capabilities,
-});
-
-const videoFamilies: VideoFamily[] = [
-  {
-    matches: /^Wan-AI\/wan2\.7-t2v$/i,
-    capabilities: wan({ durations: range(2, 15), firstFrame: false, lastFrame: false, maxReferences: 0 }),
-    sizing: "tier+ratio",
-    docsUrl: docs.wan,
-  },
-  {
-    matches: /^Wan-AI\/wan2\.7-i2v$/i,
-    capabilities: wan({ durations: range(2, 15), firstFrame: true, lastFrame: true, maxReferences: 0 }),
-    sizing: "tier+ratio",
-    docsUrl: docs.wan,
-  },
-  {
-    matches: /^Wan-AI\/wan2\.7-r2v$/i,
-    capabilities: wan({ durations: range(2, 10), firstFrame: false, lastFrame: false, maxReferences: 5 }),
-    sizing: "tier+ratio",
-    docsUrl: docs.wan,
-  },
-  {
-    // No `ratio`, `width` or `height`, and capped at 720p.
-    matches: /^ByteDance\/Seedance-2\.5$/i,
-    capabilities: {
-      resolutions: [
-        { name: "720p", sizes: sizes([["16:9", 1280, 720]]) },
-        { name: "480p", sizes: sizes([["16:9", 854, 480]]) },
-      ],
-      durations: range(4, 30),
-      defaultDuration: 5,
-      firstFrame: true,
-      lastFrame: true,
-      maxReferences: 30,
-    },
-    sizing: "tier",
-    docsUrl: docs.seedance,
-  },
-];
-
-/**
- * Every other video model: Together's generic fields, at 720p. Its own error says what a model does not take, and
- * `provider_options` may override `width` and `height` (ADR 0004's pass-through).
- */
-const otherVideos: VideoFamily = {
-  matches: /.*/,
-  capabilities: {
-    resolutions: [
-      {
-        sizes: sizes([
-          ["16:9", 1280, 720],
-          ["9:16", 720, 1280],
-          ["1:1", 960, 960],
-          ["4:3", 1088, 816],
-          ["3:4", 816, 1088],
-          ["3:2", 1152, 768],
-          ["2:3", 768, 1152],
-        ]),
-      },
-    ],
-    durations: range(1, 10),
-    defaultDuration: 5,
-    firstFrame: true,
-    lastFrame: true,
-    maxReferences: 4,
-  },
-  sizing: "pixels",
-  docsUrl: docs.videoParameters,
-};
-
-const videoFamily = (modelId: string) => videoFamilies.find((family) => family.matches.test(modelId)) ?? otherVideos;
+/** Every other video model's docs: Together's generic video fields. */
+const videoDocsUrl = (modelId: string) => videoFamilies.find((family) => family.matches.test(modelId))?.docsUrl ?? docs.videoParameters;
 
 const errorSchema = z.object({
   error: z.object({
@@ -408,27 +206,28 @@ async function fetchModelIds(target: ProviderTarget, http: HttpTransport): Promi
 }
 
 export const together: ProtocolAdapter = {
-  builtInCapabilities: (modelId) => imageFamily(modelId).capabilities,
+  // Together's model list gives each model's type and price, but not its parameters, so there is no `fetchModelInfo`.
 
-  builtInVideoCapabilities: (modelId) => videoFamily(modelId).capabilities,
+  parameterGuide: (modelId, modality) => togetherGuide(modelId, modality),
 
-  // Together's model list gives each model's type and price, but not its sizes or limits, so there is no `fetchModelInfo`.
+  docsUrl: (modelId, modality = "image") => (modality === "video" ? videoDocsUrl(modelId) : imageFamily(modelId).docsUrl),
 
-  docsUrl: (modelId, modality = "image") => (modality === "video" ? videoFamily(modelId) : imageFamily(modelId)).docsUrl,
+  requestFields: {
+    image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"] },
+    video: { shape: [{ width: "width", height: "height" }, "ratio"], duration: "seconds", resolution: "resolution" },
+  },
 
-  reservedOptions: ["model", "prompt", "n", "width", "height", "aspect_ratio", "response_format", "reference_images", "image_url"],
+  reservedOptions: ["model", "prompt", "response_format", "reference_images", "image_url"],
 
-  // `width` and `height` stay open, for video models litevision has no table for.
-  reservedVideoOptions: ["model", "prompt", "seconds", "resolution", "ratio", "media"],
+  reservedVideoOptions: ["model", "prompt", "media"],
 
   async submit(request, target, http, context) {
     const family = imageFamily(target.modelId);
-    const { size, references } = request;
+    const { references } = request;
     const body = {
       model: target.modelId,
       prompt: request.prompt,
       n: request.n,
-      ...(family.sizing === "ratio" ? { aspect_ratio: size.aspectRatio } : { width: size.width, height: size.height }),
       // Together answers with links by default; base64 needs no second request and no User-Agent for the download.
       response_format: "base64",
       ...(references.length === 0
@@ -454,8 +253,6 @@ export const together: ProtocolAdapter = {
   },
 
   async submitVideo(request, target, http, context) {
-    const family = videoFamily(target.modelId);
-    const { size } = request;
     const frames = [
       ...(request.firstFrame === undefined ? [] : [{ input_image: dataUrl(request.firstFrame), frame: "first" }]),
       ...(request.lastFrame === undefined ? [] : [{ input_image: dataUrl(request.lastFrame), frame: "last" }]),
@@ -464,15 +261,9 @@ export const together: ProtocolAdapter = {
       ...(frames.length === 0 ? {} : { frame_images: frames }),
       ...(request.references.length === 0 ? {} : { reference_images: request.references.map(dataUrl) }),
     };
-    const sizing =
-      family.sizing === "pixels"
-        ? { width: size.width, height: size.height }
-        : { resolution: request.resolution, ...(family.sizing === "tier+ratio" ? { ratio: size.aspectRatio } : {}) };
     const body = {
       model: target.modelId,
       prompt: request.prompt,
-      seconds: String(request.seconds),
-      ...sizing,
       ...(Object.keys(media).length === 0 ? {} : { media }),
       ...request.providerOptions,
     };

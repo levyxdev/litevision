@@ -12,10 +12,7 @@ interface GenerateResult {
   job_id: string;
   model: string;
   files: string[];
-  aspect_ratio: string;
-  size: string;
-  requested_aspect_ratio: string;
-  aspect_ratio_adjusted: boolean;
+  requested_shape: string | null;
 }
 
 /** One OpenAI Provider with three `openai-images` Models; `gpt-image` is the default. */
@@ -63,60 +60,22 @@ describe("n", () => {
   });
 });
 
-describe("aspect_ratio", () => {
-  test("a supported aspect ratio is sent as its concrete size", async () => {
+describe("size", () => {
+  test("is sent only from provider_options, in the Model's own field, and the result is checked against it", async () => {
     harness = await startHarness(openaiSetup());
-    const output = outputOf(await generate({ aspect_ratio: "2:3" }));
-
+    const output = outputOf(await generate({ provider_options: { size: "1024x1536" } }));
     expect(await harness.requests[0]!.json()).toMatchObject({ size: "1024x1536" });
-    expect(output).toMatchObject({
-      aspect_ratio: "2:3",
-      size: "1024x1536",
-      requested_aspect_ratio: "2:3",
-      aspect_ratio_adjusted: false,
-    });
+    expect(output.requested_shape).toBe("1024x1536");
   });
 
-  test("an unsupported aspect ratio is mapped to the closest supported one and the actual size is reported", async () => {
-    harness = await startHarness(openaiSetup());
-    const result = await generate({ aspect_ratio: "16:9" });
-    const output = outputOf(result);
-
-    expect(await harness.requests[0]!.json()).toMatchObject({ size: "1536x1024" });
-    expect(output).toMatchObject({
-      aspect_ratio: "3:2",
-      size: "1536x1024",
-      requested_aspect_ratio: "16:9",
-      aspect_ratio_adjusted: true,
-    });
-    expect(textOf(result)).toContain("1536x1024");
-  });
-
-  test("portrait ratios map to the closest portrait size", async () => {
-    harness = await startHarness(openaiSetup());
-    const output = outputOf(await generate({ aspect_ratio: "3:4" }));
-    expect(output).toMatchObject({ aspect_ratio: "2:3", size: "1024x1536", aspect_ratio_adjusted: true });
-  });
-
-  test("the closest size depends on the Model", async () => {
-    harness = await startHarness(openaiSetup());
-    const output = outputOf(await generate({ model: "dalle3", aspect_ratio: "16:9" }));
-    expect(await harness.requests[0]!.json()).toMatchObject({ model: "dall-e-3", size: "1792x1024" });
-    expect(output).toMatchObject({ aspect_ratio: "16:9", size: "1792x1024", aspect_ratio_adjusted: false });
-  });
-
-  test("defaults to 1:1", async () => {
+  test("omitted, no size is sent and the Provider's default applies (ADR 0010)", async () => {
     harness = await startHarness(openaiSetup());
     const output = outputOf(await generate({}));
-    expect(await harness.requests[0]!.json()).toMatchObject({ size: "1024x1024" });
-    expect(output).toMatchObject({ aspect_ratio: "1:1", size: "1024x1024", aspect_ratio_adjusted: false });
-  });
-
-  test("an aspect ratio outside the supported set is rejected before any Provider request", async () => {
-    harness = await startHarness(openaiSetup());
-    const result = await generate({ aspect_ratio: "21:9" });
-    expect(result.isError).toBe(true);
-    expect(harness.requests).toHaveLength(0);
+    expect(await harness.requests[0]!.json()).not.toHaveProperty("size");
+    expect(output).toMatchObject({ requested_shape: null });
+    expect(output).not.toHaveProperty("aspect_ratio");
+    expect(output).not.toHaveProperty("size");
+    expect(output).not.toHaveProperty("aspect_ratio_adjusted");
   });
 });
 
@@ -129,7 +88,7 @@ describe("references", () => {
     const elsewhere = join(harness.dirs.output, "..", "lamp.jpg");
     await writeFile(elsewhere, tinyJpeg);
 
-    const result = await generate({ prompt: "put the fox under the lamp", references: ["fox.png", elsewhere], aspect_ratio: "3:2" });
+    const result = await generate({ prompt: "put the fox under the lamp", references: ["fox.png", elsewhere], provider_options: { size: "1536x1024" } });
     const output = outputOf(result);
 
     expect(output.files).toHaveLength(1);
@@ -152,29 +111,22 @@ describe("references", () => {
     expect(Buffer.from(await images[1]!.arrayBuffer())).toEqual(tinyJpeg);
   });
 
-  test("with a Model that cannot take reference images, errors with what the Model supports", async () => {
-    harness = await startHarness(openaiSetup());
+  test("are sent even to a Model the old tables said takes none, for the Provider to decide (ADR 0010)", async () => {
+    harness = await startHarness(openaiSetup({ [editsUrl]: recorded("openai/edits.json") }));
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
     const result = await generate({ model: "dalle3", references: ["fox.png"] });
 
-    expect(result.isError).toBe(true);
-    const text = textOf(result);
-    expect(text).toContain('Model "dalle3" cannot take reference images');
-    expect(text).toContain("1:1 (1024x1024), 16:9 (1792x1024), 9:16 (1024x1792)");
-    expect(text).toContain("up to 1 image per Job");
-    expect(text).toContain("no reference images");
-    expect(harness.requests).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect(`${harness.requests[0]!.method} ${harness.requests[0]!.url}`).toBe(editsUrl);
   });
 
-  test("more references than the Model takes errors with its limit", async () => {
-    harness = await startHarness(openaiSetup());
+  test("more references than the old tables allowed are sent", async () => {
+    harness = await startHarness(openaiSetup({ [editsUrl]: recorded("openai/edits.json") }));
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
     const result = await generate({ model: "dalle2", references: ["fox.png", "fox.png"] });
 
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot take 2 reference images");
-    expect(textOf(result)).toContain("up to 1 reference image");
-    expect(harness.requests).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect((await harness.requests[0]!.formData()).getAll("image")).toHaveLength(2);
   });
 
   test("a reference that does not exist errors before any Provider request", async () => {
@@ -242,7 +194,6 @@ describe("provider_options", () => {
       model: "gpt-image-1",
       prompt: "a red fox",
       n: 1,
-      size: "1024x1024",
       ...providerOptions,
     });
   });
@@ -257,13 +208,17 @@ describe("provider_options", () => {
     expect(form.get("output_compression")).toBe("80");
   });
 
-  test("may not override what litevision sets itself", async () => {
+  test("may not set the fields litevision fills, but may set the size and count (ADR 0010)", async () => {
     harness = await startHarness(openaiSetup());
-    const result = await generate({ provider_options: { prompt: "something else", size: "auto" } });
+    const result = await generate({ provider_options: { prompt: "something else", model: "dall-e-3", size: "auto" } });
 
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("provider_options may not set `prompt`, `size`");
+    expect(textOf(result)).toContain("may not set `prompt`, `model`");
+    expect(textOf(result)).not.toContain("`size`");
     expect(harness.requests).toHaveLength(0);
+
+    outputOf(await generate({ provider_options: { size: "auto", n: 2 } }));
+    expect(await harness.requests[0]!.json()).toMatchObject({ size: "auto", n: 2 });
   });
 });
 
@@ -338,10 +293,9 @@ describe("Job history", () => {
       await generate({
         prompt: "the fox, at dusk",
         n: 1,
-        aspect_ratio: "16:9",
         references: ["fox.png"],
         output_path: "assets",
-        provider_options: { quality: "high" },
+        provider_options: { quality: "high", size: "1536x1024" },
       }),
     );
 
@@ -352,11 +306,10 @@ describe("Job history", () => {
       prompt: "the fox, at dusk",
       parameters: {
         n: 1,
-        aspectRatio: "16:9",
-        size: { aspectRatio: "3:2", width: 1536, height: 1024 },
+        requestedShape: "1536x1024",
         references: [join(harness.cwd, "fox.png")],
         outputPath: join(harness.cwd, "assets"),
-        providerOptions: { quality: "high" },
+        providerOptions: { quality: "high", size: "1536x1024" },
       },
       files: output.files,
       outcome: "completed",
@@ -382,14 +335,10 @@ describe("prompts", () => {
   });
 });
 
-describe("n above the Model's maximum", () => {
-  test("errors with what the Model supports, before any Provider request", async () => {
+describe("n above the old tables' maximum", () => {
+  test("is sent as the Provider's count, for the Provider to decide (ADR 0010)", async () => {
     harness = await startHarness(openaiSetup());
-    const result = await generate({ model: "dalle3", n: 2 });
-
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain('Model "dalle3" cannot generate 2 images in one Job');
-    expect(textOf(result)).toContain("up to 1 image per Job");
-    expect(harness.requests).toHaveLength(0);
+    await generate({ model: "dalle3", n: 2 });
+    expect(await harness.requests[0]!.json()).toMatchObject({ n: 2 });
   });
 });

@@ -15,6 +15,10 @@ Drawn from the Model makers' own prompting guides (Sources, below).
 - **Say what should be there**: "an empty, deserted street" rather than "no cars". FLUX has no negative prompt at all [Google, FLUX].
 - **With reference images**, name each by position ("image 1", "image 2") and say what it is for. Say what changes, then list what must stay unchanged (identity, pose, layout, lighting, text): "Change only the jacket to red leather; keep the face, pose, background and lighting of image 1 exactly as they are" [OpenAI, Google, FLUX].
 
+## Set the Model's own parameters
+
+litevision translates nothing. The size, resolution, quality and length go in `provider_options`, under the Model's own field names from its Parameter Guide (`list_models` with `model`): `{ "size": "2048x1152" }` for GPT Image, `{ "response_format": { "aspect_ratio": "16:9", "image_size": "2K" } }` for Gemini, `{ "resolution": "1080P", "ratio": "9:16", "seconds": "10" }` for Wan 2.7. Leave them out and the Provider's defaults apply. Weigh the guide's prices: on some Models a larger size costs no more. The Model's Standing Options are already sent; set a key to `null` to drop one for a Job.
+
 ## Ask for one image
 
 Leave `n` at 1 unless the User wants several to choose from. Images from one Job differ only by chance; to explore different readings of a request, propose a Comparison instead.
@@ -25,12 +29,12 @@ Before reporting a result, open each file and check it against the request: subj
 
 ## Propose a Comparison
 
-Propose one when the request is ambiguous (two readings that would look clearly different: "a logo for Sol", sun or Spanish?) or when no Model clearly fits it, judging by the capabilities, Model Notes and Ratings `list_models` shows. Say what each variant tries.
+Propose one when the request is ambiguous (two readings that would look clearly different: "a logo for Sol", sun or Spanish?) or when no Model clearly fits it, judging by the Parameter Guides, Model Notes and Ratings `list_models` shows. Say what each variant tries.
 
 Write the variants so the User's Pick says something:
 
 - For an ambiguous request: one variant per reading, on the same Model, each prompt a full description of that reading.
-- To compare Models: the same prompt on each Model.
+- To compare Models: the same prompt on each Model, and in each variant's own `provider_options` the same shape in that Model's own fields.
 - Between variants, change only that one thing.
 
 ## Propose new Model Notes
