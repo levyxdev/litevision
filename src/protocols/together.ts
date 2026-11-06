@@ -419,7 +419,12 @@ export const together: ProtocolAdapter = {
 
   docsUrl: (modelId, modality = "image") => (modality === "video" ? videoFamily(modelId) : imageFamily(modelId)).docsUrl,
 
-  reservedOptions: ["model", "prompt", "n", "width", "height", "aspect_ratio", "response_format", "reference_images", "image_url"],
+  requestFields: {
+    image: [{ width: "width", height: "height" }, "aspect_ratio"],
+    video: { shape: [{ width: "width", height: "height" }, "ratio"], duration: "seconds" },
+  },
+
+  reservedOptions: ["model", "prompt", "response_format", "reference_images", "image_url"],
 
   // `width` and `height` stay open, for video models litevision has no table for.
   reservedVideoOptions: ["model", "prompt", "seconds", "resolution", "ratio", "media"],
@@ -431,7 +436,7 @@ export const together: ProtocolAdapter = {
       model: target.modelId,
       prompt: request.prompt,
       n: request.n,
-      ...(family.sizing === "ratio" ? { aspect_ratio: size.aspectRatio } : { width: size.width, height: size.height }),
+      ...(size === undefined ? {} : family.sizing === "ratio" ? { aspect_ratio: size.aspectRatio } : { width: size.width, height: size.height }),
       // Together answers with links by default; base64 needs no second request and no User-Agent for the download.
       response_format: "base64",
       ...(references.length === 0

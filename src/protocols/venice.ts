@@ -266,7 +266,7 @@ async function generate(
   context: JobContext,
 ): Promise<JobImages> {
   const { size } = request;
-  const sizing = model.sizing === "pixels" ? { width: size.width, height: size.height } : { aspect_ratio: size.aspectRatio };
+  const sizing = size === undefined ? {} : model.sizing === "pixels" ? { width: size.width, height: size.height } : { aspect_ratio: size.aspectRatio };
   const body = {
     model: target.modelId,
     prompt: request.prompt,
@@ -312,7 +312,7 @@ async function edit(request: ImageRequest, target: ModelTarget, http: HttpTransp
   const body = {
     ...inputs,
     prompt: request.prompt,
-    aspect_ratio: request.size.aspectRatio,
+    ...(request.size === undefined ? {} : { aspect_ratio: request.size.aspectRatio }),
     ...sharedDefaults,
     output_format: "png",
     ...request.providerOptions,
@@ -345,7 +345,9 @@ export const venice: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => (modality === "image" ? veniceGuide(modelId) : undefined),
 
-  reservedOptions: ["model", "modelId", "prompt", "variants", "return_binary", "width", "height", "aspect_ratio", "image", "images"],
+  requestFields: { image: [{ width: "width", height: "height" }, "aspect_ratio"] },
+
+  reservedOptions: ["model", "modelId", "prompt", "return_binary", "image", "images"],
 
   async submit(request, target, http, context) {
     const model = describedModel(request.model, target.modelId);

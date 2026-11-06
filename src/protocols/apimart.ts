@@ -358,7 +358,9 @@ export const apimart: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => (modality === "image" ? apimartGuide(modelId) : undefined),
 
-  reservedOptions: ["model", "prompt", "size", "n", "image_urls"],
+  requestFields: { image: ["size"] },
+
+  reservedOptions: ["model", "prompt", "image_urls"],
 
   async submit(request, target, http, context) {
     const batches = known(target.modelId)?.batches ?? false;
@@ -367,7 +369,7 @@ export const apimart: ProtocolAdapter = {
     const body = {
       model: target.modelId,
       prompt: request.prompt,
-      size: request.size.aspectRatio,
+      ...(request.size === undefined ? {} : { size: request.size.aspectRatio }),
       n: batches ? request.n : 1,
       ...(imageUrls.length === 0 ? {} : { image_urls: imageUrls }),
       ...request.providerOptions,

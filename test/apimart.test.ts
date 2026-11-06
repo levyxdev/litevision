@@ -82,7 +82,7 @@ describe("apimart Protocol", () => {
 
     const [submit] = submits(harness);
     expect(submit!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
-    expect(await submit!.json()).toEqual({ model: "gpt-image-2", prompt: "a red fox", size: "1:1", n: 1 });
+    expect(await submit!.json()).toEqual({ model: "gpt-image-2", prompt: "a red fox", n: 1 });
     expect(polls(harness)).toHaveLength(3);
     expect(polls(harness)[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
   });

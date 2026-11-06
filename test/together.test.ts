@@ -87,7 +87,7 @@ async function referenceImage(name = "fox.png"): Promise<string> {
 const tinyPngDataUrl = `data:image/png;base64,${tinyPng.toString("base64")}`;
 
 describe("generate_image with the together Protocol", () => {
-  test("asks for base64 at the Model's size, at the API root even when the base URL ends in /v1, and saves the image", async () => {
+  test("asks for base64 and no size of its own, at the API root even when the base URL ends in /v1, and saves the image", async () => {
     harness = await startHarness(togetherSetup());
     const output = ok(await generate({ n: 2 }));
 
@@ -95,8 +95,6 @@ describe("generate_image with the together Protocol", () => {
       model: "stabilityai/stable-diffusion-xl-base-1.0",
       prompt: "a red fox",
       n: 2,
-      width: 1024,
-      height: 1024,
       response_format: "base64",
     });
     expect(harness.requests[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
@@ -135,12 +133,10 @@ describe("generate_image with the together Protocol", () => {
     expect(await bodyOf(imagesUrl)).toMatchObject({ width: 1024, height: 576 });
   });
 
-  test("a model with no documented references refuses them before calling Together", async () => {
+  test("a model with no documented references is sent them anyway, for Together to decide (ADR 0010)", async () => {
     harness = await startHarness(togetherSetup());
-    const result = await generate({ references: [await referenceImage()] });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot take reference images");
-    expect(harness.requests).toHaveLength(0);
+    ok(await generate({ references: [await referenceImage()] }));
+    expect(await bodyOf(imagesUrl)).toMatchObject({ reference_images: [tinyPngDataUrl] });
   });
 
   test("a rejected Credential is an auth error that sends the User to the settings page", async () => {
@@ -210,7 +206,7 @@ describe("generate_image with the together Protocol", () => {
     harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1024, 1024) }));
     const result = await generate({ aspect_ratio: "16:9", provider_options: { aspect: "wide" } });
     const output = ok(result);
-    expect(output.mismatch).toBe("asked for 16:9 (1024x576), got 1024x1024");
+    expect(output.mismatch).toBe("asked for 16:9, got 1024x1024");
     expect(textOf(result)).toContain("does not match the request");
     expect(textOf(result)).toContain("https://docs.together.ai/docs/inference/images/parameters");
 
@@ -259,7 +255,7 @@ describe("Known-good Options and Ratings", () => {
     let sdxl = ok(listed).models[0];
     expect(sdxl.known_good_options).toEqual({});
     expect(sdxl.suspect_options.steps).toMatchObject({ value: 30, job_id: wrong.job_id, cause: "mismatch" });
-    expect(textOf(listed)).toContain("whose result did not match the request: asked for 16:9 (1024x576), got 1024x1024");
+    expect(textOf(listed)).toContain("whose result did not match the request: asked for 16:9, got 1024x1024");
 
     size = [1024, 576];
     ok(await generate({ aspect_ratio: "16:9", provider_options: { steps: 30 } }));

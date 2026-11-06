@@ -113,7 +113,6 @@ function geminiModel(modelId: string): GeminiModel {
 
 function interactionBody(request: ImageRequest, target: ModelTarget): Record<string, unknown> {
   const { response_format: extraFormat, ...options } = request.providerOptions;
-  const { imageSize } = geminiModel(target.modelId);
   return {
     model: target.modelId,
     input: [
@@ -125,13 +124,12 @@ function interactionBody(request: ImageRequest, target: ModelTarget): Record<str
       })),
     ],
     ...options,
-    // provider_options may add to the response format (a larger `image_size`, a `mime_type`), but the image type and
-    // aspect ratio are always litevision's.
+    // provider_options set the rest of the response format (`aspect_ratio`, `image_size`, `mime_type`), over any
+    // translated aspect ratio; the image type is always litevision's, since it reads an image back.
     response_format: {
-      ...(imageSize === undefined ? {} : { image_size: imageSize }),
+      ...(request.size === undefined ? {} : { aspect_ratio: request.size.aspectRatio }),
       ...(isObject(extraFormat) ? extraFormat : {}),
       type: "image",
-      aspect_ratio: request.size.aspectRatio,
     },
   };
 }
@@ -203,6 +201,8 @@ export const gemini: ProtocolAdapter = {
   docsUrl: () => "https://ai.google.dev/gemini-api/docs/image-generation",
 
   parameterGuide: (modelId, modality) => (modality === "image" ? geminiGuide(modelId) : undefined),
+
+  requestFields: { image: ["response_format.aspect_ratio"] },
 
   reservedOptions: ["model", "input"],
 

@@ -63,7 +63,7 @@ function buildRequest(request: ImageRequest, target: ModelTarget): { url: string
     model: target.modelId,
     prompt: request.prompt,
     n: request.n,
-    size: formatSize(request.size),
+    ...(request.size === undefined ? {} : { size: formatSize(request.size) }),
     ...request.providerOptions,
   };
 
@@ -98,7 +98,9 @@ export const openaiImages: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => (modality === "image" ? openaiImagesGuide(modelId) : undefined),
 
-  reservedOptions: ["model", "prompt", "n", "size", "image", "image[]"],
+  requestFields: { image: ["size"] },
+
+  reservedOptions: ["model", "prompt", "image", "image[]"],
 
   async submit(request, target, http, context) {
     const { url, init } = buildRequest(request, target);

@@ -16,10 +16,15 @@ import type { AspectRatio, ImageSize, Modality, ProviderErrorKind, ResumeHandle 
 export interface JobParameters {
   /** Always 1 for a video Job. */
   n: number;
-  /** What the Agent asked for. */
-  aspectRatio: AspectRatio;
-  /** What was actually requested from the Provider. */
-  size: ImageSize;
+  /** What the Agent gave as `aspect_ratio`; absent when it gave none, and on Jobs recorded since it went (ADR 0010). */
+  aspectRatio?: AspectRatio;
+  /** The size litevision translated `aspect_ratio` to; absent when it sent none of its own. */
+  size?: ImageSize;
+  /**
+   * The shape the final request asked for, as litevision read it from the request's fields (ADR 0010), e.g. `16:9`;
+   * null when it could not read one, so the result's shape went unchecked. Absent on Jobs recorded before.
+   */
+  requestedShape?: string | null;
   /** Absolute paths of the reference images. */
   references: string[];
   /** Video Jobs only: the length requested from the Provider, in seconds. */

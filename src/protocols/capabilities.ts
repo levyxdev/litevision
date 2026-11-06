@@ -1,6 +1,7 @@
 import { ConfigError, type Model } from "../config.ts";
 import { readReferences } from "../images.ts";
 import { mediaFactsOf } from "../media.ts";
+import { fieldsToRead, readShape } from "./parameter-guide.ts";
 import {
   formatSize,
   type AspectRatio,
@@ -17,7 +18,8 @@ import {
 export interface ImageParameters {
   prompt: string;
   n: number;
-  aspectRatio: AspectRatio;
+  /** Omitted for no size of litevision's choosing: the Provider's default applies (ADR 0010). */
+  aspectRatio?: AspectRatio;
   /** Local paths as the Agent gave them. */
   references: string[];
   providerOptions: Record<string, unknown>;
@@ -25,9 +27,15 @@ export interface ImageParameters {
 
 export interface NormalisedRequest {
   request: ImageRequest;
-  requestedAspectRatio: AspectRatio;
+  /** What the Agent gave as `aspect_ratio`; omitted when it gave none. */
+  requestedAspectRatio?: AspectRatio;
   /** True when the Model does not support the requested aspect ratio and the closest one was used instead. */
   aspectRatioAdjusted: boolean;
+  /**
+   * The shape the final request asks for, as litevision read it from the fields the Parameter Guide names, e.g.
+   * `16:9` or `3840x2160`; null when it asks for none litevision can read, so the result's shape is not checked.
+   */
+  requestedShape: string | null;
 }
 
 /** One sentence describing a Model's capabilities, for errors and tool output. */
@@ -63,8 +71,9 @@ export function ratioOf(aspectRatio: AspectRatio): number {
 }
 
 /**
- * Checks `generate_image` parameters against what is known about a Model (see `modelInfo`) and turns them into an
- * ImageRequest. Everything that would fail here fails before any Provider request.
+ * Turns `generate_image` parameters into an ImageRequest (ADR 0010): reads the reference images, refuses only
+ * `provider_options` that set a field litevision fills, and checks nothing else. Everything that would fail here fails
+ * before any Provider request.
  */
 export async function normaliseImageRequest(
   parameters: ImageParameters,
@@ -74,38 +83,29 @@ export async function normaliseImageRequest(
   cwd: string,
 ): Promise<NormalisedRequest> {
   const { capabilities } = described;
-  const unsupported = (problem: string) =>
-    new ConfigError(`${problem} Model "${model.alias}" supports: ${describeCapabilities(capabilities)} Choose another Model or change the request.`);
-
-  if (parameters.n > capabilities.maxImages) {
-    throw unsupported(`Model "${model.alias}" cannot generate ${parameters.n} images in one Job.`);
-  }
-  if (parameters.references.length > 0 && capabilities.maxReferences === 0) {
-    throw unsupported(`Model "${model.alias}" cannot take reference images.`);
-  }
-  if (parameters.references.length > capabilities.maxReferences) {
-    throw unsupported(`Model "${model.alias}" cannot take ${parameters.references.length} reference images.`);
-  }
   const reserved = Object.keys(parameters.providerOptions).filter((key) => adapter.reservedOptions.includes(key));
   if (reserved.length > 0) {
     throw new ConfigError(
-      `provider_options may not set ${reserved.map((key) => `\`${key}\``).join(", ")}: litevision sets ${reserved.length === 1 ? "it" : "them"} from the \`generate_image\` parameters. Use those instead.`,
+      `provider_options may not set ${reserved.map((key) => `\`${key}\``).join(", ")}: litevision fills ${reserved.length === 1 ? "that field" : "those fields"} itself, from the prompt, \`references\` and \`model\`. Use those instead.`,
     );
   }
 
-  const { size, adjusted } = closestSize(capabilities.sizes, parameters.aspectRatio);
+  const translated = parameters.aspectRatio === undefined ? undefined : closestSize(capabilities.sizes, parameters.aspectRatio);
   const references = await readReferences(parameters.references, cwd);
+  // A shape field in provider_options overrides the translated aspect ratio, which is otherwise what is sent.
+  const read = readShape(fieldsToRead(adapter, model.modelId, "image").shape, parameters.providerOptions);
   return {
     request: {
       prompt: parameters.prompt,
       n: parameters.n,
-      size,
+      ...(translated === undefined ? {} : { size: translated.size }),
       references,
       providerOptions: parameters.providerOptions,
       model: { capabilities, ...(described.parameterSchema === undefined ? {} : { parameterSchema: described.parameterSchema }) },
     },
-    requestedAspectRatio: parameters.aspectRatio,
-    aspectRatioAdjusted: adjusted,
+    ...(parameters.aspectRatio === undefined ? {} : { requestedAspectRatio: parameters.aspectRatio }),
+    aspectRatioAdjusted: translated?.adjusted ?? false,
+    requestedShape: read.set ? read.shape : (translated?.size.aspectRatio ?? null),
   };
 }
 

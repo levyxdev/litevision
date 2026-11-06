@@ -479,6 +479,13 @@ function describeFacts(facts: MediaFacts): string {
   return `${facts.width}x${facts.height}${facts.seconds === undefined ? "" : `, ${facts.seconds} s`}`;
 }
 
+/** What litevision read from the final request, or that it could read nothing, so the result's shape is not checked. */
+function requestedText(shape: string | null): string {
+  return shape === null
+    ? "The request asks for no size litevision can read, so the result's shape was not checked."
+    : `The request asks for ${shape}.`;
+}
+
 function mismatchText(mismatch: string | undefined, docsUrl: string): string {
   if (mismatch === undefined) return "";
   return ` The result does not match the request: ${mismatch}. A provider_option may not have taken effect, so these options are not recorded as Known-good; check ${docsUrl} before trying again.`;
@@ -498,6 +505,7 @@ function jobOutput(job: JobState) {
     observed: job.status === "completed" ? job.observed : [],
     ...(job.status === "completed" && job.shortfall !== undefined ? { shortfall: job.shortfall } : {}),
     ...(job.status === "completed" && job.mismatch !== undefined ? { mismatch: job.mismatch } : {}),
+    ...(job.status === "completed" && job.requestedShape !== undefined ? { requested_shape: job.requestedShape } : {}),
   };
 }
 
@@ -543,7 +551,7 @@ interface PreparedJob {
 interface ImageArgs {
   prompt: string;
   n: number;
-  aspect_ratio: AspectRatio;
+  aspect_ratio?: AspectRatio;
   references: string[];
   output_path?: string;
   provider_options: Record<string, unknown>;
@@ -566,9 +574,15 @@ const imageJobShape = {
   status: jobStatusSchema,
   model: z.string().describe("Alias of the Model that ran the Job."),
   files: z.array(z.string()).describe("Paths of the saved images; empty while the Job is running."),
-  aspect_ratio: z.enum(aspectRatios).describe("Aspect ratio actually used."),
-  size: z.string().describe("Size actually requested from the Provider, e.g. 1536x1024."),
-  requested_aspect_ratio: z.enum(aspectRatios),
+  requested_shape: z
+    .string()
+    .nullable()
+    .describe(
+      "The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 16:9 or 3840x2160; null when it asks for none litevision can read, so the result's shape is not checked. Compare it with `observed`.",
+    ),
+  aspect_ratio: z.enum(aspectRatios).nullable().describe("Aspect ratio litevision translated `aspect_ratio` to; null when none was given."),
+  size: z.string().nullable().describe("Size litevision translated `aspect_ratio` to, e.g. 1536x1024; null when none was given."),
+  requested_aspect_ratio: z.enum(aspectRatios).nullable(),
   aspect_ratio_adjusted: z.boolean().describe("True when the Model does not support the requested aspect ratio and the closest one was used."),
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
@@ -636,7 +650,7 @@ export function createServer(deps: ServerDeps): McpServer {
       {
         prompt: args.prompt,
         n: args.n,
-        aspectRatio: args.aspect_ratio,
+        ...(args.aspect_ratio === undefined ? {} : { aspectRatio: args.aspect_ratio }),
         references: args.references,
         providerOptions: mergeOptions(model.standingOptions ?? {}, args.provider_options),
       },
@@ -654,9 +668,10 @@ export function createServer(deps: ServerDeps): McpServer {
         const { size } = normalised.request;
         const output = {
           ...jobOutput(job),
-          aspect_ratio: size.aspectRatio,
-          size: formatSize(size),
-          requested_aspect_ratio: normalised.requestedAspectRatio,
+          requested_shape: normalised.requestedShape,
+          aspect_ratio: size?.aspectRatio ?? null,
+          size: size === undefined ? null : formatSize(size),
+          requested_aspect_ratio: normalised.requestedAspectRatio ?? null,
           aspect_ratio_adjusted: normalised.aspectRatioAdjusted,
         };
         const adjustment = normalised.aspectRatioAdjusted
@@ -664,8 +679,8 @@ export function createServer(deps: ServerDeps): McpServer {
           : "";
         const text =
           job.status === "running"
-            ? `${jobText(job)} It asks ${model.alias} for ${size.aspectRatio} (${formatSize(size)}).${adjustment}`
-            : `Saved ${job.files.length} image(s) from ${model.alias} at ${size.aspectRatio} (${formatSize(size)}), Job ${job.id}.${adjustment}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
+            ? `${jobText(job)} ${requestedText(normalised.requestedShape)}${adjustment}`
+            : `Saved ${job.files.length} image(s) from ${model.alias}, Job ${job.id}. ${requestedText(normalised.requestedShape)}${adjustment}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
         return { output, text };
       },
     };
@@ -748,11 +763,18 @@ export function createServer(deps: ServerDeps): McpServer {
       inputSchema: {
         prompt: z.string().min(1).describe("Sent to the Model verbatim."),
         model: z.string().optional().describe("Alias of the Model to use. Omit to use the default image Model."),
-        n: z.number().int().positive().default(1).describe("How many images to generate in this Job, up to the Model's maximum."),
+        n: z
+          .number()
+          .int()
+          .positive()
+          .default(1)
+          .describe("How many images this Job brings back: sent as the Model's own count field, or as that many requests where it has none."),
         aspect_ratio: z
           .enum(aspectRatios)
-          .default("1:1")
-          .describe("Wanted aspect ratio. If the Model does not support it, the closest supported one is used and reported."),
+          .optional()
+          .describe(
+            "Wanted aspect ratio, translated to the Model's own size field; a size in `provider_options` overrides it. Omit for no size at all: the Provider's default applies.",
+          ),
         references: z
           .array(z.string().min(1))
           .default([])
@@ -768,7 +790,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .record(z.string(), z.unknown())
           .default({})
           .describe(
-            "Provider-specific request fields passed through untouched, e.g. { \"quality\": \"high\" } for OpenAI. Cannot override fields litevision sets from the other parameters.",
+            "The Model's own request fields, passed through untouched, e.g. { \"size\": \"2048x1152\", \"quality\": \"high\" } for OpenAI: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt, reference image fields and response format are litevision's.",
           ),
       },
       outputSchema: imageJobShape,
@@ -837,7 +859,11 @@ export function createServer(deps: ServerDeps): McpServer {
                 .int()
                 .positive()
                 .optional()
-                .describe("Image Comparisons only: how many images this variant's Job makes, up to its Model's maximum. Defaults to 1."),
+                .describe("Image Comparisons only: how many images this variant's Job makes. Defaults to 1."),
+              provider_options: z
+                .record(z.string(), z.unknown())
+                .default({})
+                .describe("This variant's own request fields, in its Model's own names (see its Parameter Guide), merged over its Standing Options."),
             }),
           )
           .min(2)
@@ -850,7 +876,9 @@ export function createServer(deps: ServerDeps): McpServer {
         aspect_ratio: z
           .enum(aspectRatios)
           .optional()
-          .describe("Wanted aspect ratio for every Job. Omit for 1:1 images or 16:9 videos. Each Model that does not support it uses its closest one."),
+          .describe(
+            "Wanted aspect ratio for every Job, translated to each Model's own size field; a variant's `provider_options` override it. Omit for each Model's default.",
+          ),
         references: z
           .array(z.string().min(1))
           .default([])
@@ -893,10 +921,10 @@ export function createServer(deps: ServerDeps): McpServer {
         prepared = await Promise.all(
           variants.map((variant) => {
             const resolved = resolveModel(config, variant.model, modality);
-            const shared = { prompt: variant.prompt, references, provider_options: {}, ...(output_path === undefined ? {} : { output_path }) };
+            const shared = { prompt: variant.prompt, references, provider_options: variant.provider_options, ...(output_path === undefined ? {} : { output_path }) };
             return modality === "video"
               ? prepareVideo(resolved, { ...shared, ...(aspect_ratio === undefined ? {} : { aspect_ratio }), ...(duration === undefined ? {} : { duration }) })
-              : prepareImage(resolved, { ...shared, n: variant.n ?? 1, aspect_ratio: aspect_ratio ?? "1:1" });
+              : prepareImage(resolved, { ...shared, n: variant.n ?? 1, ...(aspect_ratio === undefined ? {} : { aspect_ratio }) });
           }),
         );
       } catch (error) {
@@ -945,6 +973,11 @@ export function createServer(deps: ServerDeps): McpServer {
         model: z.string().describe("Alias of the Model that ran the Job."),
         files: z.array(z.string()).describe("Paths of the saved images or video; empty while the Job is running."),
         shortfall: z.string().optional().describe("Present when fewer images than asked for were saved: how many, and why."),
+        requested_shape: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("The shape the request sent asks for, as litevision read it; null when unreadable, so the shape was not checked."),
         observed: observedSchema,
         mismatch: mismatchSchema,
       },

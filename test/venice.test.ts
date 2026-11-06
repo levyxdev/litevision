@@ -150,13 +150,17 @@ describe("text-to-image with a venice Model", () => {
     });
   });
 
-  test("provider_options may not set fields litevision sets itself", async () => {
+  test("provider_options may not set the fields litevision fills, but may set the size and count (ADR 0010)", async () => {
     harness = await startHarness(veniceSetup());
-    const result = await generate({ provider_options: { variants: 3, aspect_ratio: "21:9" } });
+    const result = await generate({ provider_options: { model: "other", return_binary: true } });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("`variants`");
-    expect(textOf(result)).toContain("`aspect_ratio`");
+    expect(textOf(result)).toContain("`model`");
+    expect(textOf(result)).toContain("`return_binary`");
     expect(sent(generateUrl)).toHaveLength(0);
+
+    const passed = await generate({ provider_options: { variants: 1, aspect_ratio: "21:9", resolution: "2K" } });
+    expect(passed.isError).toBeFalsy();
+    expect(await bodyOf(generateUrl)).toMatchObject({ variants: 1, aspect_ratio: "21:9", resolution: "2K" });
   });
 
   test("n > 1 asks for that many variants in one request", async () => {
@@ -167,12 +171,11 @@ describe("text-to-image with a venice Model", () => {
     expect(await bodyOf(generateUrl)).toMatchObject({ variants: 2 });
   });
 
-  test("a text-to-image Model rejects reference images before any generation request", async () => {
-    harness = await startHarness(veniceSetup());
+  test("reference images on a text-to-image Model are sent anyway, to the edit endpoint, for Venice to decide (ADR 0010)", async () => {
+    harness = await startHarness(veniceSetup({ [editUrl]: pngResponse }));
     const result = await generate({ references: await writeReferences("fox.png") });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot take reference images");
-    expect(sent(generateUrl)).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect(sent(editUrl)).toHaveLength(1);
   });
 });
 
@@ -265,7 +268,6 @@ describe("reference-image editing with a Venice edit Model", () => {
       modelId: "nano-banana-pro-edit",
       prompt: "a red fox",
       images: [tinyPng.toString("base64"), tinyPng.toString("base64"), tinyPng.toString("base64")],
-      aspect_ratio: "1:1",
       ...editDefaults,
       enhance_prompt: true,
     });
@@ -283,11 +285,11 @@ describe("reference-image editing with a Venice edit Model", () => {
     expect(output.shortfall).toContain("1 of 2 requests");
   });
 
-  test("the reference limit comes from Venice's model list", async () => {
+  test("more references than Venice's model list allows are sent, for Venice to decide (ADR 0010)", async () => {
     harness = await startHarness(veniceSetup({ [multiEditUrl]: pngResponse }));
     const result = await generate({ model: "firered", references: await writeReferences("fox.png", "hat.png") });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot take 2 reference images");
+    expect(result.isError).toBeFalsy();
+    expect(sent(multiEditUrl)).toHaveLength(1);
   });
 
   test("an edit Model without reference images fails before any generation request", async () => {

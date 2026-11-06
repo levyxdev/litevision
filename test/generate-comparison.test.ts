@@ -166,10 +166,11 @@ describe("generate_comparison", () => {
     expect(await Bun.file(join(harness.dirs.data, "jobs.jsonl")).exists()).toBe(false);
   });
 
-  test("rejects a variant the Model cannot do without starting any Job", async () => {
+  test("rejects a variant whose provider_options set a field litevision fills, without starting any Job", async () => {
     harness = await startHarness(togetherSetup());
-    const result = await compare({ variants: [{ prompt: "a red fox" }, { prompt: "a red fox", model: "flux2", n: 99 }] });
+    const result = await compare({ variants: [{ prompt: "a red fox" }, { prompt: "a red fox", model: "flux2", provider_options: { prompt: "a wolf" } }] });
     expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("`prompt`");
     expect(harness.requests).toHaveLength(0);
   });
 

@@ -71,3 +71,66 @@ export function guideFor(entries: Array<{ matches: RegExp; guide: ParameterGuide
   const bare = modelId.replace(/^.*\//, "");
   return entries.find((entry) => entry.matches.test(modelId) || entry.matches.test(bare))?.guide;
 }
+
+/** The request fields litevision reads the requested shape and length from (ADR 0010). */
+export interface RequestFields {
+  shape: ShapeField[];
+  duration?: string;
+}
+
+/** The fields to read a Model's requested shape and length from: its guide entry's, else its Protocol's. */
+export function fieldsToRead(
+  adapter: { parameterGuide?(modelId: string, modality: "image" | "video"): ParameterGuide | undefined; requestFields: { image: ShapeField[]; video?: RequestFields } },
+  modelId: string,
+  modality: "image" | "video",
+): RequestFields {
+  const guide = adapter.parameterGuide?.(modelId, modality);
+  const fallback = modality === "video" ? (adapter.requestFields.video ?? { shape: [] }) : { shape: adapter.requestFields.image };
+  return guide === undefined ? fallback : { shape: guide.shapeFields, ...(guide.durationField === undefined ? {} : { duration: guide.durationField }) };
+}
+
+/** A field's value in a request body; `path` is dotted for nested fields. */
+function valueAt(body: Record<string, unknown>, path: string): unknown {
+  return path.split(".").reduce<unknown>((value, key) => (typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : undefined), body);
+}
+
+const positive = (value: unknown): number | undefined => {
+  const number = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  return typeof number === "number" && Number.isFinite(number) && number > 0 ? number : undefined;
+};
+
+/** A shape as written, with its width-over-height ratio; undefined for a value such as `auto` that says no shape. */
+export function parseShape(text: string): { label: string; ratio: number } | undefined {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*([x×:])\s*(\d+(?:\.\d+)?)\s*$/i.exec(text);
+  if (match === null) return undefined;
+  const width = Number(match[1]);
+  const height = Number(match[3]);
+  if (!(width > 0 && height > 0)) return undefined;
+  return { label: `${match[1]}${match[2] === ":" ? ":" : "x"}${match[3]}`, ratio: width / height };
+}
+
+/**
+ * What a request asks for, read from its fields: `set` is false when none of the shape fields is in it, and `shape` is
+ * null when one is but cannot be read (e.g. `auto`).
+ */
+export function readShape(fields: ShapeField[], body: Record<string, unknown>): { set: boolean; shape: string | null } {
+  for (const field of fields) {
+    if (typeof field === "string") {
+      const value = valueAt(body, field);
+      if (value === undefined) continue;
+      return { set: true, shape: typeof value === "string" ? (parseShape(value)?.label ?? null) : null };
+    }
+    const width = valueAt(body, field.width);
+    const height = valueAt(body, field.height);
+    if (width === undefined && height === undefined) continue;
+    const w = positive(width);
+    const h = positive(height);
+    return { set: true, shape: w === undefined || h === undefined ? null : `${w}x${h}` };
+  }
+  return { set: false, shape: null };
+}
+
+/** The requested length in seconds; null when the field is missing or cannot be read. */
+export function readSeconds(field: string | undefined, body: Record<string, unknown>): number | null {
+  return field === undefined ? null : (positive(valueAt(body, field)) ?? null);
+}

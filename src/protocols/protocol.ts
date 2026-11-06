@@ -1,5 +1,5 @@
 import type { HttpTransport } from "../http.ts";
-import type { ParameterGuide } from "./parameter-guide.ts";
+import type { ParameterGuide, RequestFields, ShapeField } from "./parameter-guide.ts";
 
 /** The aspect ratios the Agent may ask for. Each Model supports some of them. */
 export const aspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
@@ -56,11 +56,14 @@ export interface ReferenceImage {
 export interface ImageRequest {
   /** Sent verbatim. */
   prompt: string;
-  /** At most the Model's `maxImages`. */
+  /** How many images the Job brings back: the Provider's count field where it has one, else as many requests. */
   n: number;
-  /** One of the Model's supported sizes. */
-  size: ImageSize;
-  /** At most the Model's `maxReferences`; empty for text-to-image. */
+  /**
+   * The size the top-level `aspect_ratio` translates to, until that parameter goes; omitted when the Agent gave none,
+   * so no size is sent and the Provider's default applies (ADR 0010). A size in `providerOptions` overrides it.
+   */
+  size?: ImageSize;
+  /** Empty for text-to-image; never checked against a count. */
   references: ReferenceImage[];
   /** Merged into the Provider request untouched. Never contains an adapter's `reservedOptions`. */
   providerOptions: Record<string, unknown>;
@@ -232,6 +235,11 @@ export interface ProtocolAdapter {
    * for it, never a guessed entry.
    */
   parameterGuide?(modelId: string, modality: Modality): ParameterGuide | undefined;
+  /**
+   * The request fields this Protocol carries the shape (and, for video, the length) in, which the result check reads
+   * when the Model's Parameter Guide entry names none of its own.
+   */
+  requestFields: { image: ShapeField[]; video?: RequestFields };
   /** Request fields the adapter sets itself; `provider_options` may not set them. */
   reservedOptions: readonly string[];
   submit(request: ImageRequest, target: ModelTarget, http: HttpTransport, context: JobContext): Promise<SubmittedJob>;

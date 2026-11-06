@@ -101,7 +101,8 @@ describe("generate_image", () => {
 
     const [request] = harness.requests;
     expect(request!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
-    expect(await request!.json()).toEqual({ model: "gpt-image-1", prompt: "a red fox", n: 1, size: "1024x1024" });
+    // No size of litevision's own: OpenAI's default applies (ADR 0010).
+    expect(await request!.json()).toEqual({ model: "gpt-image-1", prompt: "a red fox", n: 1 });
   });
 
   test("uses the default image Model when model is omitted", async () => {
@@ -146,8 +147,7 @@ describe("generate_image", () => {
       prompt: "a red fox",
       parameters: {
         n: 1,
-        aspectRatio: "1:1",
-        size: { aspectRatio: "1:1", width: 1024, height: 1024 },
+        requestedShape: null,
         references: [],
         providerOptions: {},
       },

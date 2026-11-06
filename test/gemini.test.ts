@@ -86,7 +86,8 @@ describe("generate_image with a gemini Model", () => {
     expect(await bodyOf(request!)).toEqual({
       model: "gemini-3.1-flash-image",
       input: [{ type: "text", text: "a red fox" }],
-      response_format: { type: "image", aspect_ratio: "1:1", image_size: "1K" },
+      // No size of litevision's own: Gemini's default applies (ADR 0010).
+      response_format: { type: "image" },
     });
   });
 
@@ -101,12 +102,11 @@ describe("generate_image with a gemini Model", () => {
     for (const request of harness.requests) expect((await bodyOf(request)).model).toBe("gemini-3.1-flash-image");
   });
 
-  test("n above 4 errors with what the Model supports, before any Provider request", async () => {
+  test("n above the old limit of 4 is sent as that many Interactions (ADR 0010)", async () => {
     harness = await startHarness(geminiSetup());
-    const result = await generate({ n: 5 });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("up to 4 images per Job");
-    expect(harness.requests).toHaveLength(0);
+    const output = outputOf(await generate({ n: 5 }));
+    expect(output.files).toHaveLength(5);
+    expect(harness.requests).toHaveLength(5);
   });
 
   test("when some of the n Interactions fail, the Job completes with the rest and says why", async () => {
@@ -137,19 +137,17 @@ describe("generate_image with a gemini Model", () => {
         { type: "image", mime_type: "image/png", data: tinyPng.toString("base64") },
         { type: "image", mime_type: "image/jpeg", data: tinyJpeg.toString("base64") },
       ],
-      response_format: { type: "image", aspect_ratio: "16:9", image_size: "1K" },
+      response_format: { type: "image", aspect_ratio: "16:9" },
     });
   });
 
-  test("more reference images than the Model takes errors with its limit", async () => {
+  test("more reference images than the old table allowed are sent (ADR 0010)", async () => {
     harness = await startHarness(geminiSetup());
     await writeFile(join(harness.cwd, "fox.png"), tinyPng);
     const result = await generate({ model: "nano-banana-legacy", references: ["fox.png", "fox.png", "fox.png", "fox.png"] });
 
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("cannot take 4 reference images");
-    expect(textOf(result)).toContain("up to 3 reference images");
-    expect(harness.requests).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect((await bodyOf(harness.requests[0]!)).input).toHaveLength(5);
   });
 
   test("sends the aspect ratio as Gemini's own and reports the Model's 1K size for it", async () => {
@@ -166,7 +164,7 @@ describe("generate_image with a gemini Model", () => {
     expect(output).toMatchObject({ aspect_ratio: "3:2", size: "1248x832" });
   });
 
-  test("provider_options reach the Interaction; response_format options are merged under litevision's own", async () => {
+  test("provider_options reach the Interaction; their response_format wins over a translated aspect ratio, but not the image type", async () => {
     harness = await startHarness(geminiSetup());
     const safety = [{ type: "hate_speech", threshold: "block_only_high" }];
     outputOf(
@@ -185,7 +183,7 @@ describe("generate_image with a gemini Model", () => {
       input: [{ type: "text", text: "a red fox" }],
       generation_config: { thinking_level: "high" },
       safety_settings: safety,
-      response_format: { type: "image", aspect_ratio: "4:3", image_size: "2K", mime_type: "image/jpeg" },
+      response_format: { type: "image", aspect_ratio: "21:9", image_size: "2K", mime_type: "image/jpeg" },
     });
   });
 
