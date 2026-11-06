@@ -62,7 +62,7 @@ export const openaiImages: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => (modality === "image" ? openaiImagesGuide(modelId) : undefined),
 
-  requestFields: { image: ["size"] },
+  requestFields: { image: { shape: ["size"] } },
 
   reservedOptions: ["model", "prompt", "image", "image[]"],
 

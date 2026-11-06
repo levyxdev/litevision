@@ -213,8 +213,8 @@ export const together: ProtocolAdapter = {
   docsUrl: (modelId, modality = "image") => (modality === "video" ? videoDocsUrl(modelId) : imageFamily(modelId).docsUrl),
 
   requestFields: {
-    image: [{ width: "width", height: "height" }, "aspect_ratio"],
-    video: { shape: [{ width: "width", height: "height" }, "ratio"], duration: "seconds" },
+    image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"] },
+    video: { shape: [{ width: "width", height: "height" }, "ratio"], duration: "seconds", resolution: "resolution" },
   },
 
   reservedOptions: ["model", "prompt", "response_format", "reference_images", "image_url"],

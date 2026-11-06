@@ -138,7 +138,7 @@ export const gemini: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => (modality === "image" ? geminiGuide(modelId) : undefined),
 
-  requestFields: { image: ["response_format.aspect_ratio"] },
+  requestFields: { image: { shape: ["response_format.aspect_ratio"], resolution: "response_format.image_size" } },
 
   reservedOptions: ["model", "input"],
 

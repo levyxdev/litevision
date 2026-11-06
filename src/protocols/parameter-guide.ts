@@ -72,21 +72,31 @@ export function guideFor(entries: Array<{ matches: RegExp; guide: ParameterGuide
   return entries.find((entry) => entry.matches.test(modelId) || entry.matches.test(bare))?.guide;
 }
 
-/** The request fields litevision reads the requested shape and length from (ADR 0010). */
+/** The request fields litevision reads the requested shape, length and resolution tier from (ADR 0010). */
 export interface RequestFields {
   shape: ShapeField[];
   duration?: string;
+  /** The field holding the resolution tier, e.g. `resolution` (`4K`, `1080P`); shown to the User, never checked. */
+  resolution?: string;
 }
 
-/** The fields to read a Model's requested shape and length from: its guide entry's, else its Protocol's. */
+/**
+ * The fields to read a Model's requested shape, length and tier from: the shape and length from its guide entry, else
+ * its Protocol's; the tier always from its Protocol, which names the one field every model of it uses.
+ */
 export function fieldsToRead(
-  adapter: { parameterGuide?(modelId: string, modality: "image" | "video"): ParameterGuide | undefined; requestFields: { image: ShapeField[]; video?: RequestFields } },
+  adapter: { parameterGuide?(modelId: string, modality: "image" | "video"): ParameterGuide | undefined; requestFields: { image: RequestFields; video?: RequestFields } },
   modelId: string,
   modality: "image" | "video",
 ): RequestFields {
   const guide = adapter.parameterGuide?.(modelId, modality);
-  const fallback = modality === "video" ? (adapter.requestFields.video ?? { shape: [] }) : { shape: adapter.requestFields.image };
-  return guide === undefined ? fallback : { shape: guide.shapeFields, ...(guide.durationField === undefined ? {} : { duration: guide.durationField }) };
+  const fallback = (modality === "video" ? adapter.requestFields.video : adapter.requestFields.image) ?? { shape: [] };
+  if (guide === undefined) return fallback;
+  return {
+    shape: guide.shapeFields,
+    ...(guide.durationField === undefined ? {} : { duration: guide.durationField }),
+    ...(fallback.resolution === undefined ? {} : { resolution: fallback.resolution }),
+  };
 }
 
 /** A field's value in a request body; `path` is dotted for nested fields. */
@@ -128,6 +138,14 @@ export function readShape(fields: ShapeField[], body: Record<string, unknown>): 
     return w === undefined || h === undefined ? null : `${w}x${h}`;
   }
   return null;
+}
+
+/** The resolution tier a request asks for, as written, e.g. `4K`; null when the field is missing or not text. */
+export function readResolution(field: string | undefined, body: Record<string, unknown>): string | null {
+  if (field === undefined) return null;
+  const value = valueAt(body, field);
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
 /** The length in seconds a request asks for; null when the field is missing or cannot be read. */

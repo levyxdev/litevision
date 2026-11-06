@@ -71,6 +71,8 @@ export interface CompletedJob {
   requestedShape?: string | null;
   /** Video Jobs only: the length the final request asked for, as litevision read it; null when unreadable. */
   requestedSeconds?: number | null;
+  /** The resolution tier the final request asked for, e.g. `4K`; null when it set none, omitted on older Jobs. */
+  requestedResolution?: string | null;
 }
 
 /** Where a Job stands once the wait limit has passed or it has finished. A failed Job is thrown as {@link JobFailedError}. */
@@ -127,6 +129,7 @@ export class JobRunner {
     const base = this.baseFor(spec, "image", request.prompt, {
       n: request.n,
       requestedShape: spec.normalised.requestedShape,
+      requestedResolution: spec.normalised.requestedResolution,
       references: request.references.map((reference) => reference.path),
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
       providerOptions: request.providerOptions,
@@ -153,6 +156,7 @@ export class JobRunner {
       n: 1,
       requestedShape: spec.normalised.requestedShape,
       requestedSeconds: spec.normalised.requestedSeconds,
+      requestedResolution: spec.normalised.requestedResolution,
       references: request.references.map((reference) => reference.path),
       ...(request.firstFrame === undefined ? {} : { firstFrame: request.firstFrame.path }),
       ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame.path }),
@@ -207,6 +211,7 @@ export class JobRunner {
           ...(record.mismatch === undefined ? {} : { mismatch: record.mismatch }),
           ...(record.parameters.requestedShape === undefined ? {} : { requestedShape: record.parameters.requestedShape }),
           ...(record.parameters.requestedSeconds === undefined ? {} : { requestedSeconds: record.parameters.requestedSeconds }),
+          ...(record.parameters.requestedResolution === undefined ? {} : { requestedResolution: record.parameters.requestedResolution }),
         };
       }
       if (record.outcome === "failed") {
@@ -327,6 +332,7 @@ export class JobRunner {
         ...(mismatch === undefined ? {} : { mismatch }),
         ...(base.parameters.requestedShape === undefined ? {} : { requestedShape: base.parameters.requestedShape }),
         ...(base.parameters.requestedSeconds === undefined ? {} : { requestedSeconds: base.parameters.requestedSeconds }),
+        ...(base.parameters.requestedResolution === undefined ? {} : { requestedResolution: base.parameters.requestedResolution }),
       };
     } catch (error) {
       if (error instanceof JobAbandoned || this.closed) throw new JobAbandoned();

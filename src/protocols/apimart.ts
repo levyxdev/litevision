@@ -251,7 +251,7 @@ export const apimart: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => (modality === "image" ? apimartGuide(modelId) : undefined),
 
-  requestFields: { image: ["size"] },
+  requestFields: { image: { shape: ["size"], resolution: "resolution" } },
 
   reservedOptions: ["model", "prompt", "image_urls"],
 

@@ -50,6 +50,7 @@ async function sentBody(): Promise<Record<string, unknown>> {
 interface VideoOutput {
   requested_shape: string | null;
   requested_duration: number | null;
+  requested_resolution: string | null;
   mismatch?: string;
 }
 
@@ -71,6 +72,7 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     const output = result.structuredContent as unknown as VideoOutput;
     expect(output.requested_shape).toBeNull();
     expect(output.requested_duration).toBeNull();
+    expect(output.requested_resolution).toBeNull();
     expect(output.mismatch).toBeUndefined();
     expect(textOf(result)).toContain("not checked");
   });
@@ -81,7 +83,8 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(result.isError).toBeFalsy();
     expect(await sentBody()).toMatchObject({ resolution: "1080P", ratio: "9:16", seconds: "12" });
     const output = result.structuredContent as unknown as VideoOutput;
-    expect(output).toMatchObject({ requested_shape: "9:16", requested_duration: 12 });
+    expect(output).toMatchObject({ requested_shape: "9:16", requested_resolution: "1080P", requested_duration: 12 });
+    expect(textOf(result)).toContain("9:16, 1080P, 12 s");
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -112,10 +115,10 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
 
   test("the Job history records what litevision read from the final request", async () => {
     harness = await startHarness(setup());
-    await video({ provider_options: { ratio: "16:9", seconds: "5" } });
+    await video({ provider_options: { ratio: "16:9", seconds: "5", resolution: "720P" } });
     const [job] = await readHistory(harness);
-    expect(job!.parameters).toMatchObject({ requestedShape: "16:9", requestedSeconds: 5 });
+    expect(job!.parameters).toMatchObject({ requestedShape: "16:9", requestedSeconds: 5, requestedResolution: "720P" });
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
-    expect(again.structuredContent).toMatchObject({ requested_shape: "16:9", requested_duration: 5 });
+    expect(again.structuredContent).toMatchObject({ requested_shape: "16:9", requested_duration: 5, requested_resolution: "720P" });
   });
 });

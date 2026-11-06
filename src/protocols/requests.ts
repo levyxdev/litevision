@@ -1,6 +1,6 @@
 import { ConfigError, type Model } from "../config.ts";
 import { readReferences } from "../images.ts";
-import { fieldsToRead, readSeconds, readShape } from "./parameter-guide.ts";
+import { fieldsToRead, readResolution, readSeconds, readShape } from "./parameter-guide.ts";
 import type { ImageRequest, ProtocolAdapter, VideoRequest } from "./protocol.ts";
 
 /**
@@ -27,6 +27,8 @@ export interface NormalisedRequest {
    * `3840x2160`; null when it asks for none litevision can read, so the result's shape is not checked.
    */
   requestedShape: string | null;
+  /** The resolution tier the request asks for, e.g. `4K`; null when it sets none. Reported only, never checked. */
+  requestedResolution: string | null;
 }
 
 /** The `generate_video` parameters. */
@@ -45,6 +47,8 @@ export interface NormalisedVideoRequest {
   /** The shape and length the request asks for, as litevision read them; null when unreadable, which goes unchecked. */
   requestedShape: string | null;
   requestedSeconds: number | null;
+  /** The resolution tier the request asks for, e.g. `1080P`; null when it sets none. Reported only, never checked. */
+  requestedResolution: string | null;
 }
 
 /** Refuses `provider_options` that set a field litevision fills itself, naming each. */
@@ -64,10 +68,11 @@ export async function normaliseImageRequest(
 ): Promise<NormalisedRequest> {
   refuseReserved(parameters.providerOptions, adapter.reservedOptions, "the prompt, `references` and `model`");
   const references = await readReferences(parameters.references, cwd);
-  const shape = readShape(fieldsToRead(adapter, model.modelId, "image").shape, parameters.providerOptions);
+  const fields = fieldsToRead(adapter, model.modelId, "image");
   return {
     request: { prompt: parameters.prompt, n: parameters.n, references, providerOptions: parameters.providerOptions },
-    requestedShape: shape,
+    requestedShape: readShape(fields.shape, parameters.providerOptions),
+    requestedResolution: readResolution(fields.resolution, parameters.providerOptions),
   };
 }
 
@@ -95,5 +100,6 @@ export async function normaliseVideoRequest(
     },
     requestedShape: readShape(fields.shape, parameters.providerOptions),
     requestedSeconds: readSeconds(fields.duration, parameters.providerOptions),
+    requestedResolution: readResolution(fields.resolution, parameters.providerOptions),
   };
 }

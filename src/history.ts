@@ -30,6 +30,11 @@ export interface JobParameters {
    * it could not read one, so the length went unchecked. Absent on Jobs recorded before.
    */
   requestedSeconds?: number | null;
+  /**
+   * The resolution tier the final request asked for, as written, e.g. `4K` (ADR 0010); null when it set none. Reported
+   * only, never checked. Absent on Jobs recorded before.
+   */
+  requestedResolution?: string | null;
   /** Absolute paths of the reference images. */
   references: string[];
   /** Video Jobs recorded before ADR 0010 only: the length litevision chose, in seconds. */

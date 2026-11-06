@@ -432,16 +432,17 @@ function describeFacts(facts: MediaFacts): string {
   return `${facts.width}x${facts.height}${facts.seconds === undefined ? "" : `, ${facts.seconds} s`}`;
 }
 
-/** What litevision read from the final request, or that it could read nothing, so the result's shape is not checked. */
-function requestedText(shape: string | null): string {
-  return shape === null
-    ? "The request asks for no size litevision can read, so the result's shape was not checked."
-    : `The request asks for ${shape}.`;
+/** The shape and tier litevision read from the final request, or that it read no shape, so the result's shape is not checked. */
+function requestedText(shape: string | null, resolution: string | null): string {
+  if (shape === null) {
+    return `The request asks for ${resolution === null ? "" : `${resolution} but `}no size litevision can read, so the result's shape was not checked.`;
+  }
+  return `The request asks for ${shape}${resolution === null ? "" : ` at ${resolution}`}.`;
 }
 
 /** What litevision read from a video's final request; whatever it could not read is not checked. */
-function requestedVideoText(shape: string | null, seconds: number | null): string {
-  const read = [shape, seconds === null ? null : `${seconds} s`].filter((part) => part !== null);
+function requestedVideoText(shape: string | null, resolution: string | null, seconds: number | null): string {
+  const read = [shape, resolution, seconds === null ? null : `${seconds} s`].filter((part) => part !== null);
   const unread = [shape === null ? "shape" : null, seconds === null ? "length" : null].filter((part) => part !== null);
   const asked = read.length === 0 ? "" : `The request asks for ${read.join(", ")}.`;
   const unchecked =
@@ -470,6 +471,7 @@ function jobOutput(job: JobState) {
     ...(job.status === "completed" && job.mismatch !== undefined ? { mismatch: job.mismatch } : {}),
     ...(job.status === "completed" && job.requestedShape !== undefined ? { requested_shape: job.requestedShape } : {}),
     ...(job.status === "completed" && job.requestedSeconds !== undefined ? { requested_duration: job.requestedSeconds } : {}),
+    ...(job.status === "completed" && job.requestedResolution !== undefined ? { requested_resolution: job.requestedResolution } : {}),
   };
 }
 
@@ -540,6 +542,10 @@ const imageJobShape = {
     .describe(
       "The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 16:9 or 3840x2160; null when it asks for none litevision can read, so the result's shape is not checked. Compare it with `observed`.",
     ),
+  requested_resolution: z
+    .string()
+    .nullable()
+    .describe("The resolution tier the request sent asks for, as written in the Model's own field, e.g. 4K or 1080P; null when it sets none. Not checked against the result."),
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
   mismatch: mismatchSchema,
@@ -558,6 +564,10 @@ const videoJobShape = {
     .number()
     .nullable()
     .describe("The length in seconds the request sent asks for, as litevision read it; null when unreadable, so the length is not checked."),
+  requested_resolution: z
+    .string()
+    .nullable()
+    .describe("The resolution tier the request sent asks for, as written in the Model's own field, e.g. 4K or 1080P; null when it sets none. Not checked against the result."),
   observed: observedSchema,
   mismatch: mismatchSchema,
 };
@@ -620,11 +630,12 @@ export function createServer(deps: ServerDeps): McpServer {
       start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
-        const output = { ...jobOutput(job), requested_shape: normalised.requestedShape };
+        const output = { ...jobOutput(job), requested_shape: normalised.requestedShape, requested_resolution: normalised.requestedResolution };
+        const asked = requestedText(normalised.requestedShape, normalised.requestedResolution);
         const text =
           job.status === "running"
-            ? `${jobText(job)} ${requestedText(normalised.requestedShape)}`
-            : `Saved ${job.files.length} image(s) from ${model.alias}, Job ${job.id}. ${requestedText(normalised.requestedShape)}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
+            ? `${jobText(job)} ${asked}`
+            : `Saved ${job.files.length} image(s) from ${model.alias}, Job ${job.id}. ${asked}${observedText(job.observed)}${mismatchText(job.mismatch, info.docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
         return { output, text };
       },
     };
@@ -655,8 +666,13 @@ export function createServer(deps: ServerDeps): McpServer {
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
-        const output = { ...jobOutput(job), requested_shape: normalised.requestedShape, requested_duration: normalised.requestedSeconds };
-        const asked = requestedVideoText(normalised.requestedShape, normalised.requestedSeconds);
+        const output = {
+          ...jobOutput(job),
+          requested_shape: normalised.requestedShape,
+          requested_duration: normalised.requestedSeconds,
+          requested_resolution: normalised.requestedResolution,
+        };
+        const asked = requestedVideoText(normalised.requestedShape, normalised.requestedResolution, normalised.requestedSeconds);
         const text =
           job.status === "running"
             ? `${jobText(job)} ${asked}`
@@ -871,6 +887,11 @@ export function createServer(deps: ServerDeps): McpServer {
           .nullable()
           .optional()
           .describe("Video Jobs: the length in seconds the request sent asks for, as litevision read it; null when unreadable."),
+        requested_resolution: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("The resolution tier the request sent asks for, e.g. 4K or 1080P; null when it set none. Not checked against the result."),
         observed: observedSchema,
         mismatch: mismatchSchema,
       },

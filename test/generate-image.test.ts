@@ -148,6 +148,7 @@ describe("generate_image", () => {
       parameters: {
         n: 1,
         requestedShape: null,
+        requestedResolution: null,
         references: [],
         providerOptions: {},
       },

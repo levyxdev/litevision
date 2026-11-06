@@ -217,6 +217,37 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(together).not.toHaveProperty("quality");
   });
 
+  test("the resolution tier the request asks for is shown and recorded, unchecked", async () => {
+    harness = await startHarness(setup());
+    const result = await generate({ model: "banana", provider_options: { response_format: { aspect_ratio: "16:9", image_size: "4K" } } });
+    const output = result.structuredContent as { requested_shape: string | null; requested_resolution: string | null };
+    expect(output).toMatchObject({ requested_shape: "16:9", requested_resolution: "4K" });
+    expect(textOf(result)).toContain("16:9 at 4K");
+
+    const [job] = await readHistory(harness);
+    expect((job!.parameters as Record<string, unknown>).requestedResolution).toBe("4K");
+    const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
+    expect(again.structuredContent).toMatchObject({ requested_resolution: "4K" });
+  });
+
+  test("each Protocol's tier field is read: APIMart and Venice `resolution`; OpenAI has none", async () => {
+    harness = await startHarness(setup());
+    const mart = await generate({ model: "mart", provider_options: { size: "16:9", resolution: "2k" } });
+    expect(mart.structuredContent).toMatchObject({ requested_shape: "16:9", requested_resolution: "2k" });
+    const venice = await generate({ model: "venice", provider_options: { aspect_ratio: "1:1", resolution: "2K" } });
+    expect(venice.structuredContent).toMatchObject({ requested_resolution: "2K" });
+    const unknown = await generate({ model: "mystery" });
+    expect(unknown.structuredContent).toMatchObject({ requested_resolution: null });
+  });
+
+  test("a request that sets no tier has a null resolution, not a default", async () => {
+    harness = await startHarness(setup({ [urls.openai]: openaiImages(1024, 1024) }));
+    const result = await generate({ model: "flare", provider_options: { size: "1024x1024", quality: "high" } });
+    expect(result.structuredContent).toMatchObject({ requested_resolution: null });
+    const gemini = await generate({ model: "banana" });
+    expect(gemini.structuredContent).toMatchObject({ requested_resolution: null });
+  });
+
   test("the removed parameters are refused by name, not silently ignored (ADR 0010)", async () => {
     harness = await startHarness(setup());
     const image = await generate({ model: "flare", aspect_ratio: "16:9" });
