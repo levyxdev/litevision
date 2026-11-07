@@ -1,7 +1,7 @@
 import { ConfigError, type Model } from "../config.ts";
 import { isPlainObject } from "../config-store.ts";
 import { readReferences } from "../images.ts";
-import { fieldsToRead, readResolution, readSeconds, readShape } from "./parameter-guide.ts";
+import { fieldsToRead, readRequested, type Requested } from "./parameter-guide.ts";
 import type { ImageRequest, ProtocolAdapter, VideoRequest } from "./protocol.ts";
 
 /**
@@ -23,13 +23,8 @@ export interface ImageParameters {
 
 export interface NormalisedRequest {
   request: ImageRequest;
-  /**
-   * The shape the request asks for, as litevision read it from the fields the Parameter Guide names, e.g. `16:9` or
-   * `3840x2160`; null when it asks for none litevision can read, so the result's shape is not checked.
-   */
-  requestedShape: string | null;
-  /** The resolution tier the request asks for, e.g. `4K`; null when it sets none. Reported only, never checked. */
-  requestedResolution: string | null;
+  /** What the request asks for, as litevision read it; whatever it could not read goes unchecked. */
+  requested: Requested;
 }
 
 /** The `generate_video` parameters. */
@@ -45,11 +40,8 @@ export interface VideoParameters {
 
 export interface NormalisedVideoRequest {
   request: VideoRequest;
-  /** The shape and length the request asks for, as litevision read them; null when unreadable, which goes unchecked. */
-  requestedShape: string | null;
-  requestedSeconds: number | null;
-  /** The resolution tier the request asks for, e.g. `1080P`; null when it sets none. Reported only, never checked. */
-  requestedResolution: string | null;
+  /** What the request asks for, as litevision read it; whatever it could not read goes unchecked. */
+  requested: Requested;
 }
 
 /**
@@ -91,11 +83,9 @@ export async function normaliseImageRequest(
 ): Promise<NormalisedRequest> {
   refuseReserved(parameters.providerOptions, adapter.reservedOptions, "the prompt, `references` and `model`");
   const references = await readReferences(parameters.references, cwd);
-  const fields = fieldsToRead(adapter, model.modelId, "image");
   return {
     request: { prompt: parameters.prompt, n: parameters.n, references, providerOptions: parameters.providerOptions },
-    requestedShape: readShape(fields.shape, parameters.providerOptions),
-    requestedResolution: readResolution(fields.resolution, parameters.providerOptions),
+    requested: readRequested(fieldsToRead(adapter, model.modelId, "image"), parameters.providerOptions, "image"),
   };
 }
 
@@ -112,7 +102,6 @@ export async function normaliseVideoRequest(
     frame(parameters.lastFrame),
     readReferences(parameters.references, cwd),
   ]);
-  const fields = fieldsToRead(adapter, model.modelId, "video");
   return {
     request: {
       prompt: parameters.prompt,
@@ -121,8 +110,6 @@ export async function normaliseVideoRequest(
       references,
       providerOptions: parameters.providerOptions,
     },
-    requestedShape: readShape(fields.shape, parameters.providerOptions),
-    requestedSeconds: readSeconds(fields.duration, parameters.providerOptions),
-    requestedResolution: readResolution(fields.resolution, parameters.providerOptions),
+    requested: readRequested(fieldsToRead(adapter, model.modelId, "video"), parameters.providerOptions, "video"),
   };
 }

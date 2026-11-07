@@ -204,7 +204,7 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     harness = await startHarness(setup({ [urls.openai]: openaiImages(2048, 1152) }));
     await generate({ model: "flare", provider_options: { size: "2048x1152" } });
     const [job] = await readHistory(harness);
-    expect((job!.parameters as Record<string, unknown>).requestedShape).toBe("2048x1152");
+    expect(job!.parameters).toMatchObject({ requested: { shape: "2048x1152" } });
 
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
     expect(again.structuredContent).toMatchObject({ requested_shape: "2048x1152" });
@@ -238,7 +238,7 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(textOf(result)).toContain("16:9 at 4K");
 
     const [job] = await readHistory(harness);
-    expect((job!.parameters as Record<string, unknown>).requestedResolution).toBe("4K");
+    expect(job!.parameters).toMatchObject({ requested: { shape: "16:9", resolution: "4K" } });
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
     expect(again.structuredContent).toMatchObject({ requested_resolution: "4K" });
   });

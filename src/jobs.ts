@@ -6,7 +6,7 @@ import type { Dirs } from "./dirs.ts";
 import { appendHistory, readJob, type JobRecord } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
-import { parseShape } from "./protocols/parameter-guide.ts";
+import { parseShape, type Requested } from "./protocols/parameter-guide.ts";
 import type { NormalisedRequest, NormalisedVideoRequest } from "./protocols/requests.ts";
 import { providerError, providerLabel } from "./protocols/errors.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
@@ -67,12 +67,8 @@ export interface CompletedJob {
   observed: Array<MediaFacts | null>;
   /** How the result differs from the request (ADR 0006); omitted when it matched as far as litevision can tell. */
   mismatch?: string;
-  /** The shape the final request asked for, as litevision read it (ADR 0010); null when unreadable, omitted on older Jobs. */
-  requestedShape?: string | null;
-  /** Video Jobs only: the length the final request asked for, as litevision read it; null when unreadable. */
-  requestedSeconds?: number | null;
-  /** The resolution tier the final request asked for, e.g. `4K`; null when it set none, omitted on older Jobs. */
-  requestedResolution?: string | null;
+  /** What the final request asked for, as litevision read it (ADR 0010); omitted on Jobs recorded before. */
+  requested?: Requested;
 }
 
 /** Where a Job stands once the wait limit has passed or it has finished. A failed Job is thrown as {@link JobFailedError}. */
@@ -128,8 +124,7 @@ export class JobRunner {
     const { request } = spec.normalised;
     const base = this.baseFor(spec, "image", request.prompt, {
       n: request.n,
-      requestedShape: spec.normalised.requestedShape,
-      requestedResolution: spec.normalised.requestedResolution,
+      requested: spec.normalised.requested,
       references: request.references.map((reference) => reference.path),
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
       providerOptions: request.providerOptions,
@@ -154,9 +149,7 @@ export class JobRunner {
     }
     const base = this.baseFor(spec, "video", request.prompt, {
       n: 1,
-      requestedShape: spec.normalised.requestedShape,
-      requestedSeconds: spec.normalised.requestedSeconds,
-      requestedResolution: spec.normalised.requestedResolution,
+      requested: spec.normalised.requested,
       references: request.references.map((reference) => reference.path),
       ...(request.firstFrame === undefined ? {} : { firstFrame: request.firstFrame.path }),
       ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame.path }),
@@ -209,9 +202,7 @@ export class JobRunner {
           observed: record.observed ?? record.files.map(() => null),
           ...(record.shortfall === undefined ? {} : { shortfall: record.shortfall }),
           ...(record.mismatch === undefined ? {} : { mismatch: record.mismatch }),
-          ...(record.parameters.requestedShape === undefined ? {} : { requestedShape: record.parameters.requestedShape }),
-          ...(record.parameters.requestedSeconds === undefined ? {} : { requestedSeconds: record.parameters.requestedSeconds }),
-          ...(record.parameters.requestedResolution === undefined ? {} : { requestedResolution: record.parameters.requestedResolution }),
+          ...(record.parameters.requested === undefined ? {} : { requested: record.parameters.requested }),
         };
       }
       if (record.outcome === "failed") {
@@ -330,9 +321,7 @@ export class JobRunner {
         observed,
         ...(shortfall === undefined ? {} : { shortfall }),
         ...(mismatch === undefined ? {} : { mismatch }),
-        ...(base.parameters.requestedShape === undefined ? {} : { requestedShape: base.parameters.requestedShape }),
-        ...(base.parameters.requestedSeconds === undefined ? {} : { requestedSeconds: base.parameters.requestedSeconds }),
-        ...(base.parameters.requestedResolution === undefined ? {} : { requestedResolution: base.parameters.requestedResolution }),
+        ...(base.parameters.requested === undefined ? {} : { requested: base.parameters.requested }),
       };
     } catch (error) {
       if (error instanceof JobAbandoned || this.closed) throw new JobAbandoned();
@@ -382,8 +371,8 @@ const durationToleranceSeconds = 0.5;
  * or `width` and `height` in `provider_options` when the Agent set both.
  */
 function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; asked: string } | undefined {
-  if (parameters.requestedShape !== undefined) {
-    const parsed = parameters.requestedShape === null ? undefined : parseShape(parameters.requestedShape);
+  if (parameters.requested !== undefined) {
+    const parsed = parameters.requested.shape === null ? undefined : parseShape(parameters.requested.shape);
     return parsed === undefined ? undefined : { ratio: parsed.ratio, asked: parsed.label };
   }
   const { width, height } = parameters.providerOptions;
@@ -402,7 +391,7 @@ function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; as
 function mismatchOf(parameters: JobRecord["parameters"], observed: Array<MediaFacts | null>): string | undefined {
   const { followsFirstFrame } = parameters;
   // What the final request asked for (ADR 0010); Jobs recorded before, what litevision chose.
-  const seconds = parameters.requestedSeconds !== undefined ? (parameters.requestedSeconds ?? undefined) : parameters.seconds;
+  const seconds = parameters.requested !== undefined ? (parameters.requested.seconds ?? undefined) : parameters.seconds;
   const expected = expectedShape(parameters);
   const problems = new Set<string>();
   for (const facts of observed) {

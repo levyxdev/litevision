@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Dirs } from "./dirs.ts";
 import type { MediaFacts } from "./media.ts";
+import type { Requested } from "./protocols/parameter-guide.ts";
 import type { Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
 
 /**
@@ -20,21 +21,8 @@ export interface JobParameters {
   aspectRatio?: string;
   /** Jobs recorded before ADR 0010 only: the size litevision chose and sent. */
   size?: { aspectRatio: string; width: number; height: number };
-  /**
-   * The shape the final request asked for, as litevision read it from the request's fields (ADR 0010), e.g. `16:9`;
-   * null when it could not read one, so the result's shape went unchecked. Absent on Jobs recorded before.
-   */
-  requestedShape?: string | null;
-  /**
-   * Video Jobs only: the length in seconds the final request asked for, as litevision read it (ADR 0010); null when
-   * it could not read one, so the length went unchecked. Absent on Jobs recorded before.
-   */
-  requestedSeconds?: number | null;
-  /**
-   * The resolution tier the final request asked for, as written, e.g. `4K` (ADR 0010); null when it set none. Reported
-   * only, never checked. Absent on Jobs recorded before.
-   */
-  requestedResolution?: string | null;
+  /** What the final request asked for, as litevision read it (ADR 0010). Absent on Jobs recorded before. */
+  requested?: Requested;
   /** Absolute paths of the reference images. */
   references: string[];
   /** Video Jobs recorded before ADR 0010 only: the length litevision chose, in seconds. */

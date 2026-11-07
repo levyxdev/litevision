@@ -317,7 +317,7 @@ describe("generate_video with the together Protocol", () => {
     expect((await readHistory(harness))[0]).toMatchObject({
       modality: "video",
       outcome: "completed",
-      parameters: { n: 1, requestedShape: null, requestedSeconds: null },
+      parameters: { n: 1, requested: { shape: null, resolution: null, seconds: null } },
     });
   });
 

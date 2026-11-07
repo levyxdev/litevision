@@ -125,7 +125,7 @@ export function parseShape(text: string): { label: string; ratio: number } | und
  * The shape a request asks for, from the first of its shape fields it sets, e.g. `16:9` or `2048x1152`; null when it
  * sets none, or one that says no shape (e.g. `auto`).
  */
-export function readShape(fields: ShapeField[], body: Record<string, unknown>): string | null {
+function readShape(fields: ShapeField[], body: Record<string, unknown>): string | null {
   for (const field of fields) {
     if (typeof field === "string") {
       const value = valueAt(body, field);
@@ -143,12 +143,34 @@ export function readShape(fields: ShapeField[], body: Record<string, unknown>): 
 }
 
 /** The resolution tier a request asks for, as written, e.g. `4K`; null when the field is missing or not text. */
-export function readResolution(field: string | undefined, body: Record<string, unknown>): string | null {
+function readResolution(field: string | undefined, body: Record<string, unknown>): string | null {
   const value = field === undefined ? undefined : valueAt(body, field);
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
 /** The length in seconds a request asks for; null when the field is missing or cannot be read. */
-export function readSeconds(field: string | undefined, body: Record<string, unknown>): number | null {
+function readSeconds(field: string | undefined, body: Record<string, unknown>): number | null {
   return field === undefined ? null : (positive(valueAt(body, field)) ?? null);
+}
+
+/**
+ * What a final request asks for, as litevision read it from the request's own fields (ADR 0010). It travels as one
+ * value from the request through the Job history to every tool output.
+ */
+export interface Requested {
+  /** The shape, e.g. `16:9` or `3840x2160`; null when unreadable, so the result's shape goes unchecked. */
+  shape: string | null;
+  /** The resolution tier, as written, e.g. `4K` or `1080P`; null when the request sets none. Reported, never checked. */
+  resolution: string | null;
+  /** Video only: the length in seconds; null when unreadable, so the length goes unchecked. Absent on image Jobs. */
+  seconds?: number | null;
+}
+
+/** Reads what a request body asks for from the fields to read; the length only for video. */
+export function readRequested(fields: RequestFields, body: Record<string, unknown>, modality: "image" | "video"): Requested {
+  return {
+    shape: readShape(fields.shape, body),
+    resolution: readResolution(fields.resolution, body),
+    ...(modality === "video" ? { seconds: readSeconds(fields.duration, body) } : {}),
+  };
 }

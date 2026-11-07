@@ -84,7 +84,7 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(await sentBody()).toMatchObject({ resolution: "1080P", ratio: "9:16", seconds: "12" });
     const output = result.structuredContent as unknown as VideoOutput;
     expect(output).toMatchObject({ requested_shape: "9:16", requested_resolution: "1080P", requested_duration: 12 });
-    expect(textOf(result)).toContain("9:16, 1080P, 12 s");
+    expect(textOf(result)).toContain("9:16 at 1080P, 12 s");
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -117,7 +117,7 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     harness = await startHarness(setup());
     await video({ provider_options: { ratio: "16:9", seconds: "5", resolution: "720P" } });
     const [job] = await readHistory(harness);
-    expect(job!.parameters).toMatchObject({ requestedShape: "16:9", requestedSeconds: 5, requestedResolution: "720P" });
+    expect(job!.parameters).toMatchObject({ requested: { shape: "16:9", seconds: 5, resolution: "720P" } });
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
     expect(again.structuredContent).toMatchObject({ requested_shape: "16:9", requested_duration: 5, requested_resolution: "720P" });
   });

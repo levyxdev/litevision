@@ -44,7 +44,7 @@ import { updateNotesAsAgent } from "./model-notes.ts";
 import { mergeOptions } from "./standing-options.ts";
 import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
 import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
-import { guideOutput, guideSummary, guideText, type ParameterGuide } from "./protocols/parameter-guide.ts";
+import { guideOutput, guideSummary, guideText, type ParameterGuide, type Requested } from "./protocols/parameter-guide.ts";
 import { modalities, type Modality, type ProviderErrorKind } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
 import { settingsOpener } from "./settings/opener.ts";
@@ -417,10 +417,32 @@ const observedSchema = z
   .array(z.object({ width: z.number(), height: z.number(), seconds: z.number().optional() }).nullable())
   .describe("What each saved file turned out to be, in the order of `files`, read from the file itself; null where litevision could not tell.");
 
+/** What the request sent asks for, as every Job output reports it; see {@link requestedOutput}. */
+const requestedShapeSchema = z
+  .string()
+  .nullable()
+  .describe(
+    "The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 16:9 or 3840x2160; null when it asks for none litevision can read, so the result's shape is not checked. Compare it with `observed`.",
+  );
+
 const requestedResolutionSchema = z
   .string()
   .nullable()
   .describe("The resolution tier the request sent asks for, as written in its Protocol's tier field, e.g. 4K or 1080P; null when it sets none. Not checked against the result.");
+
+const requestedDurationSchema = z
+  .number()
+  .nullable()
+  .describe("Video Jobs: the length in seconds the request sent asks for, as litevision read it; null when unreadable, so the length is not checked.");
+
+/** The `requested_*` fields of a Job's output; `requested_duration` only for a video Job. */
+function requestedOutput(requested: Requested) {
+  return {
+    requested_shape: requested.shape,
+    requested_resolution: requested.resolution,
+    ...(requested.seconds === undefined ? {} : { requested_duration: requested.seconds }),
+  };
+}
 
 const mismatchSchema = z
   .string()
@@ -437,17 +459,11 @@ function describeFacts(facts: MediaFacts): string {
   return `${facts.width}x${facts.height}${facts.seconds === undefined ? "" : `, ${facts.seconds} s`}`;
 }
 
-/** The shape and tier litevision read from the final request, or that it read no shape, so the result's shape is not checked. */
-function requestedText(shape: string | null, resolution: string | null): string {
-  if (shape === null) {
-    return `The request asks for ${resolution === null ? "" : `${resolution} but `}no size litevision can read, so the result's shape was not checked.`;
-  }
-  return `The request asks for ${shape}${resolution === null ? "" : ` at ${resolution}`}.`;
-}
-
-/** What litevision read from a video's final request; whatever it could not read is not checked. */
-function requestedVideoText(shape: string | null, resolution: string | null, seconds: number | null): string {
-  const read = [shape, resolution, seconds === null ? null : `${seconds} s`].filter((part) => part !== null);
+/** What litevision read from the final request, e.g. "16:9 at 4K, 12 s"; whatever it could not read is not checked. */
+function requestedText({ shape, resolution, seconds }: Requested): string {
+  const size = shape === null ? resolution : resolution === null ? shape : `${shape} at ${resolution}`;
+  const read = [size, typeof seconds === "number" ? `${seconds} s` : null].filter((part) => part !== null);
+  // A length is unread only on a video Job, which has the field at all.
   const unread = [shape === null ? "shape" : null, seconds === null ? "length" : null].filter((part) => part !== null);
   const asked = read.length === 0 ? "" : `The request asks for ${read.join(", ")}.`;
   const unchecked =
@@ -474,9 +490,7 @@ function jobOutput(job: JobState) {
     observed: job.status === "completed" ? job.observed : [],
     ...(job.status === "completed" && job.shortfall !== undefined ? { shortfall: job.shortfall } : {}),
     ...(job.status === "completed" && job.mismatch !== undefined ? { mismatch: job.mismatch } : {}),
-    ...(job.status === "completed" && job.requestedShape !== undefined ? { requested_shape: job.requestedShape } : {}),
-    ...(job.status === "completed" && job.requestedSeconds !== undefined ? { requested_duration: job.requestedSeconds } : {}),
-    ...(job.status === "completed" && job.requestedResolution !== undefined ? { requested_resolution: job.requestedResolution } : {}),
+    ...(job.status === "completed" && job.requested !== undefined ? requestedOutput(job.requested) : {}),
   };
 }
 
@@ -541,12 +555,7 @@ const imageJobShape = {
   status: jobStatusSchema,
   model: z.string().describe("Alias of the Model that ran the Job."),
   files: z.array(z.string()).describe("Paths of the saved images; empty while the Job is running."),
-  requested_shape: z
-    .string()
-    .nullable()
-    .describe(
-      "The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 16:9 or 3840x2160; null when it asks for none litevision can read, so the result's shape is not checked. Compare it with `observed`.",
-    ),
+  requested_shape: requestedShapeSchema,
   requested_resolution: requestedResolutionSchema,
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
@@ -558,14 +567,8 @@ const videoJobShape = {
   status: jobStatusSchema,
   model: z.string().describe("Alias of the Model that ran the Job."),
   files: z.array(z.string()).describe("Path of the saved video; empty while the Job is running."),
-  requested_shape: z
-    .string()
-    .nullable()
-    .describe("The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 9:16; null when unreadable, so the shape is not checked."),
-  requested_duration: z
-    .number()
-    .nullable()
-    .describe("The length in seconds the request sent asks for, as litevision read it; null when unreadable, so the length is not checked."),
+  requested_shape: requestedShapeSchema,
+  requested_duration: requestedDurationSchema,
   requested_resolution: requestedResolutionSchema,
   observed: observedSchema,
   mismatch: mismatchSchema,
@@ -629,8 +632,8 @@ export function createServer(deps: ServerDeps): McpServer {
       start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
-        const output = { ...jobOutput(job), requested_shape: normalised.requestedShape, requested_resolution: normalised.requestedResolution };
-        const asked = requestedText(normalised.requestedShape, normalised.requestedResolution);
+        const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
+        const asked = requestedText(normalised.requested);
         const text =
           job.status === "running"
             ? `${jobText(job)} ${asked}`
@@ -665,13 +668,8 @@ export function createServer(deps: ServerDeps): McpServer {
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
       report: (job) => {
-        const output = {
-          ...jobOutput(job),
-          requested_shape: normalised.requestedShape,
-          requested_duration: normalised.requestedSeconds,
-          requested_resolution: normalised.requestedResolution,
-        };
-        const asked = requestedVideoText(normalised.requestedShape, normalised.requestedResolution, normalised.requestedSeconds);
+        const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
+        const asked = requestedText(normalised.requested);
         const text =
           job.status === "running"
             ? `${jobText(job)} ${asked}`
@@ -876,16 +874,8 @@ export function createServer(deps: ServerDeps): McpServer {
         model: z.string().describe("Alias of the Model that ran the Job."),
         files: z.array(z.string()).describe("Paths of the saved images or video; empty while the Job is running."),
         shortfall: z.string().optional().describe("Present when fewer images than asked for were saved: how many, and why."),
-        requested_shape: z
-          .string()
-          .nullable()
-          .optional()
-          .describe("The shape the request sent asks for, as litevision read it; null when unreadable, so the shape was not checked."),
-        requested_duration: z
-          .number()
-          .nullable()
-          .optional()
-          .describe("Video Jobs: the length in seconds the request sent asks for, as litevision read it; null when unreadable."),
+        requested_shape: requestedShapeSchema.optional(),
+        requested_duration: requestedDurationSchema.optional(),
         requested_resolution: requestedResolutionSchema.optional(),
         observed: observedSchema,
         mismatch: mismatchSchema,

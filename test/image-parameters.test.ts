@@ -306,7 +306,7 @@ describe("Job history", () => {
       prompt: "the fox, at dusk",
       parameters: {
         n: 1,
-        requestedShape: "1536x1024",
+        requested: { shape: "1536x1024", resolution: null },
         references: [join(harness.cwd, "fox.png")],
         outputPath: join(harness.cwd, "assets"),
         providerOptions: { quality: "high", size: "1536x1024" },

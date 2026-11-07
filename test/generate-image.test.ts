@@ -147,8 +147,7 @@ describe("generate_image", () => {
       prompt: "a red fox",
       parameters: {
         n: 1,
-        requestedShape: null,
-        requestedResolution: null,
+        requested: { shape: null, resolution: null },
         references: [],
         providerOptions: {},
       },
