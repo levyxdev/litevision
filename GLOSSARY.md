@@ -53,21 +53,25 @@ A set of Jobs started together for one request so the User can pick among their 
 _Avoid_: Batch, group, candidate set
 
 **Rating**:
-The User's explicit verdict on one Job, or on one result of it: good or bad, plus a one-line reason. Recorded only when the User actually states it.
+The User's explicit verdict on one Job, or on one result of it: good or bad, plus a one-line reason. Recorded only when the User actually states it. It judges the result, never the options that produced it.
 _Avoid_: Feedback, review, score
 
 **Pick**:
 The result the User chose within a Comparison. A relative preference, not a Rating: the picked result is not thereby good, nor the others bad. Recorded only when the User actually chooses.
 _Avoid_: Choice, winner, vote
 
-**Known-good Options**:
-The `provider_options` a Model is known to honour: sent by a completed Job whose result matched what was asked, as far as litevision can check (an image's aspect ratio, a video's duration), and that the User has not rated bad. Options last sent by a Job the User rated bad are _suspect_ instead, shown with the Rating's reason, until a Job rated good sends them again. So are options last sent by a Job whose result did not match, until a matching Job sends them again.
-_Avoid_: Working options, defaults, presets
+**Source Job**:
+An earlier Job whose result is one of a Job's reference images. A Job may have several Source Jobs, or none.
+_Avoid_: Parent, base, derived-from
+
+**Option Status**:
+What the latest evidence says about one `provider_options` value on one Model, from facts alone, never from a Rating: _Honoured_ (the result was checked and matched), _Ignored_ (the result was checked and did not match), _Rejected_ (the Provider's error named it), or _Accepted_ (not rejected, but its effect cannot be checked). Fields checked together, such as a width and a height, share one Option Status.
+_Avoid_: Known-good options, suspect options, working options
 
 **Standing Options**:
-The `provider_options` the User has set for a Model, sent with every Job of that Model. Whatever the Agent passes for a Job overrides them. Set only by the User, unlike Known-good Options, which litevision learns from past Jobs.
+The `provider_options` the User has set for a Model, sent with every Job of that Model. Whatever the Agent passes for a Job overrides them. Set only by the User, unlike an Option Status, which litevision learns from past Jobs.
 _Avoid_: Default options, presets
 
 **Model Notes**:
-A short note about a Model that helps the Agent choose it, e.g. "photoreal, cheap, bad at Chinese text". The User and the Agent may both change it, but only to text the User has agreed to.
+A short note about a Model that helps the Agent choose it, e.g. "photoreal, cheap, bad at Chinese text" or "quality=low looks blurry". Where the effect of an option that no check can measure gets written down. The User and the Agent may both change it, but only to text the User has agreed to.
 _Avoid_: Description, reviews

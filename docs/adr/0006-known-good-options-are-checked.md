@@ -13,3 +13,5 @@ This replaces the consequence in ADR 0004 that a known-good option "only means t
 - **Compare exact pixel sizes**: rejected because an option such as a resolution tier is meant to change them; aspect ratio and duration are what the request fixes.
 
 (Partly superseded by ADR 0010: results are checked against what the final request asked for, as read through the Parameter Guide, not against a size litevision chose.)
+
+(Partly superseded by ADR 0011: a Rating no longer changes what litevision records about options, and a mismatch affects only the fields that were checked. Known-good and suspect options are replaced by the Option Status.)
