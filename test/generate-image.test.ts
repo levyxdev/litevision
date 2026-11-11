@@ -147,7 +147,7 @@ describe("generate_image", () => {
       prompt: "a red fox",
       parameters: {
         n: 1,
-        requested: { shape: null, resolution: null },
+        requested: { shape: null, resolution: null, size: null, format: null },
         references: [],
         providerOptions: {},
       },
@@ -155,7 +155,7 @@ describe("generate_image", () => {
     // Append-only: one record when the Job starts, one when it ends.
     expect(await readHistoryLines(harness)).toEqual([
       { ...job, durationMs: 0, files: [], outcome: "running" },
-      { ...job, durationMs: 2500, files: output.files, outcome: "completed", observed: [{ width: 1, height: 1 }] },
+      { ...job, durationMs: 2500, files: output.files, outcome: "completed", observed: [{ width: 1, height: 1, format: "png" }] },
     ]);
   });
 

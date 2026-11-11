@@ -9,6 +9,11 @@ import { imageTypeOf, type ImageType } from "./images.ts";
 export interface MediaFacts {
   width: number;
   height: number;
+  /**
+   * The file format its header names: png, jpeg, webp, gif, mp4 or mov. Absent on files saved before litevision
+   * recorded it.
+   */
+  format?: string;
   /** Videos only, when the container says. */
   seconds?: number;
 }
@@ -28,11 +33,18 @@ export function fileTypeOf(bytes: Uint8Array): ImageType | undefined {
   return undefined;
 }
 
-/** The pixel size, and for a video its length, of a PNG, JPEG, WebP, GIF or MP4 file; undefined when it cannot be read. */
+/** The pixel size and format, and for a video its length, of a PNG, JPEG, WebP, GIF or MP4 file; undefined when it cannot be read. */
 export function mediaFactsOf(bytes: Uint8Array): MediaFacts | undefined {
+  const extension = fileTypeOf(bytes)?.extension;
+  const facts = sizeOf(bytes, extension);
+  return facts === undefined ? undefined : { ...facts, format: extension === "jpg" ? "jpeg" : extension! };
+}
+
+/** The pixel size, and for a video its length, of a file of the given type. */
+function sizeOf(bytes: Uint8Array, extension: string | undefined): MediaFacts | undefined {
   try {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    switch (fileTypeOf(bytes)?.extension) {
+    switch (extension) {
       case "png":
         return { width: view.getUint32(16), height: view.getUint32(20) };
       case "gif":

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
-import { readHistory, recorded, textOf, tinyPng } from "./helpers.ts";
+import { jpegOfSize, pngOfSize, readHistory, recorded, textOf, tinyPng } from "./helpers.ts";
 import { fixture } from "./recorded-http.ts";
 import { startSettingsHarness, type SettingsHarness } from "./settings-harness.ts";
 
@@ -65,6 +65,25 @@ function outputOf(result: Awaited<ReturnType<typeof generate>>): GenerateResult 
 }
 
 const bodyOf = async (request: Request) => (await request.json()) as InteractionBody;
+
+/** A completed Interaction whose one image is a PNG of the given size, or a JPEG. */
+const imageOfSize = (width: number, height: number, type: "png" | "jpeg" = "png"): Route => () =>
+  Response.json({
+    id: "v1_size",
+    object: "interaction",
+    model: "gemini-3.1-flash-image",
+    status: "completed",
+    steps: [
+      {
+        type: "model_output",
+        content: [{ type: "image", mime_type: `image/${type}`, data: (type === "png" ? pngOfSize : jpegOfSize)(width, height).toString("base64") }],
+      },
+    ],
+  });
+
+const statusesOf = async () =>
+  ((await harness!.client.callTool({ name: "list_models", arguments: { model: "nano-banana" } })).structuredContent as Record<string, any>).models[0]
+    .option_statuses;
 
 describe("generate_image with a gemini Model", () => {
   test("sends one Interaction and saves the final image, ignoring interim thought images", async () => {
@@ -157,6 +176,46 @@ describe("generate_image with a gemini Model", () => {
     expect(output).toMatchObject({ requested_shape: "9:16" });
   });
 
+  test("a tier the Parameter Guide sizes is checked against the result's pixel size: its own size is Honoured", async () => {
+    harness = await startHarness(geminiSetup({ [interactionsUrl]: imageOfSize(2752, 1536) }));
+    const format = { aspect_ratio: "16:9", image_size: "2K" };
+    const result = await generate({ provider_options: { response_format: format } });
+    const output = outputOf(result);
+    expect(output).toMatchObject({ requested_shape: "16:9", requested_resolution: "2K", requested_size: "2752x1536" });
+    expect(textOf(result)).toContain("The request asks for 16:9 at 2K (2752x1536).");
+    expect(output).not.toHaveProperty("mismatch");
+    expect((await statusesOf()).honoured).toMatchObject([{ options: { "response_format.aspect_ratio": "16:9" } }, { options: { "response_format.image_size": "2K" } }]);
+  });
+
+  test("a result at another tier's size is a mismatch naming the tier asked for, and the tier is Ignored", async () => {
+    harness = await startHarness(geminiSetup({ [interactionsUrl]: imageOfSize(1376, 768) }));
+    const format = { aspect_ratio: "16:9", image_size: "2K" };
+    const output = outputOf(await generate({ provider_options: { response_format: format } }));
+    expect(output).toMatchObject({ mismatch: "asked for 2K (2752x1536), got 1376x768" });
+    const statuses = await statusesOf();
+    expect(statuses.ignored).toMatchObject([{ options: { "response_format.image_size": "2K" }, reason: "asked for 2K (2752x1536), got 1376x768" }]);
+    expect(statuses.honoured).toMatchObject([{ options: { "response_format.aspect_ratio": "16:9" } }]);
+  });
+
+  test("each field of the response format the check reads has its own Option Status; the rest of it shares one", async () => {
+    harness = await startHarness(geminiSetup({ [interactionsUrl]: imageOfSize(2752, 1536, "jpeg") }));
+    const format = { aspect_ratio: "16:9", image_size: "2K", mime_type: "image/png", unknown_field: 3 };
+    const output = outputOf(await generate({ provider_options: { response_format: format } }));
+    expect(output).toMatchObject({ mismatch: "asked for png, got jpeg" });
+    const statuses = await statusesOf();
+    expect(statuses.ignored).toMatchObject([{ options: { "response_format.mime_type": "image/png" }, reason: "asked for png, got jpeg" }]);
+    expect(statuses.honoured).toMatchObject([{ options: { "response_format.aspect_ratio": "16:9" } }, { options: { "response_format.image_size": "2K" } }]);
+    expect(statuses.accepted).toMatchObject([{ options: { response_format: { unknown_field: 3 } } }]);
+  });
+
+  test("a tier with no aspect ratio, or one the Parameter Guide gives no size for, is not checked for size", async () => {
+    harness = await startHarness(geminiSetup({ [interactionsUrl]: imageOfSize(1376, 768) }));
+    for (const format of [{ image_size: "2K" }, { aspect_ratio: "16:9", image_size: "8K" }]) {
+      const output = outputOf(await generate({ provider_options: { response_format: format } }));
+      expect(output).toMatchObject({ requested_size: null });
+      expect(output).not.toHaveProperty("mismatch");
+    }
+  });
 
   test("provider_options reach the Interaction; their response_format is merged with litevision's image type", async () => {
     harness = await startHarness(geminiSetup());

@@ -43,6 +43,8 @@ const gptImage25: ParameterGuide = {
   checked,
   notes: ["GPT Image 2.6 adds complexity, markup_url, GIF and SVG output.", pricingNote],
   shapeFields: ["size"],
+  // Only 16:9's sizes are documented, as in the resolution values above.
+  tierSizes: { "1k": { "16:9": "1536x864" }, "2k": { "16:9": "2048x1152" }, "4k": { "16:9": "3840x2160" } },
 };
 
 const gptImage2: ParameterGuide = {

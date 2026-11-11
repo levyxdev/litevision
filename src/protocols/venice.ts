@@ -208,7 +208,7 @@ export const venice: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => (modality === "image" ? veniceGuide(modelId) : undefined),
 
-  requestFields: { image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"], resolution: "resolution" } },
+  requestFields: { image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"], resolution: "resolution", format: "format" } },
 
   reservedOptions: ["model", "modelId", "prompt", "return_binary", "image", "images"],
 

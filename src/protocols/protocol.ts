@@ -167,8 +167,8 @@ export interface ProtocolAdapter {
    */
   parameterGuide?(modelId: string, modality: Modality): ParameterGuide | undefined;
   /**
-   * The request fields this Protocol carries the shape (and, for video, the length) in, which the result check reads
-   * when the Model's Parameter Guide entry names none of its own, and the resolution tier, which is only reported.
+   * The request fields this Protocol carries the shape (and, for video, the length) and the file format in, which the
+   * result check reads when the Model's Parameter Guide entry names none of its own, and the resolution tier.
    */
   requestFields: { image: RequestFields; video?: RequestFields };
   /** Request fields the adapter sets itself, dotted one level deep for a nested one; `provider_options` may not set them. */

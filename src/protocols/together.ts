@@ -190,7 +190,7 @@ export const together: ProtocolAdapter = {
   docsUrl: (modelId, modality = "image") => togetherGuide(modelId, modality)?.sources[0] ?? genericDocs[modality],
 
   requestFields: {
-    image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"] },
+    image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"], format: "output_format" },
     video: { shape: [{ width: "width", height: "height" }, "ratio"], duration: "seconds", resolution: "resolution" },
   },
 

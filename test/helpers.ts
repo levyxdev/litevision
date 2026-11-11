@@ -48,6 +48,13 @@ export function pngOfSize(width: number, height: number): Buffer {
   return header;
 }
 
+/** A JPEG's start and a JFIF segment before the start-of-frame that carries the size. */
+export function jpegOfSize(width: number, height: number): Buffer {
+  const app0 = [0xff, 0xe0, 0x00, 0x10, ...Buffer.from("JFIF\0"), 1, 1, 0, 0, 1, 0, 1, 0, 0];
+  const sof0 = [0xff, 0xc0, 0x00, 0x11, 8, height >> 8, height & 0xff, width >> 8, width & 0xff, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1];
+  return Buffer.from([0xff, 0xd8, ...app0, ...sof0]);
+}
+
 /** The boxes of an MP4 that say how large and how long it is, and nothing else. */
 export function mp4Of(width: number, height: number, seconds: number): Buffer {
   const box = (type: string, body: Buffer) => {

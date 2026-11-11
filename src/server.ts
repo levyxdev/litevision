@@ -445,7 +445,7 @@ function failureHint(known: ParameterKnowledge, providerId: string, statuses: Op
 
 /** The structured form of what each saved file turned out to be. */
 const observedSchema = z
-  .array(z.object({ width: z.number(), height: z.number(), seconds: z.number().optional() }).nullable())
+  .array(z.object({ width: z.number(), height: z.number(), seconds: z.number().optional(), format: z.string().optional() }).nullable())
   .describe("What each saved file turned out to be, in the order of `files`, read from the file itself; null where litevision could not tell.");
 
 /** What the request sent asks for, as every Job output reports it; see {@link requestedOutput}. */
@@ -459,7 +459,21 @@ const requestedShapeSchema = z
 const requestedResolutionSchema = z
   .string()
   .nullable()
-  .describe("The resolution tier the request sent asks for, as written in its Protocol's tier field, e.g. 4K or 1080P; null when it sets none. Not checked against the result.");
+  .describe(
+    "The resolution tier the request sent asks for, as written in its Protocol's tier field, e.g. 4K or 1080P; null when it sets none. Checked only where the Parameter Guide gives the tier's pixel size: see `requested_size`.",
+  );
+
+const requestedSizeSchema = z
+  .string()
+  .nullable()
+  .describe(
+    "The pixel size the request sent asks for, e.g. 1792x2400, from exact dimensions or from a tier and aspect ratio the Model's Parameter Guide sizes; null when it names none litevision can read, so the result's pixel size is not checked.",
+  );
+
+const requestedFormatSchema = z
+  .string()
+  .nullable()
+  .describe("The file format the request sent asks for, e.g. png or jpeg; null when it names none litevision can read from a file's header, so the result's format is not checked.");
 
 const requestedDurationSchema = z
   .number()
@@ -471,6 +485,8 @@ function requestedOutput(requested: Requested) {
   return {
     requested_shape: requested.shape,
     requested_resolution: requested.resolution,
+    requested_size: requested.size ?? null,
+    requested_format: requested.format ?? null,
     ...(requested.seconds === undefined ? {} : { requested_duration: requested.seconds }),
   };
 }
@@ -478,7 +494,7 @@ function requestedOutput(requested: Requested) {
 const mismatchSchema = z
   .string()
   .optional()
-  .describe("Present when the result's shape or length differs from the request: an option may not have taken effect. Tell the User.");
+  .describe("Present when the result's shape, pixel size, length or file format differs from the request: an option may not have taken effect. Tell the User.");
 
 /** One sentence on what the saved files are, e.g. "Got 1344x768." */
 function observedText(observed: Array<MediaFacts | null>): string {
@@ -490,10 +506,11 @@ function describeFacts(facts: MediaFacts): string {
   return `${facts.width}x${facts.height}${facts.seconds === undefined ? "" : `, ${facts.seconds} s`}`;
 }
 
-/** What litevision read from the final request, e.g. "16:9 at 4K, 12 s"; whatever it could not read is not checked. */
-function requestedText({ shape, resolution, seconds }: Requested): string {
-  const size = shape === null ? resolution : resolution === null ? shape : `${shape} at ${resolution}`;
-  const read = [size, typeof seconds === "number" ? `${seconds} s` : null].filter((part) => part !== null);
+/** What litevision read from the final request, e.g. "16:9 at 4K (5504x3072), png, 12 s"; whatever it could not read is not checked. */
+function requestedText({ shape, resolution, size: pixels, format, seconds }: Requested): string {
+  const tier = resolution === null ? null : pixels == null || pixels === shape ? resolution : `${resolution} (${pixels})`;
+  const size = shape === null ? tier : tier === null ? shape : `${shape} at ${tier}`;
+  const read = [size, format ?? null, typeof seconds === "number" ? `${seconds} s` : null].filter((part) => part !== null);
   // A length is unread only on a video Job, which has the field at all.
   const unread = [shape === null ? "shape" : null, seconds === null ? "length" : null].filter((part) => part !== null);
   const asked = read.length === 0 ? "" : `The request asks for ${read.join(", ")}.`;
@@ -588,6 +605,8 @@ const imageJobShape = {
   files: z.array(z.string()).describe("Paths of the saved images; empty while the Job is running."),
   requested_shape: requestedShapeSchema,
   requested_resolution: requestedResolutionSchema,
+  requested_size: requestedSizeSchema,
+  requested_format: requestedFormatSchema,
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
   mismatch: mismatchSchema,
@@ -601,6 +620,8 @@ const videoJobShape = {
   requested_shape: requestedShapeSchema,
   requested_duration: requestedDurationSchema,
   requested_resolution: requestedResolutionSchema,
+  requested_size: requestedSizeSchema,
+  requested_format: requestedFormatSchema,
   observed: observedSchema,
   mismatch: mismatchSchema,
 };
@@ -908,6 +929,8 @@ export function createServer(deps: ServerDeps): McpServer {
         requested_shape: requestedShapeSchema.optional(),
         requested_duration: requestedDurationSchema.optional(),
         requested_resolution: requestedResolutionSchema.optional(),
+        requested_size: requestedSizeSchema.optional(),
+        requested_format: requestedFormatSchema.optional(),
         observed: observedSchema,
         mismatch: mismatchSchema,
       },

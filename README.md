@@ -78,12 +78,12 @@ The page also shows the Job history, with the images and videos and any Ratings 
 
 For each `provider_options` value sent to a Model, litevision keeps an Option Status from facts alone, never from your Ratings:
 
-- **Honoured**: the result was checked against the request (its shape, a video's length) and matched.
+- **Honoured**: the result was checked against the request (its shape; its pixel size, where the request names exact dimensions or a tier the Parameter Guide sizes; its file format; a video's length) and matched.
 - **Ignored**: the result was checked and did not match, so the Provider may have ignored the value.
 - **Rejected**: the Provider's error named it; its message is kept.
 - **Accepted**: the Provider did not reject it, but nothing can check its effect (`quality`, `seed`, …).
 
-Fields checked together, such as `width` and `height`, share one. The latest evidence wins and is shown with its date and Job, so the Agent can tell when to read the docs again.
+Fields checked together, such as `width` and `height`, share one; a nested field a check reads, such as Gemini's `response_format.image_size`, has its own. The latest evidence wins and is shown with its date and Job, so the Agent can tell when to read the docs again.
 
 ## Where things are kept
 

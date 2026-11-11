@@ -1,4 +1,5 @@
 import { guideFor, type ParameterGuide } from "../parameter-guide.ts";
+import { googleTierSizes } from "./google-sizes.ts";
 
 /** Written from Google's image generation guide, Interactions API reference, model pages and pricing, checked 2026-11-05. */
 
@@ -42,6 +43,8 @@ const nanoBanana21: ParameterGuide = {
   checked,
   notes: ["4K tokens: the image guide says 2520, the pricing page 3780 ($0.113); the price above follows the pricing page."],
   shapeFields: shape,
+  // Only 16:9's sizes are documented for this model.
+  tierSizes: googleTierSizes(["1K", "2K", "4K"], ["16:9"]),
 };
 
 const flash31: ParameterGuide = {
@@ -58,6 +61,7 @@ const flash31: ParameterGuide = {
     "The guide prints 21:9 at 512 as 792x168, which is not 21:9; probably 792x336.",
   ],
   shapeFields: shape,
+  tierSizes: googleTierSizes(["512", "1K", "2K", "4K"]),
 };
 
 const flashLite31: ParameterGuide = {
@@ -80,6 +84,7 @@ const pro3: ParameterGuide = {
   checked,
   notes: ["Up to 14 reference images, 5 of them with high fidelity."],
   shapeFields: shape,
+  tierSizes: googleTierSizes(["1K", "2K", "4K"], tenRatios.split(", ")),
 };
 
 const flash25: ParameterGuide = {

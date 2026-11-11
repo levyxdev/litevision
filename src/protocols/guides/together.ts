@@ -1,4 +1,5 @@
 import { guideFor, type GuideParameter, type ParameterGuide } from "../parameter-guide.ts";
+import { googleSizes, googleTiers } from "./google-sizes.ts";
 
 /**
  * Written from Together's image and video docs, model catalog and OpenAPI schema, BFL's FLUX.2 docs and Google's image
@@ -138,31 +139,9 @@ const flash25: ParameterGuide = {
   shapeFields: imageShape,
 };
 
-/**
- * Gemini 3.1 Flash Image's native sizes, from Google's table, per ratio at 512, 1K, 2K and 4K. Together takes only
- * these as width and height; its own 400 lists them, but cut off at 512 characters.
- */
-const flash31Sizes: Array<[ratio: string, ...sizes: string[]]> = [
-  ["1:1", "512x512", "1024x1024", "2048x2048", "4096x4096"],
-  ["1:4", "256x1024", "512x2048", "1024x4096", "2048x8192"],
-  ["1:8", "192x1536", "384x3072", "768x6144", "1536x12288"],
-  ["2:3", "424x632", "848x1264", "1696x2528", "3392x5056"],
-  ["3:2", "632x424", "1264x848", "2528x1696", "5056x3392"],
-  ["3:4", "448x600", "896x1200", "1792x2400", "3584x4800"],
-  ["4:1", "1024x256", "2048x512", "4096x1024", "8192x2048"],
-  ["4:3", "600x448", "1200x896", "2400x1792", "4800x3584"],
-  ["4:5", "464x576", "928x1152", "1856x2304", "3712x4608"],
-  ["5:4", "576x464", "1152x928", "2304x1856", "4608x3712"],
-  ["8:1", "1536x192", "3072x384", "6144x768", "12288x1536"],
-  ["9:16", "384x688", "768x1376", "1536x2752", "3072x5504"],
-  ["16:9", "688x384", "1376x768", "2752x1536", "5504x3072"],
-  ["21:9", "792x168", "1584x672", "3168x1344", "6336x2688"],
-];
-
-const flash31Tiers = ["512", "1K", "2K", "4K"];
-
-const flash31SizeList = flash31Tiers
-  .map((tier, index) => `${tier}: ${flash31Sizes.map(([ratio, ...sizes]) => `${sizes[index]} (${ratio})`).join(", ")}`)
+/** Together takes only these as width and height; its own 400 lists them, but cut off at 512 characters. */
+const flash31SizeList = googleTiers
+  .map((tier, index) => `${tier}: ${googleSizes.map(([ratio, ...sizes]) => `${sizes[index]} (${ratio})`).join(", ")}`)
   .join("; ");
 
 const flash31: ParameterGuide = {
@@ -237,6 +216,8 @@ const wan = (variant: string, seconds: string, media: string): ParameterGuide =>
   notes: [media, "30 fps MP4."],
   shapeFields: ["ratio"],
   durationField: "seconds",
+  // The sizes the resolution values above give; the other ratios' are not documented.
+  tierSizes: { "720P": { "16:9": "1280x720", "4:3": "1104x832" }, "1080P": { "16:9": "1920x1080", "4:3": "1648x1248" } },
 });
 
 const seedance25: ParameterGuide = {

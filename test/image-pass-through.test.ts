@@ -230,7 +230,7 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(together).not.toHaveProperty("quality");
   });
 
-  test("the resolution tier the request asks for is shown and recorded, unchecked", async () => {
+  test("the resolution tier the request asks for is shown and recorded", async () => {
     harness = await startHarness(setup());
     const result = await generate({ model: "banana", provider_options: { response_format: { aspect_ratio: "16:9", image_size: "4K" } } });
     const output = result.structuredContent as { requested_shape: string | null; requested_resolution: string | null };

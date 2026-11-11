@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
-import { mp4Of, pngOfSize, readHistory, recorded, textOf, tinyPng } from "./helpers.ts";
+import { jpegOfSize, mp4Of, pngOfSize, readHistory, recorded, textOf, tinyPng } from "./helpers.ts";
 import { fixture } from "./recorded-http.ts";
 import { startSettingsHarness, type SettingsHarness } from "./settings-harness.ts";
 
@@ -99,7 +99,7 @@ describe("generate_image with the together Protocol", () => {
     });
     expect(harness.requests[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
     expect(new Uint8Array(await readFile(output.files[0]))).toEqual(new Uint8Array(tinyPng));
-    expect(output.observed).toEqual([{ width: 1, height: 1 }]);
+    expect(output.observed).toEqual([{ width: 1, height: 1, format: "png" }]);
     // One image of two: Together said nothing about the other.
     expect(output.shortfall).toContain("1 of 2");
   });
@@ -273,7 +273,7 @@ describe("Option Status (ADR 0011)", () => {
     expect(text).toContain(`- Honoured: {"width":1792,"height":2400}, Job ${good.job_id}`);
   });
 
-  test("a shape mismatch makes only the shape group Ignored; seed and output_format keep their Option Status", async () => {
+  test("a shape mismatch makes only the shape group Ignored; seed stays Accepted and the matching output_format Honoured", async () => {
     let size = [1792, 2400];
     harness = await startHarness(flashSetup((request) => imageOfSize(size[0]!, size[1]!)(request)));
     const first = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7, output_format: "png" } }));
@@ -285,12 +285,50 @@ describe("Option Status (ADR 0011)", () => {
     expect(statuses.ignored).toEqual([
       { options: { width: 1792, height: 2400 }, job_id: wrong.job_id, date, reason: "asked for 1792x2400, got 1024x1024" },
     ]);
-    expect(statuses.honoured).toEqual([]);
-    expect(statuses.accepted).toEqual([
-      { options: { seed: 7 }, job_id: wrong.job_id, date },
-      { options: { output_format: "png" }, job_id: wrong.job_id, date },
-    ]);
+    // Both PNGs, as asked: the format check read output_format and found it matched.
+    expect(statuses.honoured).toEqual([{ options: { output_format: "png" }, job_id: wrong.job_id, date }]);
+    expect(statuses.accepted).toEqual([{ options: { seed: 7 }, job_id: wrong.job_id, date }]);
     expect(first.job_id).not.toBe(wrong.job_id);
+  });
+
+  test("a result of the right shape but not the size asked for is a mismatch, and the width and height group is Ignored", async () => {
+    // 896x1200 is 3:4 like 1792x2400, but the 1K size rather than the 2K one asked for.
+    harness = await startHarness(flashSetup(imageOfSize(896, 1200)));
+    const job = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7 } }));
+    expect(job.mismatch).toBe("asked for 1792x2400, got 896x1200");
+    expect(job.requested_size).toBe("1792x2400");
+
+    const statuses = await statusesOf();
+    expect(statuses.ignored).toEqual([{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date, reason: "asked for 1792x2400, got 896x1200" }]);
+    expect(statuses.honoured).toEqual([]);
+    expect(statuses.accepted).toEqual([{ options: { seed: 7 }, job_id: job.job_id, date }]);
+  });
+
+  test("a file format other than the one asked for is a mismatch, and only the format option is Ignored", async () => {
+    const jpeg: Route = () => Response.json({ id: "x", model: "m", object: "list", data: [{ index: 0, b64_json: jpegOfSize(1792, 2400).toString("base64") }] });
+    harness = await startHarness(flashSetup(jpeg));
+    const job = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, output_format: "png" } }));
+    expect(job.mismatch).toBe("asked for png, got jpeg");
+    expect(job.requested_format).toBe("png");
+
+    const statuses = await statusesOf();
+    expect(statuses.ignored).toEqual([{ options: { output_format: "png" }, job_id: job.job_id, date, reason: "asked for png, got jpeg" }]);
+    expect(statuses.honoured).toEqual([{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date }]);
+  });
+
+  test("the format asked for, in any of its spellings, is Honoured by a file of that format", async () => {
+    harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
+    const job = ok(await generate({ model: "nb2", provider_options: { output_format: "PNG" } }));
+    expect(job.mismatch).toBeUndefined();
+    expect((await statusesOf()).honoured).toEqual([{ options: { output_format: "PNG" }, job_id: job.job_id, date }]);
+  });
+
+  test("a format litevision cannot read from a file's header is not checked", async () => {
+    harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
+    const job = ok(await generate({ model: "nb2", provider_options: { output_format: "svg" } }));
+    expect(job).toMatchObject({ requested_format: null });
+    expect(job.mismatch).toBeUndefined();
+    expect((await statusesOf()).accepted).toEqual([{ options: { output_format: "svg" }, job_id: job.job_id, date }]);
   });
 
   test("a later matching Job turns an Ignored or Rejected group Honoured, and a later mismatch or rejection turns it back", async () => {
@@ -401,6 +439,14 @@ describe("generate_video with the together Protocol", () => {
     expect(output.mismatch).toBeUndefined();
   });
 
+  test("a tier and ratio whose size the Parameter Guide gives are checked against the video's pixel size", async () => {
+    harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 5) }));
+    const output = ok(await video({ provider_options: { resolution: "1080P", ratio: "16:9" } }));
+    expect(output).toMatchObject({ requested_size: "1920x1080", mismatch: "asked for 1080P (1920x1080), got 1280x720" });
+    const statuses = ok(await call("list_models", { model: "wan" })).models[0].option_statuses;
+    expect(statuses.ignored).toMatchObject([{ options: { resolution: "1080P" }, reason: "asked for 1080P (1920x1080), got 1280x720" }]);
+    expect(statuses.honoured).toMatchObject([{ options: { ratio: "16:9" } }]);
+  });
 
   test("a video model litevision has no guide for takes Together's generic fields in provider_options", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(720, 1280, 6) }));

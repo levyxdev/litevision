@@ -127,6 +127,7 @@ const editModels: ParameterGuide = {
     "One reference image goes to /image/edit, several to /image/multi-edit; each image of a Job is its own request.",
   ],
   shapeFields: ["aspect_ratio"],
+  formatField: "output_format",
 };
 
 const entries: Array<{ matches: RegExp; guide: ParameterGuide }> = [
