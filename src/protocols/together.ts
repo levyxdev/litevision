@@ -24,40 +24,17 @@ import { sendToProvider } from "./send.ts";
  * itself and passes others through to their makers, which an organization must allow first.
  */
 
-const docs = {
-  flux: "https://docs.together.ai/docs/quickstart-flux",
-  imageParameters: "https://docs.together.ai/docs/inference/images/parameters",
-  referenceImages: "https://docs.together.ai/docs/inference/images/reference-images",
-  wan: "https://docs.together.ai/docs/wan2.7-quickstart",
-  seedance: "https://docs.together.ai/docs/seedance2.5-quickstart",
-  videoParameters: "https://docs.together.ai/docs/inference/videos/parameters",
+/** Together's generic parameter pages: the docs link of a model with no Parameter Guide. */
+const genericDocs = {
+  image: "https://docs.together.ai/docs/inference/images/parameters",
+  video: "https://docs.together.ai/docs/inference/videos/parameters",
 };
 
-interface ImageFamily {
-  matches: RegExp;
-  /** How reference images are sent: an array, or Kontext's single `image_url`. */
-  references: "reference_images" | "image_url";
-  docsUrl: string;
-}
-
-const imageFamilies: ImageFamily[] = [
-  { matches: /^black-forest-labs\/FLUX\.1-kontext-/i, references: "image_url", docsUrl: docs.flux },
-  { matches: /^black-forest-labs\//i, references: "reference_images", docsUrl: docs.flux },
-  { matches: /^google\/(gemini-3-pro-image|flash-image-2\.5)$/i, references: "reference_images", docsUrl: docs.referenceImages },
-];
-
-/** Every other image model: Together's generic fields. */
-const otherImages: ImageFamily = { matches: /.*/, references: "reference_images", docsUrl: docs.imageParameters };
-
-const imageFamily = (modelId: string) => imageFamilies.find((family) => family.matches.test(modelId)) ?? otherImages;
-
-const videoFamilies = [
-  { matches: /^Wan-AI\/wan2\.7-/i, docsUrl: docs.wan },
-  { matches: /^ByteDance\/Seedance-2\.5$/i, docsUrl: docs.seedance },
-];
-
-/** Every other video model's docs: Together's generic video fields. */
-const videoDocsUrl = (modelId: string) => videoFamilies.find((family) => family.matches.test(modelId))?.docsUrl ?? docs.videoParameters;
+/**
+ * FLUX.1 Kontext takes its one reference image in `image_url`; every other image model takes `reference_images`. This
+ * is the only wire format that differs by model, so it is the only model-id rule here: the rest is the Parameter Guide.
+ */
+const singleImageUrl = /^black-forest-labs\/FLUX\.1-kontext-/i;
 
 const errorSchema = z.object({
   error: z.object({
@@ -210,7 +187,7 @@ export const together: ProtocolAdapter = {
 
   parameterGuide: (modelId, modality) => togetherGuide(modelId, modality),
 
-  docsUrl: (modelId, modality = "image") => (modality === "video" ? videoDocsUrl(modelId) : imageFamily(modelId).docsUrl),
+  docsUrl: (modelId, modality = "image") => togetherGuide(modelId, modality)?.sources[0] ?? genericDocs[modality],
 
   requestFields: {
     image: { shape: [{ width: "width", height: "height" }, "aspect_ratio"] },
@@ -222,7 +199,6 @@ export const together: ProtocolAdapter = {
   reservedVideoOptions: ["model", "prompt", "media"],
 
   async submit(request, target, http, context) {
-    const family = imageFamily(target.modelId);
     const { references } = request;
     const body = {
       model: target.modelId,
@@ -232,7 +208,7 @@ export const together: ProtocolAdapter = {
       response_format: "base64",
       ...(references.length === 0
         ? {}
-        : family.references === "image_url"
+        : singleImageUrl.test(target.modelId)
           ? { image_url: dataUrl(references[0]!) }
           : { reference_images: references.map(dataUrl) }),
       ...request.providerOptions,

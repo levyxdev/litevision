@@ -1,12 +1,26 @@
 import { guideFor, type GuideParameter, type ParameterGuide } from "../parameter-guide.ts";
 
-/** Written from Together's image and video docs, model catalog and OpenAPI schema, and BFL's FLUX.2 docs, checked 2026-11-05. */
+/**
+ * Written from Together's image and video docs, model catalog and OpenAPI schema, BFL's FLUX.2 docs and Google's image
+ * generation guide. Each entry carries the date it was checked. Each entry's first source is the Model's docs link, so
+ * it is the page that best covers that family on Together.
+ */
 
 const checked = "2026-11-05";
 
+const flux = "https://docs.together.ai/docs/quickstart-flux";
+const referenceImages = "https://docs.together.ai/docs/inference/images/reference-images";
+
 const imageSources = [
   "https://docs.together.ai/docs/inference/images/parameters",
-  "https://docs.together.ai/docs/inference/images/reference-images",
+  referenceImages,
+  "https://docs.together.ai/docs/serverless/models",
+];
+
+/** Gemini on Together: the reference images page first, as the page that names these models. */
+const geminiSources = [
+  referenceImages,
+  "https://docs.together.ai/docs/inference/images/parameters",
   "https://docs.together.ai/docs/serverless/models",
 ];
 
@@ -44,7 +58,7 @@ const flux2: ParameterGuide = {
     { name: "guidance", values: "[dev] and [flex] only.", default: "the Provider picks", price: "not documented." },
     ...common,
   ],
-  sources: [...imageSources, "https://docs.together.ai/docs/quickstart-flux", "https://docs.bfl.ml/flux_2/flux2_overview"],
+  sources: [flux, ...imageSources, "https://docs.bfl.ml/flux_2/flux2_overview"],
   checked,
   notes: [
     "Default size: the quickstart says 1024x768, the API reference 1024x1024.",
@@ -56,7 +70,7 @@ const flux2: ParameterGuide = {
 const flux2Max: ParameterGuide = {
   family: "FLUX.2 [max]",
   parameters: [...pixels("assumed 256–1920 as for the other FLUX.2 models", "$0.07 per megapixel at 50 steps: doubling the pixels doubles the price."), ...common],
-  sources: [...imageSources, "https://docs.together.ai/docs/quickstart-flux"],
+  sources: [flux, ...imageSources],
   checked,
   notes: ["Together documents neither its size range nor reference images."],
   shapeFields: imageShape,
@@ -76,7 +90,7 @@ const kontext: ParameterGuide = {
     { name: "steps", values: "an integer; more than the default costs proportionally more.", default: "28", price: "price × steps ÷ 28 above the default." },
     ...common,
   ],
-  sources: [...imageSources, "https://docs.together.ai/docs/quickstart-flux"],
+  sources: [flux, ...imageSources],
   checked,
   notes: ["`aspect_ratio` is in Together's docs but not in its OpenAPI schema."],
   shapeFields: imageShape,
@@ -105,7 +119,7 @@ const gemini3Pro: ParameterGuide = {
     { name: "reference_images", values: "an array of image links; litevision fills it from `references`. Count not documented by Together (Google: up to 14).", default: "none", price: "not documented." },
     ...common,
   ],
-  sources: imageSources,
+  sources: geminiSources,
   checked,
   notes: ['Together gives some sizes as alternatives ("1548x672 or 1584x672", "5096x3392 or 5056x3392"); Google says 1584x672 and 5056x3392.'],
   shapeFields: imageShape,
@@ -118,9 +132,69 @@ const flash25: ParameterGuide = {
     { name: "reference_images", values: "an array of image links; litevision fills it from `references`. Count not documented.", default: "none", price: "not documented." },
     ...common,
   ],
-  sources: imageSources,
+  sources: geminiSources,
   checked,
   notes: ["Together documents no sizes for this model; Google's own sizes are about a megapixel at each ratio."],
+  shapeFields: imageShape,
+};
+
+/**
+ * Gemini 3.1 Flash Image's native sizes, from Google's table, per ratio at 512, 1K, 2K and 4K. Together takes only
+ * these as width and height; its own 400 lists them, but cut off at 512 characters.
+ */
+const flash31Sizes: Array<[ratio: string, ...sizes: string[]]> = [
+  ["1:1", "512x512", "1024x1024", "2048x2048", "4096x4096"],
+  ["1:4", "256x1024", "512x2048", "1024x4096", "2048x8192"],
+  ["1:8", "192x1536", "384x3072", "768x6144", "1536x12288"],
+  ["2:3", "424x632", "848x1264", "1696x2528", "3392x5056"],
+  ["3:2", "632x424", "1264x848", "2528x1696", "5056x3392"],
+  ["3:4", "448x600", "896x1200", "1792x2400", "3584x4800"],
+  ["4:1", "1024x256", "2048x512", "4096x1024", "8192x2048"],
+  ["4:3", "600x448", "1200x896", "2400x1792", "4800x3584"],
+  ["4:5", "464x576", "928x1152", "1856x2304", "3712x4608"],
+  ["5:4", "576x464", "1152x928", "2304x1856", "4608x3712"],
+  ["8:1", "1536x192", "3072x384", "6144x768", "12288x1536"],
+  ["9:16", "384x688", "768x1376", "1536x2752", "3072x5504"],
+  ["16:9", "688x384", "1376x768", "2752x1536", "5504x3072"],
+  ["21:9", "792x168", "1584x672", "3168x1344", "6336x2688"],
+];
+
+const flash31Tiers = ["512", "1K", "2K", "4K"];
+
+const flash31SizeList = flash31Tiers
+  .map((tier, index) => `${tier}: ${flash31Sizes.map(([ratio, ...sizes]) => `${sizes[index]} (${ratio})`).join(", ")}`)
+  .join("; ");
+
+const flash31: ParameterGuide = {
+  family: "Gemini 3.1 Flash Image (Nano Banana 2) on Together",
+  parameters: [
+    {
+      name: "width",
+      values: `with height, exactly one of Google's sizes; any other pair is rejected. ${flash31SizeList}.`,
+      default: "1024",
+      price: "Together's catalog: $0.04657 at 512x512; it varies with size. Google bills about $0.045 at 512, $0.067 at 1K, $0.101 at 2K, $0.151 at 4K.",
+    },
+    { name: "height", values: "with width, as above.", default: "1024", price: "as width." },
+    {
+      name: "reference_images",
+      values: "an array of image links; litevision fills it from `references`. Count not documented by Together (Google: up to 14).",
+      default: "none",
+      price: "not documented.",
+    },
+    ...common,
+  ],
+  sources: [
+    "https://docs.together.ai/docs/serverless/models#image-models",
+    "https://ai.google.dev/gemini-api/docs/image-generation",
+    "https://ai.google.dev/gemini-api/docs/pricing",
+    "https://docs.together.ai/docs/inference/images/parameters",
+  ],
+  checked: "2026-11-11",
+  notes: [
+    "Sizes near a ratio are not rounded to it: 1536x2048 (3:4) is rejected; 3:4 at 2K is 1792x2400.",
+    "Google prints 21:9 at 512 as 792x168, which is not 21:9 (792x336 would be); Together's full list was not seen.",
+    "Together does not say which of reference_images or image_url this model takes; litevision sends reference_images.",
+  ],
   shapeFields: imageShape,
 };
 
@@ -131,6 +205,7 @@ const imageEntries = [
   { matches: /^black-forest-labs\/FLUX\.1\.1-pro$/i, guide: flux11 },
   { matches: /^google\/gemini-3-pro-image$/i, guide: gemini3Pro },
   { matches: /^google\/flash-image-2\.5$/i, guide: flash25 },
+  { matches: /^google\/flash-image-3\.1$/i, guide: flash31 },
 ];
 
 const videoCommon: GuideParameter[] = [
@@ -157,7 +232,7 @@ const wan = (variant: string, seconds: string, media: string): ParameterGuide =>
     { name: "seconds", values: `${seconds}, as a string.`, default: '"5"', price: "not documented." },
     ...videoCommon,
   ],
-  sources: [...videoSources, "https://docs.together.ai/docs/wan2.7-quickstart"],
+  sources: ["https://docs.together.ai/docs/wan2.7-quickstart", ...videoSources],
   checked,
   notes: [media, "30 fps MP4."],
   shapeFields: ["ratio"],
@@ -172,7 +247,7 @@ const seedance25: ParameterGuide = {
     { name: "media.reference_images", values: "up to 30 image links; litevision fills it from `references`.", default: "none", price: "not documented." },
     ...videoCommon,
   ],
-  sources: [...videoSources, "https://docs.together.ai/docs/seedance2.5-quickstart"],
+  sources: ["https://docs.together.ai/docs/seedance2.5-quickstart", ...videoSources],
   checked,
   notes: [
     "Takes no ratio, width or height: the shape follows the first frame, else the model picks. Audio is always on.",

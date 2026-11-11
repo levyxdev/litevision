@@ -28,7 +28,7 @@ export interface ParameterGuide {
   /** The family's name, e.g. "GPT Image 2.5". */
   family: string;
   parameters: GuideParameter[];
-  /** Where the entry was written from. */
+  /** Where the entry was written from. A Protocol may take the first as the Model's docs link, as Together does. */
   sources: string[];
   /** When the sources were last checked, as an ISO date. */
   checked: string;

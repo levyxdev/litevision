@@ -477,6 +477,68 @@ describe("Modality", () => {
     expect(textOf(result)).toContain("wan (default video): video Model Wan-AI/wan2.7-t2v");
   });
 
+  test("each Model's docs link is its Parameter Guide's first source, else Together's generic parameters page", async () => {
+    const docs = "https://docs.together.ai/docs";
+    const expected: Array<[modelId: string, modality: "image" | "video", docsUrl: string]> = [
+      ["black-forest-labs/FLUX.2-pro", "image", `${docs}/quickstart-flux`],
+      ["black-forest-labs/FLUX.2-max", "image", `${docs}/quickstart-flux`],
+      ["black-forest-labs/FLUX.1-kontext-max", "image", `${docs}/quickstart-flux`],
+      // The FLUX quickstart does not mention FLUX1.1 [pro]; the parameters page documents its width and height.
+      ["black-forest-labs/FLUX.1.1-pro", "image", `${docs}/inference/images/parameters`],
+      ["google/gemini-3-pro-image", "image", `${docs}/inference/images/reference-images`],
+      ["google/flash-image-2.5", "image", `${docs}/inference/images/reference-images`],
+      ["google/flash-image-3.1", "image", `${docs}/serverless/models#image-models`],
+      ["stabilityai/stable-diffusion-xl-base-1.0", "image", `${docs}/inference/images/parameters`],
+      ["Wan-AI/wan2.7-r2v", "video", `${docs}/wan2.7-quickstart`],
+      ["ByteDance/Seedance-2.5", "video", `${docs}/seedance2.5-quickstart`],
+      ["google/veo-3.1", "video", `${docs}/inference/videos/parameters`],
+    ];
+    harness = await startHarness({
+      ...togetherSetup(),
+      config: {
+        providers: [{ id: "together-ai", baseUrl: root }],
+        models: expected.map(([modelId, modality], index) => ({ alias: `m${index}`, provider: "together-ai", modelId, protocol: "together", modality })),
+      },
+    });
+    const listed = ok(await call("list_models", {})).models as Array<{ alias: string; docs_url: string }>;
+    const modelIdOf = new Map(expected.map(([modelId], index) => [`m${index}`, modelId]));
+    expect(listed.map((model) => [modelIdOf.get(model.alias), model.docs_url])).toEqual(
+      expected.map(([modelId, , docsUrl]) => [modelId, docsUrl]),
+    );
+  });
+
+  test("Gemini 3.1 Flash Image's Parameter Guide lists its fixed width and height pairs, as Together rejects any other", async () => {
+    harness = await startHarness({
+      ...togetherSetup(),
+      config: {
+        providers: [{ id: "together-ai", baseUrl: root }],
+        models: [{ alias: "nb2", provider: "together-ai", modelId: "google/flash-image-3.1", protocol: "together" }],
+      },
+    });
+    const result = await call("list_models", { model: "nb2" });
+    const guide = ok(result).models[0].parameter_guide;
+    const width = guide.parameters.find((parameter: { name: string }) => parameter.name === "width");
+    // Google's sizes for 3:4 at each tier, and 21:9 at 4K.
+    for (const size of ["448x600", "896x1200", "1792x2400", "3584x4800", "6336x2688"]) expect(width.values).toContain(size);
+    expect(width.values).not.toContain("1536x2048");
+    expect(guide.checked).toBe("2026-11-11");
+    expect(guide.sources).toContain("https://ai.google.dev/gemini-api/docs/image-generation");
+    expect(textOf(result)).toContain("1792x2400");
+  });
+
+  test("Gemini 3.1 Flash Image gets its references in reference_images and its size from width and height", async () => {
+    harness = await startHarness({
+      ...togetherSetup({ [imagesUrl]: imageOfSize(1792, 2400) }),
+      config: {
+        providers: [{ id: "together-ai", baseUrl: root }],
+        models: [{ alias: "nb2", provider: "together-ai", modelId: "google/flash-image-3.1", protocol: "together" }],
+      },
+    });
+    const output = ok(await generate({ model: "nb2", references: [await referenceImage()], provider_options: { width: 1792, height: 2400 } }));
+    expect(await bodyOf(imagesUrl)).toMatchObject({ width: 1792, height: 2400, reference_images: [tinyPngDataUrl] });
+    expect(output.mismatch).toBeUndefined();
+  });
+
   test("a default video Model that makes images sends the User to the settings page", async () => {
     harness = await startHarness({
       ...togetherSetup(),
