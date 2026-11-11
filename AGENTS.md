@@ -1,5 +1,9 @@
 # litevision
 
+## Git workflow
+
+Commit and push to `dev`; `main` moves only in a release. Before a release, see `docs/agents/git-workflow.md`.
+
 ## Agent skills
 
 ### Issue tracker
