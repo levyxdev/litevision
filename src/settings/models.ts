@@ -2,6 +2,8 @@ import { z } from "zod";
 import { defaultKey, modelNotesMaxLength, modelSchema, type NotesHistory } from "../config.ts";
 import { isPlainObject, readConfigObject, updateConfig, type ConfigObject } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
+import { readJobs } from "../history.ts";
+import { byStatus, modelOptionStatuses, type OptionStatus, type OptionStatusName } from "../option-status.ts";
 import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { standingOptionsProblem } from "../standing-options.ts";
@@ -57,6 +59,18 @@ export async function listModels(
     defaultVideoModel: typeof config.defaultVideoModel === "string" ? config.defaultVideoModel : null,
   };
   return { models: modelsOf(config).map((model) => view(model, defaults)), ...defaults };
+}
+
+/**
+ * Each Model's Option Statuses (ADR 0011), by Alias, grouped by status. Read-only: they are facts litevision learns
+ * from the Job history, and a value the User always wants belongs in Standing Options.
+ */
+export async function listOptionStatuses(dirs: Dirs): Promise<{ models: Record<string, Record<OptionStatusName, OptionStatus[]>> }> {
+  const models = modelsOf(await readConfigObject(dirs));
+  const jobs = await readJobs(dirs);
+  return {
+    models: Object.fromEntries(models.map((model) => [model.alias, byStatus(modelOptionStatuses(jobs, { ...model, modality: modalityOf(model) }))])),
+  };
 }
 
 async function getModel(dirs: Dirs, wanted: string): Promise<ModelView> {

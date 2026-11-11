@@ -58,7 +58,7 @@ The page listens on `127.0.0.1` only, behind a one-time token, and shuts down af
 3. **Pick a default image Model** (and a default video Model) and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
 4. **Optionally, set Standing Options** on a Model: a JSON object of the Provider's own request fields, such as `{ "quality": "high" }`, that every Job on it sends. The Agent's `provider_options` override them for one Job.
 
-The page also shows the Job history, with the images and videos and any Ratings you gave, and lets you rate a Job or one of its results.
+The page also shows the Job history, with the images and videos and any Ratings you gave, and lets you rate a Job or one of its results. Each Model shows its Option Statuses read-only: what litevision has learned about the `provider_options` values sent to it.
 
 ## Tools
 
@@ -68,11 +68,22 @@ The page also shows the Job history, with the images and videos and any Ratings 
 | `generate_video` | Generates a video from a prompt, optionally with a first and last frame and reference images. Shape, resolution and length are the Model's own fields in `provider_options`. Saves it and returns the file path, with what the request asked for and the video's actual size and length. |
 | `generate_comparison` | Starts 2 to 4 Jobs of one Modality together, differing in prompt, Model or both, each with its own `provider_options`, so you can choose among the results. The Agent starts one only when you ask for it or agree to it. |
 | `get_job` | Waits for, or reports on, a Job that was still running when `generate_image`, `generate_video` or `generate_comparison` returned. |
-| `list_models` | Lists the configured Models with their Modality, Model Notes, Standing Options, a summary of their Parameter Guide, docs link and Known-good Options (the `provider_options` that worked); for one Model, also its full Parameter Guide (each parameter's values, default and price effect, with sources and the date they were checked) or the Provider's own parameter schema where it publishes one, the options' values, options made suspect by a bad Rating or a result that did not match, its five most recent Ratings, and the Picks of up to five Comparisons it took part in (most recently picked first). |
-| `pick_result` | Records your Pick when you choose among a Comparison's results; choosing again replaces it. A Pick says which you prefer, not that it is good, so it does not change Known-good Options. You can also pick in the settings page's Job history, which shows a Comparison's Jobs together. |
-| `rate_job` | Records your verdict on a Job or on one of its results (good or bad, plus a reason) when you state one. A bad Rating of the whole Job, or of its only result, makes the options that Job used suspect until a good one uses them again. |
+| `list_models` | Lists the configured Models with their Modality, Model Notes, Standing Options, a summary of their Parameter Guide, docs link and the Option Status of each `provider_options` value sent to it; for one Model, also its full Parameter Guide (each parameter's values, default and price effect, with sources and the date they were checked) or the Provider's own parameter schema where it publishes one, each Option Status with its values, date and Job, its five most recent Ratings, and the Picks of up to five Comparisons it took part in (most recently picked first). |
+| `pick_result` | Records your Pick when you choose among a Comparison's results; choosing again replaces it. A Pick says which you prefer, not that it is good, so it changes no Option Status. You can also pick in the settings page's Job history, which shows a Comparison's Jobs together. |
+| `rate_job` | Records your verdict on a Job or on one of its results (good or bad, plus a reason) when you state one. A Rating judges the result, never the options that produced it, so it changes no Option Status. |
 | `update_model_notes` | Replaces a Model's Notes, only with text you agreed to. You can undo it in the settings page. |
 | `open_settings` | Opens the settings page. |
+
+## Option Status
+
+For each `provider_options` value sent to a Model, litevision keeps an Option Status from facts alone, never from your Ratings:
+
+- **Honoured**: the result was checked against the request (its shape, a video's length) and matched.
+- **Ignored**: the result was checked and did not match, so the Provider may have ignored the value.
+- **Rejected**: the Provider's error named it; its message is kept.
+- **Accepted**: the Provider did not reject it, but nothing can check its effect (`quality`, `seed`, …).
+
+Fields checked together, such as `width` and `height`, share one. The latest evidence wins and is shown with its date and Job, so the Agent can tell when to read the docs again.
 
 ## Where things are kept
 

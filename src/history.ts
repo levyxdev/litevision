@@ -68,7 +68,8 @@ export interface JobRecord {
   observed?: Array<MediaFacts | null>;
   /** How the result differs from what was requested (ADR 0006); absent when it matched as far as litevision can tell. */
   mismatch?: string;
-  error?: { kind: ProviderErrorKind; message: string };
+  /** `options`: for a rejected option, the `provider_options` keys the Provider's answer named, where litevision could tell. */
+  error?: { kind: ProviderErrorKind; message: string; options?: string[] };
 }
 
 export const verdicts = ["good", "bad"] as const;
@@ -94,7 +95,7 @@ export interface RatingRecord {
 
 /**
  * One Pick line of `jobs.jsonl`: the result the User chose within a Comparison (ADR 0009). A later one for the same
- * Comparison supersedes it. A Pick is a relative preference, not a Rating: it says nothing about Known-good Options.
+ * Comparison supersedes it. A Pick is a relative preference, not a Rating, and neither changes an Option Status (ADR 0011).
  */
 export interface PickRecord {
   type: "pick";
@@ -339,7 +340,8 @@ export interface ModelKey {
   modelId: string;
 }
 
-function ranOn(job: JobRecord, model: ModelKey): boolean {
+/** Whether a Job ran on the given upstream model. */
+export function ranOn(job: JobRecord, model: ModelKey): boolean {
   return job.provider === model.provider && job.protocol === model.protocol && job.modelId === model.modelId;
 }
 
@@ -389,69 +391,4 @@ export function recentPicks(jobs: RatedJob[], model: ModelKey, limit: number): P
     comparisons.add(pick.comparison);
     return true;
   });
-}
-
-/** One `provider_options` key whose latest value is in doubt, and why. */
-export interface SuspectOption {
-  value: unknown;
-  /** Why it is suspect: the User rated a Job that sent it bad, or the latest Job that sent it did not match. */
-  cause: "rating" | "mismatch";
-  /** The Rating's reason in the User's words, or how the result differed from the request. */
-  reason: string;
-  jobId: string;
-}
-
-/** What the Job history says about a Model's `provider_options` (ADR 0006). */
-export interface OptionsRecord {
-  /** Known-good Options: each key with the value it most recently sent from a Job that matched its request. */
-  knownGood: Record<string, unknown>;
-  /** Keys whose latest value the User rated bad and has not rated good since, or whose latest Job did not match. */
-  suspect: Record<string, SuspectOption>;
-}
-
-/**
- * The Rating that speaks for a Job's options: the latest of the whole Job, or of its only result. The results of one
- * Job share its options, so a Rating of one result among several says more about chance than about them (ADR 0006).
- */
-function optionsRating({ job, ratings }: RatedJob): RatingRecord | undefined {
-  return ratings.findLast((rating) => rating.result === undefined || (rating.result === 1 && job.files.length === 1));
-}
-
-/**
- * Known-good and suspect `provider_options` for a Model, oldest Job first (ADR 0006). Each key's latest value counts,
- * and only a Rating of the whole Job, or of its only result, counts for its options (see {@link optionsRating}).
- * A value the User rated bad stays suspect, whenever it is sent again, until the User rates a Job that sent it good:
- * no Job without a Rating clears the User's verdict, matching or not. Otherwise a value is suspect when its latest Job
- * did not match its request, and Known-good when it did.
- */
-export function optionsRecord(jobs: RatedJob[], model: ModelKey): OptionsRecord {
-  const state = new Map<string, { value: unknown; suspect?: SuspectOption }>();
-  /** Per key, the values the User rated bad and not good since, by their JSON. */
-  const ratedBad = new Map<string, Map<string, SuspectOption>>();
-  const ordered = [...jobs].sort((a, b) => Date.parse(a.job.createdAt) - Date.parse(b.job.createdAt));
-  for (const ratedJob of ordered) {
-    const { job } = ratedJob;
-    if (job.outcome !== "completed") continue;
-    const rating = optionsRating(ratedJob);
-    if (!ranOn(job, model)) continue;
-    for (const [key, value] of Object.entries(job.parameters?.providerOptions ?? {})) {
-      const asJson = JSON.stringify(value);
-      const badValues = ratedBad.get(key) ?? new Map<string, SuspectOption>();
-      ratedBad.set(key, badValues);
-      if (rating?.verdict === "bad") badValues.set(asJson, { value, cause: "rating", reason: rating.reason, jobId: job.id });
-      if (rating?.verdict === "good") badValues.delete(asJson);
-
-      const verdict = badValues.get(asJson);
-      if (verdict !== undefined) state.set(key, { value, suspect: verdict });
-      else if (job.mismatch !== undefined && rating?.verdict !== "good") {
-        state.set(key, { value, suspect: { value, cause: "mismatch", reason: job.mismatch, jobId: job.id } });
-      } else state.set(key, { value });
-    }
-  }
-  const record: OptionsRecord = { knownGood: {}, suspect: {} };
-  for (const [key, { value, suspect }] of state) {
-    if (suspect === undefined) record.knownGood[key] = value;
-    else record.suspect[key] = suspect;
-  }
-  return record;
 }

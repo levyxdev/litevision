@@ -6,10 +6,11 @@ import type { Dirs } from "./dirs.ts";
 import { appendHistory, readJob, type JobRecord } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
-import { parseShape, type Requested } from "./protocols/parameter-guide.ts";
+import type { Requested } from "./protocols/parameter-guide.ts";
 import type { NormalisedRequest, NormalisedVideoRequest } from "./protocols/requests.ts";
 import { providerError, providerLabel } from "./protocols/errors.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
+import { checkResult, mismatchOf } from "./result-check.ts";
 import {
   ProviderError,
   type GeneratedFile,
@@ -307,7 +308,7 @@ export class JobRunner {
         throw saved.failures[0] ?? providerError("other", base.provider, reasons[0] ?? "it returned nothing.");
       }
       const observed = saved.facts;
-      const mismatch = mismatchOf(base.parameters, observed);
+      const mismatch = mismatchOf(checkResult(base.parameters, observed));
       const shortfall =
         saved.files.length >= n
           ? undefined
@@ -327,7 +328,8 @@ export class JobRunner {
       if (error instanceof JobAbandoned || this.closed) throw new JobAbandoned();
       const kind = error instanceof ProviderError ? error.kind : "other";
       const message = safe((error as Error).message);
-      await this.append(base, "failed", { error: { kind, message } });
+      const options = error instanceof ProviderError ? error.options : [];
+      await this.append(base, "failed", { error: { kind, message, ...(options.length === 0 ? {} : { options: [...options] }) } });
       throw new JobFailedError(base.id, kind, message);
     }
   }
@@ -357,53 +359,6 @@ function targetOf(spec: SpecBase) {
 /** A video Job is saved like an image Job with one result. */
 function videoAsImages(result: JobVideo): JobImages {
   return { images: [result.video], ...(result.cost === undefined ? {} : { cost: result.cost }) };
-}
-
-/** A result whose shape is more than 5% off the requested one; small differences come from rounding to a Model's grid. */
-const aspectTolerance = Math.log(1.05);
-
-/** Half a second either way: containers round a clip's length to whole frames. */
-const durationToleranceSeconds = 0.5;
-
-/**
- * The shape a result should have: what the final request asked for, as litevision read it (ADR 0010); undefined when
- * it could not tell, so the shape is not checked. Jobs recorded before that check against the size litevision chose,
- * or `width` and `height` in `provider_options` when the Agent set both.
- */
-function expectedShape(parameters: JobRecord["parameters"]): { ratio: number; asked: string } | undefined {
-  if (parameters.requested !== undefined) {
-    const parsed = parameters.requested.shape === null ? undefined : parseShape(parameters.requested.shape);
-    return parsed === undefined ? undefined : { ratio: parsed.ratio, asked: parsed.label };
-  }
-  const { width, height } = parameters.providerOptions;
-  if (typeof width === "number" && typeof height === "number" && width > 0 && height > 0) {
-    return { ratio: width / height, asked: `${width}x${height} in provider_options` };
-  }
-  const { size } = parameters;
-  const ratio = size === undefined ? undefined : parseShape(size.aspectRatio);
-  return size === undefined || ratio === undefined ? undefined : { ratio: ratio.ratio, asked: `${size.aspectRatio} (${size.width}x${size.height})` };
-}
-
-/**
- * How the saved files differ from what was requested, as far as their headers tell (ADR 0006). Pixel counts are not
- * compared, since `provider_options` such as a resolution tier are meant to change them; the shape and length are.
- */
-function mismatchOf(parameters: JobRecord["parameters"], observed: Array<MediaFacts | null>): string | undefined {
-  const { followsFirstFrame } = parameters;
-  // What the final request asked for (ADR 0010); Jobs recorded before, what litevision chose.
-  const seconds = parameters.requested !== undefined ? (parameters.requested.seconds ?? undefined) : parameters.seconds;
-  const expected = expectedShape(parameters);
-  const problems = new Set<string>();
-  for (const facts of observed) {
-    if (facts === null) continue;
-    if (!followsFirstFrame && expected !== undefined && Math.abs(Math.log(facts.width / facts.height / expected.ratio)) > aspectTolerance) {
-      problems.add(`asked for ${expected.asked}, got ${facts.width}x${facts.height}`);
-    }
-    if (seconds !== undefined && facts.seconds !== undefined && Math.abs(facts.seconds - seconds) > durationToleranceSeconds) {
-      problems.add(`asked for ${seconds} s, got ${facts.seconds} s`);
-    }
-  }
-  return problems.size === 0 ? undefined : [...problems].join("; ");
 }
 
 function redact(text: string, credential: string): string {

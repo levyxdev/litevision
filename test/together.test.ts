@@ -155,7 +155,7 @@ describe("generate_image with the together Protocol", () => {
     expect((await readHistory(harness))[0]).toMatchObject({ error: { kind: "unsupported" } });
   });
 
-  test("a request Together rejects carries the Model's docs link and Known-good Options", async () => {
+  test("a request Together rejects carries the Model's docs link and Option Statuses", async () => {
     let reject = false;
     const images: Route = (request) =>
       reject ? recorded("together/invalid-reference-image.json", 400)(request) : recorded("together/images.json")(request);
@@ -168,7 +168,7 @@ describe("generate_image with the together Protocol", () => {
     const text = textOf(result);
     expect(text).toContain("invalid reference image at index 0");
     expect(text).toContain("https://docs.together.ai/docs/inference/images/parameters");
-    expect(text).toContain('Known-good Options: {"steps":30}');
+    expect(text).toContain('- Accepted (not rejected, effect unknown): {"steps":30}');
   });
 
   test("Together naming the parameter it rejects is a rejected option with the docs link, even when the name says safety", async () => {
@@ -197,7 +197,7 @@ describe("generate_image with the together Protocol", () => {
     expect(text).not.toContain("Docs for this Model's provider_options");
   });
 
-  test("an image whose shape differs from the request is reported, and its options are not Known-good", async () => {
+  test("an image whose shape differs from the request is reported, and the options the check read are Ignored", async () => {
     harness = await startHarness(togetherSetup({ [imagesUrl]: imageOfSize(1024, 1024) }));
     const result = await generate({ provider_options: { width: 1024, height: 576 } });
     const output = ok(result);
@@ -206,7 +206,8 @@ describe("generate_image with the together Protocol", () => {
     expect(textOf(result)).toContain("https://docs.together.ai/docs/inference/images/parameters");
 
     const listed = ok(await call("list_models", { model: "sdxl" }));
-    expect(listed.models[0].known_good_options).toEqual({});
+    expect(listed.models[0].option_statuses.ignored).toMatchObject([{ options: { width: 1024, height: 576 }, reason: "asked for 1024x576, got 1024x1024" }]);
+    expect(listed.models[0].option_statuses.honoured).toEqual([]);
   });
 
   test("a result is checked against the asked aspect ratio, within rounding to the Model's grid", async () => {
@@ -215,80 +216,151 @@ describe("generate_image with the together Protocol", () => {
     const output = ok(await generate({ model: "kontext", provider_options: { aspect_ratio: "16:9", steps: 30 } }));
     expect(output.mismatch).toBeUndefined();
     const listed = ok(await call("list_models", { model: "kontext" }));
-    expect(listed.models[0].known_good_options).toEqual({ aspect_ratio: "16:9", steps: 30 });
+    expect(listed.models[0].option_statuses).toMatchObject({ honoured: [{ options: { aspect_ratio: "16:9" } }], accepted: [{ options: { steps: 30 } }] });
   });
 });
 
-describe("Known-good Options and Ratings", () => {
-  test("only a good Rating clears the User's bad Rating, whatever matching or mismatched Jobs send in between", async () => {
-    let size = [1024, 576];
-    harness = await startHarness(togetherSetup({ [imagesUrl]: (request) => imageOfSize(size[0]!, size[1]!)(request) }));
-    const rated = ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30, style: "a" } }));
-    ok(await call("rate_job", { job_id: rated.job_id, verdict: "bad", reason: "muddy colours" }));
-    size = [1024, 1024];
-    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
-    size = [1024, 576];
-    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30, style: "b" } }));
-    ok(await generate({ provider_options: { width: 1024, height: 576, style: "a" } }));
+describe("Option Status (ADR 0011)", () => {
+  /** Gemini 3.1 Flash Image on Together, which takes only Google's width and height pairs, as `nb2`. */
+  function flashSetup(images: Route): HarnessOptions {
+    return {
+      ...togetherSetup({ [imagesUrl]: images }),
+      config: {
+        providers: [{ id: "together-ai", baseUrl: root }],
+        models: [{ alias: "nb2", provider: "together-ai", modelId: "google/flash-image-3.1", protocol: "together" }],
+      },
+    };
+  }
 
-    const sdxl = ok(await call("list_models", { model: "sdxl" })).models[0];
-    expect(sdxl.known_good_options).toEqual({});
-    const bad = { reason: "muddy colours", job_id: rated.job_id, cause: "rating" };
-    expect(sdxl.suspect_options).toEqual({
-      width: { value: 1024, ...bad },
-      height: { value: 576, ...bad },
-      steps: { value: 30, ...bad },
-      style: { value: "a", ...bad },
+  const statusesOf = async (alias = "nb2") => ok(await call("list_models", { model: alias })).models[0].option_statuses;
+  const date = new Date(2026, 10, 4, 9, 0, 0).toISOString();
+
+  test("a checked shape that matched is Honoured as one width and height group; options no check reads are Accepted", async () => {
+    harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
+    const job = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7 } }));
+
+    expect(await statusesOf()).toEqual({
+      honoured: [{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date }],
+      ignored: [],
+      rejected: [],
+      accepted: [{ options: { seed: 7 }, job_id: job.job_id, date }],
     });
   });
 
-  test("a result that does not match its request makes Known-good Options it sent suspect, until a matching result sends them again", async () => {
-    let size = [1024, 576];
-    harness = await startHarness(togetherSetup({ [imagesUrl]: (request) => imageOfSize(size[0]!, size[1]!)(request) }));
-    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
-    size = [1024, 1024];
-    const wrong = ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
+  /** Together's answer to a width and height pair the model does not take, as it gave it for 1536x2048. */
+  const sizeRejected = "Invalid width and height 1536x2048: width and height must be one of the supported sizes";
+  const rejectSize: Route = () =>
+    Response.json({ error: { message: sizeRejected, type: "invalid_request_error", param: null, code: null } }, { status: 400 });
 
-    let listed = await call("list_models", { model: "sdxl" });
-    let sdxl = ok(listed).models[0];
-    expect(sdxl.known_good_options).toEqual({});
-    expect(sdxl.suspect_options.steps).toMatchObject({ value: 30, job_id: wrong.job_id, cause: "mismatch" });
-    expect(textOf(listed)).toContain("whose result did not match the request: asked for 1024x576, got 1024x1024");
+  test("a rejection naming width makes the width and height group Rejected with what the Provider said, and leaves the rest alone", async () => {
+    let answer = imageOfSize(1792, 2400);
+    harness = await startHarness(flashSetup((request) => answer(request)));
+    const good = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7 } }));
+    answer = rejectSize;
+    const failed = await generate({ model: "nb2", provider_options: { width: 1536, height: 2048, seed: 8 } });
+    expect(failed.isError).toBe(true);
+    const [, rejected] = (await readHistory(harness)) as Array<{ id: string }>;
 
-    size = [1024, 576];
-    ok(await generate({ provider_options: { width: 1024, height: 576, steps: 30 } }));
-    sdxl = ok(await call("list_models", { model: "sdxl" })).models[0];
-    expect(sdxl.known_good_options).toEqual({ width: 1024, height: 576, steps: 30 });
-    expect(sdxl.suspect_options).toEqual({});
+    const statuses = await statusesOf();
+    expect(statuses.honoured).toEqual([{ options: { width: 1792, height: 2400 }, job_id: good.job_id, date }]);
+    expect(statuses.rejected).toEqual([{ options: { width: 1536, height: 2048 }, job_id: rejected!.id, date, reason: `HTTP 400: ${sizeRejected}` }]);
+    // The rejected Job's seed is untouched: its error named no seed.
+    expect(statuses.accepted).toEqual([{ options: { seed: 7 }, job_id: good.job_id, date }]);
+
+    // The rejection's own error carries the Option Statuses, this rejection included.
+    const text = textOf(failed);
+    expect(text).toContain(`- Rejected: {"width":1536,"height":2048}, Job ${rejected!.id}`);
+    expect(text).toContain(`- Honoured: {"width":1792,"height":2400}, Job ${good.job_id}`);
   });
 
-  test("a bad Rating makes the options it used suspect, with the User's reason, until a good Rating sends them again", async () => {
-    harness = await startHarness(togetherSetup());
-    const first = ok(await generate({ provider_options: { steps: 4, seed: 1 } }));
-    ok(await call("rate_job", { job_id: first.job_id, verdict: "bad", reason: "far too blurry" }));
+  test("a shape mismatch makes only the shape group Ignored; seed and output_format keep their Option Status", async () => {
+    let size = [1792, 2400];
+    harness = await startHarness(flashSetup((request) => imageOfSize(size[0]!, size[1]!)(request)));
+    const first = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7, output_format: "png" } }));
+    size = [1024, 1024];
+    const wrong = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7, output_format: "png" } }));
+    expect(wrong.mismatch).toBe("asked for 1792x2400, got 1024x1024");
 
-    let listed = await call("list_models", {});
-    let sdxl = ok(listed).models.find((model: { alias: string }) => model.alias === "sdxl");
-    expect(sdxl.known_good_options).toEqual({});
-    expect(sdxl.suspect_options).toEqual({
-      steps: { value: 4, reason: "far too blurry", job_id: first.job_id, cause: "rating" },
-      seed: { value: 1, reason: "far too blurry", job_id: first.job_id, cause: "rating" },
-    });
-    expect(textOf(listed)).toContain("Suspect options: steps, seed.");
+    const statuses = await statusesOf();
+    expect(statuses.ignored).toEqual([
+      { options: { width: 1792, height: 2400 }, job_id: wrong.job_id, date, reason: "asked for 1792x2400, got 1024x1024" },
+    ]);
+    expect(statuses.honoured).toEqual([]);
+    expect(statuses.accepted).toEqual([
+      { options: { seed: 7 }, job_id: wrong.job_id, date },
+      { options: { output_format: "png" }, job_id: wrong.job_id, date },
+    ]);
+    expect(first.job_id).not.toBe(wrong.job_id);
+  });
 
-    // Sending the same value again without a Rating does not clear it; a different value counts.
-    ok(await generate({ provider_options: { steps: 4, seed: 2 } }));
-    listed = await call("list_models", { model: "sdxl" });
-    sdxl = ok(listed).models[0];
-    expect(sdxl.known_good_options).toEqual({ seed: 2 });
-    expect(Object.keys(sdxl.suspect_options)).toEqual(["steps"]);
-    expect(textOf(listed)).toContain('which the User rated bad: "far too blurry"');
+  test("a later matching Job turns an Ignored or Rejected group Honoured, and a later mismatch or rejection turns it back", async () => {
+    let answer = imageOfSize(1024, 1024);
+    harness = await startHarness(flashSetup((request) => answer(request)));
+    const pair = { width: 1792, height: 2400 };
+    const ignored = ok(await generate({ model: "nb2", provider_options: pair }));
+    expect((await statusesOf()).ignored).toMatchObject([{ options: pair, job_id: ignored.job_id }]);
 
-    const third = ok(await generate({ provider_options: { steps: 4 } }));
-    ok(await call("rate_job", { job_id: third.job_id, verdict: "good", reason: "sharp now" }));
-    sdxl = ok(await call("list_models", { model: "sdxl" })).models[0];
-    expect(sdxl.known_good_options).toEqual({ seed: 2, steps: 4 });
-    expect(sdxl.suspect_options).toEqual({});
+    answer = imageOfSize(1792, 2400);
+    const honoured = ok(await generate({ model: "nb2", provider_options: pair }));
+    let statuses = await statusesOf();
+    expect(statuses.ignored).toEqual([]);
+    expect(statuses.honoured).toEqual([{ options: pair, job_id: honoured.job_id, date }]);
+
+    answer = rejectSize;
+    await generate({ model: "nb2", provider_options: pair });
+    statuses = await statusesOf();
+    expect(statuses.honoured).toEqual([]);
+    expect(statuses.rejected).toMatchObject([{ options: pair, reason: `HTTP 400: ${sizeRejected}` }]);
+
+    answer = imageOfSize(1792, 2400);
+    const again = ok(await generate({ model: "nb2", provider_options: pair }));
+    statuses = await statusesOf();
+    expect(statuses.rejected).toEqual([]);
+    expect(statuses.honoured).toEqual([{ options: pair, job_id: again.job_id, date }]);
+  });
+
+  test("a bad Rating, a good Rating and a Pick leave every Option Status unchanged", async () => {
+    harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
+    const job = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7 } }));
+    const before = await statusesOf();
+    ok(await call("rate_job", { job_id: job.job_id, verdict: "bad", reason: "the hair looks unnatural" }));
+    expect(await statusesOf()).toEqual(before);
+    ok(await call("rate_job", { job_id: job.job_id, result: 1, verdict: "good", reason: "fine after all" }));
+    expect(await statusesOf()).toEqual(before);
+    expect(before.honoured).toHaveLength(1);
+  });
+
+  test("list_models names each Model's options by Option Status, with dates and Job ids, and never as Known-good or suspect", async () => {
+    let answer = imageOfSize(1792, 2400);
+    harness = await startHarness(flashSetup((request) => answer(request)));
+    const job = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7 } }));
+    answer = rejectSize;
+    await generate({ model: "nb2", provider_options: { width: 1536, height: 2048 } });
+
+    const brief = textOf(await call("list_models", {}));
+    expect(brief).toContain("Honoured options: width+height. Rejected options: width+height. Accepted options: seed.");
+    const detailed = textOf(await call("list_models", { model: "nb2" }));
+    expect(detailed).toContain(`- Honoured: {"width":1792,"height":2400}, Job ${job.job_id} on ${date.slice(0, 10)}`);
+    expect(detailed).toContain(`- Accepted (not rejected, effect unknown): {"seed":7}, Job ${job.job_id}`);
+    expect(detailed).toContain(`: HTTP 400: ${sizeRejected}`);
+    for (const text of [brief, detailed]) expect(text).not.toMatch(/known.good|suspect/i);
+  });
+
+  test("the server instructions and the litevision Skill say how to use each Option Status", async () => {
+    harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
+    const skill = await readFile(join(import.meta.dir, "..", "skills", "litevision", "SKILL.md"), "utf8");
+    for (const text of [harness.client.getInstructions()!, skill]) {
+      expect(text).toMatch(/reuse Honoured values/i);
+      expect(text).toMatch(/Accepted (means|only means) the Provider did not reject it/);
+      expect(text).toMatch(/never resend a Rejected or Ignored value unchanged/i);
+      expect(text).not.toMatch(/known.good|suspect/i);
+    }
+  });
+
+  test("an error that names no option records nothing", async () => {
+    harness = await startHarness(flashSetup(recorded("together/invalid-reference-image.json", 400)));
+    expect((await generate({ model: "nb2", provider_options: { width: 1792, height: 2400 } })).isError).toBe(true);
+    expect(await statusesOf()).toEqual({ honoured: [], ignored: [], rejected: [], accepted: [] });
   });
 });
 
@@ -389,7 +461,7 @@ describe("generate_video with the together Protocol", () => {
     const again = textOf(await call("get_job", { job_id: jobId }));
     expect(again).toContain("invalidDuration");
     expect(again).toContain("https://docs.together.ai/docs/wan2.7-quickstart");
-    expect(again).toContain("Known-good Options:");
+    expect(again).toContain("Option Statuses: none recorded yet.");
   });
 
   test("a Model that takes no shape is not checked for one", async () => {
@@ -441,10 +513,13 @@ describe("generate_video with the together Protocol", () => {
     expect(finished.files[0]).toEndWith(".mp4");
   });
 
-  test("a video shorter than requested is reported as a mismatch", async () => {
+  test("a video shorter than requested is reported as a mismatch, and only its length option is Ignored", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1920, 1080, 2) }));
-    const output = ok(await video({ provider_options: { seconds: "5" } }));
+    const output = ok(await video({ provider_options: { seconds: "5", ratio: "16:9" } }));
     expect(output.mismatch).toBe("asked for 5 s, got 2 s");
+    const statuses = ok(await call("list_models", { model: "wan" })).models[0].option_statuses;
+    expect(statuses.ignored).toMatchObject([{ options: { seconds: "5" }, reason: "asked for 5 s, got 2 s" }]);
+    expect(statuses.honoured).toMatchObject([{ options: { ratio: "16:9" } }]);
   });
 });
 

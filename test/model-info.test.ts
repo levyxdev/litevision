@@ -157,7 +157,7 @@ describe("the Provider's own description of a Model (ADR 0004, ADR 0010)", () =>
 });
 
 describe("list_models with `model`", () => {
-  test("describes one Model with its docs link, the Provider's parameter schema and the provider_options known to work", async () => {
+  test("describes one Model with its docs link, the Provider's parameter schema and the Option Status of each provider_options value", async () => {
     const generation: Route = async (request) => {
       const body = (await request.json()) as { seed?: number };
       if (body.seed !== undefined) return recorded("openai/server-error.json", 400)(request);
@@ -177,20 +177,23 @@ describe("list_models with `model`", () => {
       alias: "fox",
       docs_url: "https://docs.relay.example/models/fox-1",
       parameter_schema: reported.parameterSchema,
-      known_good_options: { style: "noir", quality: "high" },
     });
+    // Only the latest Accepted value of each key; the failed Job's error named no option, so it records nothing.
+    const statuses = models[0]!.option_statuses as Record<string, Array<{ options: unknown }>>;
+    expect(statuses.accepted!.map((status) => status.options)).toEqual([{ style: "noir" }, { quality: "high" }]);
+    expect(statuses.rejected).toEqual([]);
     expect(textOf(result)).toContain('"quality":"high"');
     expect(textOf(result)).toContain("https://docs.relay.example/models/fox-1");
   });
 
-  test("without `model`, leaves the schema out but still gives the Known-good Options, naming them in the text", async () => {
+  test("without `model`, leaves the schema out but still gives the Option Statuses, naming the options in the text", async () => {
     harness = await startHarness(relaySetup({ [capabilitiesUrl]: reportCapabilities }));
     expect((await generate({ provider_options: { style: "noir" } })).isError).toBeFalsy();
     const result = await listModels();
     const [model] = (result.structuredContent as { models: Array<Record<string, unknown>> }).models;
     expect(model).not.toHaveProperty("parameter_schema");
-    expect(model!.known_good_options).toEqual({ style: "noir" });
-    expect(textOf(result)).toContain("Known-good Options: style.");
+    expect((model!.option_statuses as { accepted: Array<{ options: unknown }> }).accepted.map((status) => status.options)).toEqual([{ style: "noir" }]);
+    expect(textOf(result)).toContain("Accepted options: style.");
     expect(textOf(result)).not.toContain('"noir"');
   });
 

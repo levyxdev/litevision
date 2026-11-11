@@ -10,6 +10,7 @@ import {
   addModel,
   addModelInput,
   listModels,
+  listOptionStatuses,
   removeModel,
   setDefaultModel,
   setDefaultInput,
@@ -120,6 +121,12 @@ const routes: Route[] = [
     method: "GET",
     path: "/api/models",
     handler: async ({ dirs }) => ({ body: await listModels(dirs) }),
+  },
+  {
+    // Read-only (ADR 0011): no route changes an Option Status.
+    method: "GET",
+    path: "/api/option-statuses",
+    handler: async ({ dirs }) => ({ body: await listOptionStatuses(dirs) }),
   },
   {
     method: "POST",

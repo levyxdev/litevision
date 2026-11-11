@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fixture } from "./recorded-http.ts";
 import { startSettingsHarness, type SettingsHarness, type SettingsHarnessOptions } from "./settings-harness.ts";
 
@@ -341,5 +343,73 @@ describe("Models area", () => {
     expect(page.text).toContain('id="model-list"');
     expect(page.text).toContain('id="add-model"');
     expect(page.text).toContain("/notes/undo");
+  });
+});
+
+describe("Option Statuses (ADR 0011)", () => {
+  /** A completed Job on `gpt-image` that asked for 1024x1536 and got it. */
+  const matched = {
+    type: "job",
+    id: "fox",
+    createdAt: "2026-11-04T09:00:00.000Z",
+    model: "gpt-image",
+    provider: "openai",
+    protocol: "openai-images",
+    modelId: "gpt-image-1",
+    prompt: "a red fox",
+    parameters: { n: 1, requested: { shape: "1024x1536", resolution: null }, references: [], providerOptions: { size: "1024x1536", quality: "high" } },
+    durationMs: 1_000,
+    files: ["/out/fox.png"],
+    observed: [{ width: 1024, height: 1536 }],
+    outcome: "completed",
+  };
+
+  async function withHistory(): Promise<SettingsHarness> {
+    const h = await start({ ...withProviders, config: { ...withProviders.config, models: [gptImage], defaultImageModel: "gpt-image" } });
+    await mkdir(h.dirs.data, { recursive: true });
+    const rating = { type: "rating", jobId: "fox", verdict: "bad", reason: "the fur looks fake", ratedAt: "2026-11-04T09:05:00.000Z" };
+    await writeFile(join(h.dirs.data, "jobs.jsonl"), `${JSON.stringify(matched)}\n${JSON.stringify(rating)}\n`);
+    return h;
+  }
+
+  test("each Model's Option Statuses are listed by status, with their dates and Job ids, and a Rating changes none", async () => {
+    const h = await withHistory();
+    const response = await h.send("GET", "/api/option-statuses");
+    expect(response.status).toBe(200);
+    expect(response.json()).toEqual({
+      models: {
+        "gpt-image": {
+          honoured: [{ options: { size: "1024x1536" }, status: "honoured", jobId: "fox", date: "2026-11-04T09:00:00.000Z" }],
+          ignored: [],
+          rejected: [],
+          accepted: [{ options: { quality: "high" }, status: "accepted", jobId: "fox", date: "2026-11-04T09:00:00.000Z" }],
+        },
+      },
+    });
+  });
+
+  test("the latest evidence is the Job that finished last, not the one that started last", async () => {
+    const h = await start({ ...withProviders, config: { ...withProviders.config, models: [gptImage] } });
+    // `slow` started first but was rejected after `fox` had matched, so its rejection is the latest evidence.
+    const sent = { ...matched.parameters, providerOptions: { size: "1024x1536" } };
+    const slow = { ...matched, id: "slow", createdAt: "2026-11-04T08:00:00.000Z", parameters: sent, files: [], observed: undefined };
+    const lines = [
+      { ...slow, outcome: "running" },
+      { ...matched, parameters: sent },
+      { ...slow, outcome: "failed", error: { kind: "rejected_option", message: "x The Provider said: HTTP 400: bad size", options: ["size"] } },
+    ];
+    await mkdir(h.dirs.data, { recursive: true });
+    await writeFile(join(h.dirs.data, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    const statuses = (await h.send("GET", "/api/option-statuses")).json().models["gpt-image"];
+    expect(statuses.honoured).toEqual([]);
+    expect(statuses.rejected).toEqual([
+      { options: { size: "1024x1536" }, status: "rejected", jobId: "slow", date: "2026-11-04T08:00:00.000Z", reason: "HTTP 400: bad size" },
+    ]);
+  });
+
+  test("are read-only: the page shows them, and nothing in the settings API changes them", async () => {
+    const h = await withHistory();
+    expect((await h.send("GET", "/")).text).toContain("Option Statuses");
+    for (const method of ["POST", "PATCH", "PUT", "DELETE"]) expect((await h.send(method, "/api/option-statuses", { body: {} })).status).toBe(404);
   });
 });

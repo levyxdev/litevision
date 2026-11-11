@@ -1,3 +1,4 @@
+import { optionKeyOf } from "./parameter-guide.ts";
 import { ProviderError, type ProviderErrorKind } from "./protocol.ts";
 
 /**
@@ -21,10 +22,16 @@ const explanations: Record<ProviderErrorKind, string> = {
   other: "failed to complete the Job.",
 };
 
-/** A ProviderError of the given kind, explained in plain language, followed by what the Provider said. */
-export function providerError(kind: ProviderErrorKind, providerId: string, detail?: string): ProviderError {
-  const said = detail === undefined || detail === "" ? "" : ` The Provider said: ${detail}`;
-  return new ProviderError(kind, `${providerLabel(providerId)} ${explanations[kind]}${said}`);
+/** Where a ProviderError's message turns from litevision's explanation to what the Provider said. */
+const saidMarker = " The Provider said: ";
+
+/**
+ * A ProviderError of the given kind, explained in plain language, followed by what the Provider said; `options` are
+ * the `provider_options` keys it named.
+ */
+export function providerError(kind: ProviderErrorKind, providerId: string, detail?: string, options: readonly string[] = []): ProviderError {
+  const said = detail === undefined || detail === "" ? "" : `${saidMarker}${detail}`;
+  return new ProviderError(kind, `${providerLabel(providerId)} ${explanations[kind]}${said}`, options);
 }
 
 /** What a Provider's error response carried, in whatever form its Protocol uses. */
@@ -62,8 +69,19 @@ function kindOfStatus(status: number): ProviderErrorKind | undefined {
 function namedParameters(response: ProviderErrorResponse): string[] {
   if (response.status !== 400 && response.status !== 422) return [];
   const message = response.message ?? "";
-  const mentioned = (response.options ?? []).filter((name) => new RegExp(`(^|[^\\w])${escapeRegExp(name)}($|[^\\w])`).test(message));
+  const mentioned = (response.options ?? []).filter((name) => namesOption(message, name));
   return [...(response.param ? [response.param] : []), ...mentioned];
+}
+
+/** Whether a Provider's message names a `provider_options` key, as a word of its own. */
+export function namesOption(message: string, key: string): boolean {
+  return new RegExp(`(^|[^\\w])${escapeRegExp(key)}($|[^\\w])`).test(message);
+}
+
+/** What the Provider itself said in a failed Job's error message, without litevision's explanation; undefined when it said nothing. */
+export function providerSaid(message: string): string | undefined {
+  const at = message.indexOf(saidMarker);
+  return at === -1 ? undefined : message.slice(at + saidMarker.length);
 }
 
 function escapeRegExp(text: string): string {
@@ -83,8 +101,14 @@ export function classifyProviderError(response: ProviderErrorResponse): Provider
   return matchKind(codes) ?? kindOfStatus(response.status) ?? matchKind([wording]) ?? (named.length > 0 ? "rejected_option" : "other");
 }
 
-/** The typed ProviderError for an HTTP error response. */
+/**
+ * The typed ProviderError for an HTTP error response. A rejected option carries the `provider_options` keys the answer
+ * named, in its own field or in its message, so the Job history can record them as Rejected (ADR 0011).
+ */
 export function httpProviderError(providerId: string, response: ProviderErrorResponse): ProviderError {
   const detail = response.message === undefined ? `HTTP ${response.status}` : `HTTP ${response.status}: ${response.message}`;
-  return providerError(classifyProviderError(response), providerId, detail);
+  const kind = classifyProviderError(response);
+  const sent = new Set(response.options ?? []);
+  const named = kind === "rejected_option" ? [...new Set(namedParameters(response).map(optionKeyOf))].filter((key) => sent.has(key)) : [];
+  return providerError(kind, providerId, detail, named);
 }

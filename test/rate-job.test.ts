@@ -130,7 +130,7 @@ describe("rate_job", () => {
     release();
   });
 
-  test("Rating lines leave Jobs and known-good provider_options as they were", async () => {
+  test("Rating lines leave Jobs and the Option Statuses of their provider_options as they were", async () => {
     harness = await startHarness(openaiSetup());
     const jobId = await generate({ provider_options: { quality: "high" } });
     await rate({ job_id: jobId, verdict: "good", reason: "sharp" });
@@ -139,8 +139,8 @@ describe("rate_job", () => {
     expect(job.structuredContent).toMatchObject({ job_id: jobId, status: "completed" });
 
     const listed = await harness.client.callTool({ name: "list_models", arguments: { model: "gpt-image" } });
-    const { models } = listed.structuredContent as { models: Array<{ known_good_options: unknown }> };
-    expect(models[0]!.known_good_options).toEqual({ quality: "high" });
+    const { models } = listed.structuredContent as { models: Array<{ option_statuses: { accepted: Array<{ options: unknown }> } }> };
+    expect(models[0]!.option_statuses.accepted.map((status) => status.options)).toEqual([{ quality: "high" }]);
   });
 
   test("is listed, and the server instructions say to rate only on the User's own verdict", async () => {
@@ -198,60 +198,24 @@ describe("rate_job with a result", () => {
   });
 });
 
-describe("which Ratings make a Job's options suspect (ADR 0006)", () => {
-  const options = async () => {
+describe("a Rating never changes an Option Status (ADR 0011)", () => {
+  const statuses = async () => {
     const listed = await harness!.client.callTool({ name: "list_models", arguments: { model: "gpt-image" } });
-    const [model] = (listed.structuredContent as { models: Array<{ known_good_options: unknown; suspect_options: unknown }> }).models;
-    return model!;
+    return (listed.structuredContent as { models: Array<{ option_statuses: unknown }> }).models[0]!.option_statuses;
   };
 
-  test("a bad Rating of one result among several leaves the Job's options known-good", async () => {
+  test("whether bad or good, of the whole Job or of one result", async () => {
     harness = await startHarness(openaiSetup(recorded("openai/generations-2.json")));
     const jobId = await generate({ n: 2, provider_options: { quality: "high" } });
-
-    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "the first one has six legs" });
-
-    expect(await options()).toMatchObject({ known_good_options: { quality: "high" }, suspect_options: {} });
-  });
-
-  test("a bad Rating of the whole Job makes its options suspect, and a good Rating of one result does not clear it", async () => {
-    harness = await startHarness(openaiSetup(recorded("openai/generations-2.json")));
-    const jobId = await generate({ n: 2, provider_options: { quality: "high" } });
+    const before = await statuses();
+    expect(before).toMatchObject({ accepted: [{ options: { quality: "high" }, job_id: jobId }] });
 
     await rate({ job_id: jobId, verdict: "bad", reason: "both are blurry" });
-    await rate({ job_id: jobId, result: 2, verdict: "good", reason: "the second one is fine" });
-
-    expect(await options()).toMatchObject({
-      known_good_options: {},
-      suspect_options: { quality: { value: "high", reason: "both are blurry", job_id: jobId, cause: "rating" } },
-    });
-  });
-
-  test("a bad Rating of a one-result Job's only result makes its options suspect, until a later good Rating", async () => {
-    harness = await startHarness(openaiSetup());
-    const jobId = await generate({ provider_options: { quality: "high" } });
-
-    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "the text is wrong" });
-    expect(await options()).toMatchObject({
-      known_good_options: {},
-      suspect_options: { quality: { value: "high", reason: "the text is wrong", job_id: jobId, cause: "rating" } },
-    });
-
-    // A later Rating of the whole Job speaks for the same single result.
+    expect(await statuses()).toEqual(before);
+    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "the first one has six legs" });
+    expect(await statuses()).toEqual(before);
     await rate({ job_id: jobId, verdict: "good", reason: "fine after all" });
-    expect(await options()).toMatchObject({ known_good_options: { quality: "high" }, suspect_options: {} });
-  });
-
-  test("a later Rating of the same result supersedes the earlier one", async () => {
-    harness = await startHarness(openaiSetup());
-    const jobId = await generate({ provider_options: { quality: "high" } });
-
-    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "the text is wrong" });
-    await rate({ job_id: jobId, result: 1, verdict: "good", reason: "I misread it" });
-    expect(await options()).toMatchObject({ known_good_options: { quality: "high" }, suspect_options: {} });
-
-    await rate({ job_id: jobId, result: 1, verdict: "bad", reason: "no, it is wrong" });
-    expect(await options()).toMatchObject({ suspect_options: { quality: { reason: "no, it is wrong" } } });
+    expect(await statuses()).toEqual(before);
   });
 });
 

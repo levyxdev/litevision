@@ -45,8 +45,7 @@ describe("list_models", () => {
           standing_options: {},
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           parameters: expect.stringContaining("Parameter Guide for GPT Image 1.x"),
-          known_good_options: {},
-          suspect_options: {},
+          option_statuses: { honoured: [], ignored: [], rejected: [], accepted: [] },
         },
         {
           alias: "dalle",
@@ -59,8 +58,7 @@ describe("list_models", () => {
           standing_options: {},
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           parameters: expect.stringContaining("litevision has no Parameter Guide for this model id"),
-          known_good_options: {},
-          suspect_options: {},
+          option_statuses: { honoured: [], ignored: [], rejected: [], accepted: [] },
         },
       ],
     });

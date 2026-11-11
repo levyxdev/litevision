@@ -17,30 +17,30 @@ import {
 } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 import {
-  optionsRecord,
   PickError,
   pickResult,
   rateJob,
   readJob,
+  readJobs,
   ratingReasonMaxLength,
   RatingError,
   readRatedJobs,
   recentPicks,
   recentRatings,
   verdicts,
-  type OptionsRecord,
+  type JobRecord,
   type PickRecord,
   type PickWithJob,
   type RatedJob,
   type RatingRecord,
   type RatingWithJob,
-  type SuspectOption,
 } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, JobRunner, type JobState } from "./jobs.ts";
 import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
+import { byStatus, modelOptionStatuses, optionStatusNames, type OptionStatus, type OptionStatusName } from "./option-status.ts";
 import { mergeOptions } from "./standing-options.ts";
 import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
 import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
@@ -73,7 +73,7 @@ export const instructions = `litevision generates images and videos through Mode
 
 - Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
 - Use the Model the User names. When they name none, omit \`model\` for the default, unless the request needs something the default lacks; then choose with \`list_models\`.
-- litevision passes \`provider_options\` to the Provider as they are and translates nothing: write each Model's own fields, such as the size, resolution or length, from its Parameter Guide (\`list_models\` with \`model\`). Without them the Provider's defaults apply. Reuse Known-good Options; for anything else, or an option marked suspect, read the Parameter Guide and docs first.
+- litevision passes \`provider_options\` to the Provider as they are and translates nothing: write each Model's own fields, such as the size, resolution or length, from its Parameter Guide (\`list_models\` with \`model\`). Without them the Provider's defaults apply. Each value's Option Status (\`list_models\`) says what the latest evidence shows: reuse Honoured values; Accepted means the Provider did not reject it but its effect is unknown; never resend a Rejected or Ignored value unchanged, but read the Parameter Guide and docs first, as for anything with no Option Status.
 - If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
 - Tell the User where the files are, and pass on whatever a result says did not match the request or came back short.
 - \`generate_comparison\` costs as much as all its Jobs. Start a Comparison only when the User asks for one or agrees to it.
@@ -87,6 +87,16 @@ const recentRatingsShown = 5;
 const recentPicksShown = 5;
 /** How much of a Job's prompt a recent Rating or Pick shows. */
 const promptStartLength = 80;
+
+/** One Option Status as `list_models` gives it (ADR 0011). */
+const optionStatusSchema = z.object({
+  options: z
+    .record(z.string(), z.unknown())
+    .describe("The `provider_options` keys and the values sent; several keys when a check reads them together, such as width and height."),
+  job_id: z.string().describe("The Job the latest evidence comes from."),
+  date: z.string().describe("When that Job started. Read the docs first when it is old: Providers change their rules."),
+  reason: z.string().optional().describe("Ignored: how the result differed from the request. Rejected: what the Provider said."),
+});
 
 /** The structured form of one Model in `list_models`. */
 const listedModelSchema = z.object({
@@ -127,15 +137,20 @@ const listedModelSchema = z.object({
     .describe(
       "Only with `model`: the built-in Parameter Guide for the Model's family. Null when litevision has none, or when the Provider describes the Model itself (see `parameter_schema`).",
     ),
-  known_good_options: z
-    .record(z.string(), z.unknown())
-    .optional()
-    .describe("Known-good Options: `provider_options` whose results matched the request and that the User has not rated bad. Reuse them."),
-  suspect_options: z
-    .record(z.string(), z.object({ value: z.unknown(), reason: z.string(), job_id: z.string(), cause: z.enum(["rating", "mismatch"]) }))
+  option_statuses: z
+    .object({
+      honoured: z.array(optionStatusSchema).describe("The result was checked against the request and matched. Reuse them."),
+      ignored: z
+        .array(optionStatusSchema)
+        .describe("The result was checked against the request and did not match, as `reason` says. Do not send them unchanged; read the docs first."),
+      rejected: z
+        .array(optionStatusSchema)
+        .describe("The Provider's error named them; `reason` is what it said. Do not send them unchanged; fix them from that and the docs."),
+      accepted: z.array(optionStatusSchema).describe("Sent and not rejected, but nothing checks whether they took effect."),
+    })
     .optional()
     .describe(
-      "`provider_options` last used by a Job the User rated bad (cause \"rating\", with the User's reason) or whose result did not match the request (cause \"mismatch\"). Check the docs before sending them again.",
+      "Option Statuses: what the latest evidence says about each `provider_options` value sent to this Model, from facts alone; Ratings and Picks never change them. Fields a check reads together, such as width and height, share one.",
     ),
   problem: z.string().optional(),
   recent_ratings: z
@@ -183,6 +198,7 @@ async function listedModel(
   isDefault: boolean,
   detailed: boolean,
   ratedJobs: RatedJob[],
+  jobs: JobRecord[],
 ) {
   const base = {
     alias: model.alias,
@@ -227,23 +243,17 @@ async function listedModel(
     };
   }
 
-  const record = optionsOf(ratedJobs, model);
+  const statuses = modelOptionStatuses(jobs, model);
   const output: z.infer<typeof listedModelSchema> = {
     ...base,
     docs_url: described.docsUrl,
     parameters: parametersSummary(described, model.provider),
-    known_good_options: record.knownGood,
-    suspect_options: suspectOutput(record),
+    option_statuses: optionStatusesOutput(statuses),
   };
   let text = `${heading}${notes} provider_options docs: ${described.docsUrl}`;
   if (!detailed) text += ` ${output.parameters}`;
-  const goodKeys = Object.keys(record.knownGood);
-  const suspectKeys = Object.keys(record.suspect);
   if (detailed) {
-    text += `\nKnown-good Options: ${goodKeys.length === 0 ? "none recorded yet" : JSON.stringify(record.knownGood)}`;
-    for (const [key, suspect] of Object.entries(record.suspect)) {
-      text += `\nSuspect: ${key}=${JSON.stringify(suspect.value)}, used by Job ${suspect.jobId}, ${suspectWhy(suspect)}`;
-    }
+    text += `\n${optionStatusesText(statuses)}`;
     const ratings = recentRatings(ratedJobs, model, recentRatingsShown);
     output.recent_ratings = ratings.map(recentRatingOutput);
     text += ratings.length === 0 ? "\nRecent Ratings: none recorded yet." : "\nRecent Ratings, newest first:";
@@ -256,8 +266,7 @@ async function listedModel(
     if (described.parameterSchema !== undefined) output.parameter_schema = described.parameterSchema;
     text += `\n${parameterHelp(described, model.provider)}`;
   } else {
-    if (goodKeys.length > 0) text += ` Known-good Options: ${goodKeys.join(", ")}.`;
-    if (suspectKeys.length > 0) text += ` Suspect options: ${suspectKeys.join(", ")}.`;
+    text += optionStatusesBrief(statuses);
   }
   return { output, text };
 }
@@ -351,29 +360,65 @@ function promptStart(prompt: string): string {
   return line.length <= promptStartLength ? line : `${line.slice(0, promptStartLength).trimEnd()}…`;
 }
 
-function suspectOutput(record: OptionsRecord) {
+const statusLabels: Record<OptionStatusName, string> = {
+  honoured: "Honoured",
+  ignored: "Ignored",
+  rejected: "Rejected",
+  accepted: "Accepted",
+};
+
+/** What each status means, where `list_models` and a failed Job's error list them one per line. */
+const statusGlosses: Partial<Record<OptionStatusName, string>> = { accepted: " (not rejected, effect unknown)" };
+
+/** Option Statuses grouped as `list_models` gives them (ADR 0011). */
+function optionStatusesOutput(statuses: OptionStatus[]) {
+  const grouped = byStatus(statuses);
   return Object.fromEntries(
-    Object.entries(record.suspect).map(([key, suspect]) => [
-      key,
-      { value: suspect.value, reason: suspect.reason, job_id: suspect.jobId, cause: suspect.cause },
+    optionStatusNames.map((name) => [
+      name,
+      grouped[name].map((status) => ({
+        options: status.options,
+        job_id: status.jobId,
+        date: status.date,
+        ...(status.reason === undefined ? {} : { reason: status.reason }),
+      })),
     ]),
+  ) as Record<OptionStatusName, Array<z.infer<typeof optionStatusSchema>>>;
+}
+
+/** One Option Status per line, grouped by status, each with its date and Job id. */
+function optionStatusesText(statuses: OptionStatus[]): string {
+  if (statuses.length === 0) return "Option Statuses: none recorded yet.";
+  const grouped = byStatus(statuses);
+  const lines = optionStatusNames.flatMap((name) =>
+    grouped[name].map(
+      (status) =>
+        `- ${statusLabels[name]}${statusGlosses[name] ?? ""}: ${JSON.stringify(status.options)}, Job ${status.jobId} on ${status.date.slice(0, 10)}${status.reason === undefined ? "" : `: ${status.reason}`}`,
+    ),
   );
+  return ["Option Statuses, from the latest evidence for each value:", ...lines].join("\n");
 }
 
-/** What the Job history says about a Model's `provider_options` (ADR 0006). */
-async function modelOptions(deps: Pick<ModelInfoDeps, "dirs">, model: Model): Promise<OptionsRecord> {
-  return optionsOf(await readRatedJobs(deps.dirs), model);
+/** The option keys under each status, for the full list, e.g. " Honoured options: width+height. Rejected options: width+height." */
+function optionStatusesBrief(statuses: OptionStatus[]): string {
+  const grouped = byStatus(statuses);
+  return optionStatusNames
+    .map((name) => [name, [...new Set(grouped[name].map((status) => Object.keys(status.options).join("+")))]] as const)
+    .filter(([, keys]) => keys.length > 0)
+    .map(([name, keys]) => ` ${statusLabels[name]} options: ${keys.join(", ")}.`)
+    .join("");
 }
 
-function optionsOf(ratedJobs: RatedJob[], model: Model): OptionsRecord {
-  return optionsRecord(ratedJobs, { provider: model.provider, protocol: model.protocol, modelId: model.modelId });
+/** What the Job history says about a Model's `provider_options` (ADR 0011). */
+async function modelStatuses(deps: Pick<ModelInfoDeps, "dirs">, model: Model): Promise<OptionStatus[]> {
+  return modelOptionStatuses(await readJobs(deps.dirs), model);
 }
 
 /**
  * What litevision knows about the parameters of the Model a Job ran on, read from the Job history: the docs link, the
  * built-in Parameter Guide and, where the Provider is still configured, its own description, which wins (ADR 0010).
  */
-async function jobDocs(deps: ModelInfoDeps, jobId: string): Promise<{ known: ParameterKnowledge; provider: string; options: OptionsRecord } | undefined> {
+async function jobDocs(deps: ModelInfoDeps, jobId: string): Promise<{ known: ParameterKnowledge; provider: string; statuses: OptionStatus[] } | undefined> {
   const job = await readJob(deps.dirs, jobId);
   const adapter = job === undefined ? undefined : adapterForProtocol(job.protocol);
   if (job === undefined || adapter === undefined) return undefined;
@@ -385,31 +430,17 @@ async function jobDocs(deps: ModelInfoDeps, jobId: string): Promise<{ known: Par
     const model = { alias: job.model, provider: job.provider, modelId: job.modelId, protocol: job.protocol, modality };
     known = await modelInfo(deps, { model, provider });
   }
-  return { known, provider: job.provider, options: optionsRecord(await readRatedJobs(deps.dirs), job) };
-}
-
-function suspectWhy(suspect: SuspectOption): string {
-  return suspect.cause === "rating"
-    ? `which the User rated bad: "${suspect.reason}"`
-    : `whose result did not match the request: ${suspect.reason}`;
+  return { known, provider: job.provider, statuses: modelOptionStatuses(await readJobs(deps.dirs), job) };
 }
 
 /**
- * Where the Agent should look when a Provider rejected a request: the docs link and Known-good Options (ADR 0006), and
- * for a rejected or unsupported request also what litevision knows of the Model's parameters (ADR 0010).
+ * Where the Agent should look when a Provider rejected a request: the docs link and the Model's Option Statuses
+ * (ADR 0011), which already count this rejection, and for a rejected or unsupported request also what litevision
+ * knows of the Model's parameters (ADR 0010).
  */
-function failureHint(known: ParameterKnowledge, providerId: string, record: OptionsRecord, kind: ProviderErrorKind): string {
+function failureHint(known: ParameterKnowledge, providerId: string, statuses: OptionStatus[], kind: ProviderErrorKind): string {
   const help = kind === "rejected_option" || kind === "unsupported" ? `\n${parameterHelp(known, providerId)}` : "";
-  return `${optionsHint(known.docsUrl, record)}${help}`;
-}
-
-/** The docs link and the Known-good Options (ADR 0006). */
-function optionsHint(docsUrl: string, record: OptionsRecord): string {
-  const good = Object.keys(record.knownGood).length === 0 ? "none recorded yet" : JSON.stringify(record.knownGood);
-  const suspect = Object.entries(record.suspect)
-    .map(([key, entry]) => ` Suspect: ${key}=${JSON.stringify(entry.value)}, used by a Job ${suspectWhy(entry)}.`)
-    .join("");
-  return ` Docs for this Model's provider_options: ${docsUrl}. Known-good Options: ${good}.${suspect}`;
+  return ` Docs for this Model's provider_options: ${known.docsUrl}.\n${optionStatusesText(statuses)}${help}`;
 }
 
 /** The structured form of what each saved file turned out to be. */
@@ -473,7 +504,7 @@ function requestedText({ shape, resolution, seconds }: Requested): string {
 
 function mismatchText(mismatch: string | undefined, docsUrl: string): string {
   if (mismatch === undefined) return "";
-  return ` The result does not match the request: ${mismatch}. A provider_option may not have taken effect, so these options are not recorded as Known-good; check ${docsUrl} before trying again.`;
+  return ` The result does not match the request: ${mismatch}. A provider_option may not have taken effect, so the options the check read are now Ignored; check ${docsUrl} before trying again.`;
 }
 
 const jobStatusSchema = z
@@ -504,7 +535,7 @@ function toolError(text: string) {
 
 /**
  * A generation tool's error. When the Provider rejected the request or failed it for a reason it did not classify,
- * the error carries the Model's docs link and Known-good Options, so the Agent need not look them up (ADR 0006).
+ * the error carries the Model's docs link and Option Statuses, so the Agent need not look them up (ADR 0011).
  */
 async function failure(error: unknown, hint: Hint | undefined) {
   const reason = await failureReason(error, hint);
@@ -529,7 +560,7 @@ interface PreparedJob {
   model: Model;
   start(comparison?: string): Promise<JobState>;
   report(job: JobState): { output: Record<string, unknown>; text: string };
-  /** The Model's docs link, Known-good Options and Parameter Guide, for a failed Job's error (ADR 0006, ADR 0010). */
+  /** The Model's docs link, Option Statuses and Parameter Guide, for a failed Job's error (ADR 0010, ADR 0011). */
   hint: Hint;
 }
 
@@ -630,7 +661,7 @@ export function createServer(deps: ServerDeps): McpServer {
     return {
       model,
       start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
-      hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
+      hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
         const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
         const asked = requestedText(normalised.requested);
@@ -666,7 +697,7 @@ export function createServer(deps: ServerDeps): McpServer {
       model,
       start: (comparison) =>
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
-      hint: async (kind) => failureHint(info, model.provider, await modelOptions(deps, model), kind),
+      hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
         const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
         const asked = requestedText(normalised.requested);
@@ -897,7 +928,7 @@ export function createServer(deps: ServerDeps): McpServer {
         // A video often outlasts `generate_video`'s wait, so its rejection may first reach the Agent here.
         return failure(error, async (kind) => {
           const docs = await jobDocs(infoDeps, job_id);
-          return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.options, kind);
+          return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.statuses, kind);
         });
       }
     },
@@ -985,7 +1016,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "list_models",
     {
       description:
-        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, Model Notes, Standing Options, a summary of each Model's Parameter Guide, the Known-good Options for `provider_options` and a docs link, and which Models are the defaults. Use it to choose a Model by what it accepts and costs. Pass `model` for one Model in detail: its full Parameter Guide (or the Provider's own parameter schema, which wins), the values of its Known-good and suspect options, its five most recent Ratings, and the Picks of up to five Comparisons it took part in (most recently picked first).",
+        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, Model Notes, Standing Options, a summary of each Model's Parameter Guide, the Option Status of each `provider_options` value sent to it and a docs link, and which Models are the defaults. Use it to choose a Model by what it accepts and costs. Pass `model` for one Model in detail: its full Parameter Guide (or the Provider's own parameter schema, which wins), its Option Statuses with their values, dates and Job ids, its five most recent Ratings, and the Picks of up to five Comparisons it took part in (most recently picked first).",
       inputSchema: {
         model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
       },
@@ -1009,6 +1040,7 @@ export function createServer(deps: ServerDeps): McpServer {
           }
         }
         const ratedJobs = await readRatedJobs(deps.dirs);
+        const jobs = await readJobs(deps.dirs);
         const entries = await Promise.all(
           models.map((model) =>
             listedModel(
@@ -1018,6 +1050,7 @@ export function createServer(deps: ServerDeps): McpServer {
               model.alias === (model.modality === "video" ? defaultVideoModel : defaultModel),
               alias !== undefined,
               ratedJobs,
+              jobs,
             ),
           ),
         );

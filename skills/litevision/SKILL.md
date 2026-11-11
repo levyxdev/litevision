@@ -19,6 +19,8 @@ Drawn from the Model makers' own prompting guides (Sources, below).
 
 litevision translates nothing. The size, resolution, quality and length go in `provider_options`, under the Model's own field names from its Parameter Guide (`list_models` with `model`): `{ "size": "2048x1152" }` for GPT Image, `{ "response_format": { "aspect_ratio": "16:9", "image_size": "2K" } }` for Gemini, `{ "resolution": "1080P", "ratio": "9:16", "seconds": "10" }` for Wan 2.7. Leave them out and the Provider's defaults apply. Weigh the guide's prices: on some Models a larger size costs no more. The Model's Standing Options are already sent; set a key to `null` to drop one for a Job.
 
+`list_models` gives each value sent before an Option Status, with the Job and date of the latest evidence. Reuse Honoured values. Accepted only means the Provider did not reject it; its effect is unknown. Never resend a Rejected or Ignored value unchanged: fix it from the Provider's message or the mismatch, and the Parameter Guide.
+
 ## Ask for one image
 
 Leave `n` at 1 unless the User wants several to choose from. Images from one Job differ only by chance; to explore different readings of a request, propose a Comparison instead.
@@ -39,7 +41,7 @@ Write the variants so the User's Pick says something:
 
 ## Propose new Model Notes
 
-Propose new Model Notes when a Rating or Pick shows something the Model's Notes do not say ("misspells Chinese text", "picked over the others for photoreal scenes"), or when the User asks. At most once per Model per conversation. Write only what is particular to that Model, including where it departs from this Skill ("follows Chinese prompts better than English"); leave out what holds for every Model: this Skill covers it.
+Propose new Model Notes when a Rating or Pick shows something the Model's Notes do not say ("misspells Chinese text", "picked over the others for photoreal scenes", "quality=low looks blurry"), or when the User asks. A Rating never changes an Option Status, so the Model Notes are where the effect of an option no check can measure gets written down. At most once per Model per conversation. Write only what is particular to that Model, including where it departs from this Skill ("follows Chinese prompts better than English"); leave out what holds for every Model: this Skill covers it.
 
 ## Sources
 

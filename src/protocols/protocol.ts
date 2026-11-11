@@ -115,6 +115,8 @@ export class ProviderError extends Error {
   constructor(
     readonly kind: ProviderErrorKind,
     message: string,
+    /** For a rejected option: the `provider_options` keys the Provider's answer named, where litevision could tell (ADR 0011). */
+    readonly options: readonly string[] = [],
   ) {
     super(message);
   }

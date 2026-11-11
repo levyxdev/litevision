@@ -156,29 +156,31 @@ describe("pick_result", () => {
     ]);
   });
 
-  test("a Pick is not a Rating and leaves Known-good and suspect options unchanged", async () => {
+  test("a Pick is not a Rating and leaves every Option Status unchanged", async () => {
+    const requested = { shape: "1024x1024", resolution: null };
     await start([
       jobRecord("a", "2026-11-05T09:00:00.000Z", { comparison: "c1", parameters: { ...jobRecord("a", "").parameters, providerOptions: { quality: "high" } } }),
       jobRecord("b", "2026-11-05T09:01:00.000Z", {
         comparison: "c1",
-        parameters: { ...jobRecord("b", "").parameters, providerOptions: { style: "vivid" } },
-        mismatch: "1024x1536 instead of 1024x1024",
+        parameters: { n: 2, requested, references: [], providerOptions: { size: "1024x1024" } },
+        observed: [{ width: 1024, height: 1536 }, { width: 1024, height: 1536 }],
+        mismatch: "asked for 1024x1024, got 1024x1536",
       }),
     ]);
     const before = await describeModel("gpt-image");
 
-    // Picking the mismatched Job over the other neither clears its suspect option nor makes the other one suspect.
+    // Picking the mismatched Job over the other neither makes its size Honoured nor changes the other Job's options.
     expect((await pick({ comparison_id: "c1", job_id: "b" })).isError).toBeFalsy();
     const after = await describeModel("gpt-image");
 
-    const optionsOf = (result: ToolResult) => {
+    const statusesOf = (result: ToolResult) => {
       const [model] = (result.structuredContent as { models: Array<Record<string, any>> }).models;
-      return { knownGood: model!.known_good_options, suspect: model!.suspect_options, ratings: model!.recent_ratings };
+      return { statuses: model!.option_statuses, ratings: model!.recent_ratings };
     };
-    expect(optionsOf(after)).toEqual(optionsOf(before));
-    expect(optionsOf(after).knownGood).toEqual({ quality: "high" });
-    expect(Object.keys(optionsOf(after).suspect)).toEqual(["style"]);
-    expect(optionsOf(after).ratings).toEqual([]);
+    expect(statusesOf(after)).toEqual(statusesOf(before));
+    expect(statusesOf(after).statuses.accepted).toMatchObject([{ options: { quality: "high" }, job_id: "a" }]);
+    expect(statusesOf(after).statuses.ignored).toMatchObject([{ options: { size: "1024x1024" }, job_id: "b" }]);
+    expect(statusesOf(after).ratings).toEqual([]);
   });
 
   test("is listed, and the server instructions say to pick only when the User actually chooses", async () => {

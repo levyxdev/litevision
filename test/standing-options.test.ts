@@ -67,7 +67,7 @@ describe("Standing Options (ADR 0010)", () => {
     expect(body).not.toHaveProperty("seed");
   });
 
-  test("the Job history records the options as sent, so Known-good Options reflect them", async () => {
+  test("the Job history records the options as sent, so Option Statuses reflect them", async () => {
     const h = await start();
     await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { steps: 40, seed: null } } });
 
@@ -76,8 +76,8 @@ describe("Standing Options (ADR 0010)", () => {
     expect((job!.parameters as { providerOptions: unknown }).providerOptions).toEqual(sent);
 
     const listed = await h.client.callTool({ name: "list_models", arguments: { model: "flux2" } });
-    const [model] = (listed.structuredContent as { models: Array<{ known_good_options: unknown }> }).models;
-    expect(model!.known_good_options).toEqual(sent);
+    const [model] = (listed.structuredContent as { models: Array<{ option_statuses: { accepted: Array<{ options: unknown }> } }> }).models;
+    expect(model!.option_statuses.accepted.map((status) => status.options)).toEqual(Object.entries(sent).map(([key, value]) => ({ [key]: value })));
   });
 
   test("a generate_video Job merges them the same way", async () => {

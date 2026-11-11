@@ -179,7 +179,7 @@ describe("list_models: a Model the Provider describes itself (ADR 0010)", () => 
 });
 
 describe("rejected options carry the Parameter Guide (ADR 0010)", () => {
-  test("an option the Provider rejects comes back with the Model's Parameter Guide, its docs link and its Known-good Options", async () => {
+  test("an option the Provider rejects comes back with the Model's Parameter Guide, its docs link and its Option Statuses", async () => {
     harness = await startHarness({
       config: { providers: [openai], models: [{ alias: "flare", provider: "openai", modelId: "gpt-image-2.5-flare", protocol: "openai-images" }] },
       credentials,
@@ -195,6 +195,7 @@ describe("rejected options carry the Parameter Guide (ADR 0010)", () => {
     expect(text).toContain("Parameter Guide for");
     expect(text).toContain("- quality:");
     expect(text).toContain("https://platform.openai.com/docs/api-reference/images/create");
-    expect(text).toContain("Known-good Options: none recorded yet");
+    // OpenAI names the option in a field of its own, not in its message; the rejection is recorded all the same.
+    expect(text).toMatch(/- Rejected: \{"quality":"ultra"\}, Job \S+ on \d{4}-\d{2}-\d{2}: HTTP 400: Invalid value: 'ultra'/);
   });
 });

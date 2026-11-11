@@ -121,25 +121,50 @@ export function parseShape(text: string): { label: string; ratio: number } | und
   return { label: `${match[1]}${match[2] === ":" ? ":" : "x"}${match[3]}`, ratio: width / height };
 }
 
+/** The first of the shape fields a request body sets, which is the one its shape is read from; undefined when it sets none. */
+function shapeFieldSet(fields: ShapeField[], body: Record<string, unknown>): ShapeField | undefined {
+  return fields.find((field) =>
+    typeof field === "string" ? valueAt(body, field) !== undefined : valueAt(body, field.width) !== undefined || valueAt(body, field.height) !== undefined,
+  );
+}
+
 /**
  * The shape a request asks for, from the first of its shape fields it sets, e.g. `16:9` or `2048x1152`; null when it
  * sets none, or one that says no shape (e.g. `auto`).
  */
 function readShape(fields: ShapeField[], body: Record<string, unknown>): string | null {
-  for (const field of fields) {
-    if (typeof field === "string") {
-      const value = valueAt(body, field);
-      if (value === undefined) continue;
-      return typeof value === "string" ? (parseShape(value)?.label ?? null) : null;
-    }
-    const width = valueAt(body, field.width);
-    const height = valueAt(body, field.height);
-    if (width === undefined && height === undefined) continue;
-    const w = positive(width);
-    const h = positive(height);
-    return w === undefined || h === undefined ? null : `${w}x${h}`;
+  const field = shapeFieldSet(fields, body);
+  if (field === undefined) return null;
+  if (typeof field === "string") {
+    const value = valueAt(body, field);
+    return typeof value === "string" ? (parseShape(value)?.label ?? null) : null;
   }
-  return null;
+  const w = positive(valueAt(body, field.width));
+  const h = positive(valueAt(body, field.height));
+  return w === undefined || h === undefined ? null : `${w}x${h}`;
+}
+
+/** The `provider_options` key a request field is set through: the field itself, or for a dotted field its first part. */
+export function optionKeyOf(field: string): string {
+  return field.split(".")[0]!;
+}
+
+/** The `provider_options` keys each field of a shape field is set through: one for a single field, two for a pair. */
+export function optionKeysOf(field: ShapeField): string[] {
+  return typeof field === "string" ? [optionKeyOf(field)] : [...new Set([optionKeyOf(field.width), optionKeyOf(field.height)])];
+}
+
+/**
+ * The `provider_options` keys the result check reads (ADR 0011): for the shape, those of the shape field it is read
+ * from; for the length, the length field's. Empty where the options set none.
+ */
+export function checkedOptionKeys(fields: RequestFields, options: Record<string, unknown>): { shape: string[]; length: string[] } {
+  const shape = shapeFieldSet(fields.shape, options);
+  const length = fields.duration === undefined ? undefined : optionKeyOf(fields.duration);
+  return {
+    shape: shape === undefined ? [] : optionKeysOf(shape).filter((key) => key in options),
+    length: length !== undefined && length in options ? [length] : [],
+  };
 }
 
 /** The resolution tier a request asks for, as written, e.g. `4K`; null when the field is missing or not text. */

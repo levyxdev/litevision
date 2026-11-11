@@ -102,6 +102,10 @@ export function renderPage(nonce: string): string {
   .comparison > .card { margin-bottom: 0; }
   .comparison-head p { font-size: 13px; color: var(--muted); margin-top: 2px; }
   .picked { color: var(--accent); font-weight: 500; }
+  .option-statuses { display: grid; gap: 6px; font-size: 13px; }
+  .option-statuses ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .option-statuses li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; overflow-wrap: anywhere; }
+  .chip.ignored, .chip.rejected { color: var(--danger); border-color: currentColor; }
 
   #status { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
     background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none;
@@ -394,6 +398,29 @@ function standingOptionsField(value) {
   return { wrapper, read };
 }
 
+const statusLabels = { honoured: "Honoured", ignored: "Ignored", rejected: "Rejected", accepted: "Accepted" };
+
+/**
+ * A Model's Option Statuses, read-only (ADR 0011): what the latest evidence says about each provider_options value sent
+ * to it. There is nothing to edit; a value the User always wants belongs in Standing Options.
+ */
+function optionStatusesView(statuses) {
+  const entries = statuses ? Object.keys(statusLabels).flatMap((name) => statuses[name] || []) : [];
+  const list = entries.length === 0
+    ? el("p", { className: "muted", textContent: "None recorded yet." })
+    : el("ul", {}, ...entries.map((entry) => {
+      const when = new Date(entry.date).toLocaleDateString(undefined, { dateStyle: "medium" });
+      return el("li", {},
+        el("span", { className: "chip " + entry.status, textContent: statusLabels[entry.status] }),
+        el("span", { className: "key", textContent: JSON.stringify(entry.options) }),
+        el("span", { className: "muted", textContent: "Job " + entry.jobId.slice(0, 8) + ", " + when + (entry.reason ? ": " + entry.reason : "") }));
+    }));
+  return el("div", { className: "wide option-statuses" },
+    el("label", { textContent: "Option Statuses" }),
+    list,
+    el("div", { className: "note", textContent: "What litevision has learned about the provider_options sent to this Model, from its results and the Provider's errors; your Ratings never change it. Honoured: the result matched. Ignored: it did not. Rejected: the Provider refused it. Accepted: not refused, effect unknown. Read-only: to always send a value, set it in Standing Options." }));
+}
+
 function modelCard(model) {
   const alias = el("input", { value: model.alias, spellcheck: false });
   const provider = el("select", {}, ...options(providerIds.includes(model.provider) ? providerIds : [model.provider, ...providerIds], model.provider));
@@ -431,20 +458,24 @@ function modelCard(model) {
     el("div", { className: "card-head" }, el("h3", { textContent: model.alias }),
       model.default ? el("span", { className: "chip accent", textContent: "Default " + model.modality }) : makeDefault),
     el("div", { className: "fields" },
-      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), field("Makes", modality), notes.wrapper, standing.wrapper),
+      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), field("Makes", modality), notes.wrapper, standing.wrapper,
+      optionStatusesView(optionStatuses[model.alias])),
     el("div", { className: "actions" }, save, el("span", { className: "spacer" }), remove),
   );
 }
 
 // The saved Models, so the fetched model list can say which model ids are already added.
 let savedModels = [];
+// Each saved Model's Option Statuses, by Alias.
+let optionStatuses = {};
 // Redraws the fetched model list; set by setUpAddModelForm.
 let showModelIds = () => {};
 
 async function loadModels() {
   const list = document.getElementById("model-list");
-  const { models } = await api("GET", "/api/models");
+  const [{ models }, statuses] = await Promise.all([api("GET", "/api/models"), api("GET", "/api/option-statuses")]);
   savedModels = models;
+  optionStatuses = statuses.models;
   showModelIds();
   list.replaceChildren(...(models.length === 0
     ? [emptyState(providerIds.length === 0 ? "Add a Provider first, then add its Models below." : "No Models yet. Add one below.")]
