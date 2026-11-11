@@ -2,7 +2,7 @@
 
 Two long-lived branches, no others:
 
-- **`dev`**: all work. Commit here, run `bun run typecheck && bun test`, `git push`.
+- **`dev`**: all work. Commit here, run `bun run typecheck && bun test`, `git push`. A commit that resolves an issue says `Closes #N`; after pushing it, label the issue `on-dev` in place of `ready-for-agent`/`ready-for-human`. GitHub closes it when a release brings the commit to `main`.
 - **`main`**: released code only. Every commit on `main` is a published version tagged `vX.Y.Z`. `main` moves only during a release, and only by fast-forward to `dev`.
 
 `main` stays the GitHub default branch: `npx skills add levyxdev/litevision` and the README on GitHub and npm read from it, so users always get the released Skill and docs.
@@ -15,6 +15,6 @@ An urgent fix is an ordinary commit on `dev`, shipped as a patch release.
 2. Bump `version` in `package.json`, commit `Release X.Y.Z`.
 3. `git switch main && git merge --ff-only dev`. If it refuses, `main` has a commit `dev` lacks: `git switch dev && git merge main` and start again.
 4. `git tag vX.Y.Z && git push origin main dev vX.Y.Z`.
-5. `npm publish` (`prepublishOnly` runs typecheck, tests and build).
+5. `npm publish` (`prepublishOnly` runs typecheck, tests and build). Run it in a terminal the User can see and type in, and tell them to complete npm's two-factor check there: a browser link or a one-time code. If npm answers 401, the login expired: run `npm login` there first, which the User completes the same way.
 6. `gh release create vX.Y.Z --title X.Y.Z --generate-notes`.
 7. `git switch dev`.

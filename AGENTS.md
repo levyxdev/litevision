@@ -2,7 +2,7 @@
 
 ## Git workflow
 
-Commit and push to `dev`; `main` moves only in a release. Before a release, see `docs/agents/git-workflow.md`.
+Commit and push to `dev`; `main` moves only in a release. Before pushing a commit that resolves an issue, or releasing, see `docs/agents/git-workflow.md`.
 
 ## Agent skills
 
