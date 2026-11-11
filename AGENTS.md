@@ -2,7 +2,7 @@
 
 ## Git workflow
 
-Commit and push to `dev`, then close the issues the push resolves; `main` moves only in a release. Before a release, see `docs/agents/git-workflow.md`.
+Commit and push to `dev`, with `Closes #N` in a commit that resolves an issue; `main` moves only in a release. Before a release, see `docs/agents/git-workflow.md`.
 
 ## Tests
 
@@ -20,7 +20,7 @@ Issues and specs live in this repo's GitHub Issues, managed with the `gh` CLI. S
 
 ### Triage labels
 
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, plus `on-dev` for an issue resolved on `dev` and waiting for a release. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
