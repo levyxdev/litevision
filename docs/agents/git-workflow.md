@@ -2,7 +2,7 @@
 
 Two long-lived branches, no others:
 
-- **`dev`**: all work. Commit here, run `bun run typecheck && bun test`, `git push`. A commit that resolves an issue says `Closes #N` in its message; GitHub closes the issue when a release brings the commit to `main`, so an open `on-dev` issue is expected.
+- **`dev`**: all work. Commit here, run `bun run typecheck && bun test`, `git push`.
 - **`main`**: released code only. Every commit on `main` is a published version tagged `vX.Y.Z`. `main` moves only during a release, and only by fast-forward to `dev`.
 
 `main` stays the GitHub default branch: `npx skills add levyxdev/litevision` and the README on GitHub and npm read from it, so users always get the released Skill and docs.
