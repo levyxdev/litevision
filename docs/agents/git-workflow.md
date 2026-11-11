@@ -16,5 +16,5 @@ An urgent fix is an ordinary commit on `dev`, shipped as a patch release.
 3. `git switch main && git merge --ff-only dev`. If it refuses, `main` has a commit `dev` lacks: `git switch dev && git merge main` and start again.
 4. `git tag vX.Y.Z && git push origin main dev vX.Y.Z`.
 5. `npm publish` (`prepublishOnly` runs typecheck, tests and build). Run it in a terminal the User can see and type in, and tell them to complete npm's two-factor check there: a browser link or a one-time code. If npm answers 401, the login expired: run `npm login` there first, which the User completes the same way.
-6. `gh release create vX.Y.Z --title X.Y.Z --generate-notes`.
+6. `gh release create vX.Y.Z --title X.Y.Z --generate-notes`, then remove `on-dev` from the issues it closed.
 7. `git switch dev`.
