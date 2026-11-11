@@ -4,15 +4,23 @@ import { extname, join } from "node:path";
 /** Characters no file name may hold on some system litevision runs on, control characters included. */
 const illegal = /[<>:"/\\|?*\u0000-\u001f\u007f]/g;
 
+/** An image or video extension the Agent may have written into `name`; the saved file gets its own. */
+const mediaExtension = /\.(png|jpe?g|webp|gif|avif|heic|mp4|mov|webm)$/i;
+
+/** Names Windows keeps for devices, with or without an extension after them. */
+const windowsDevice = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?=\.|$)/i;
+
 /** Leaves room under the usual 255-byte limit for a clash suffix and an extension. */
 const maxStemBytes = 200;
 
 /**
  * The file name stem for the `name` the Agent gave a Job: any language, with only the characters a path cannot hold
- * removed, and trailing dots and spaces, which Windows drops. Undefined when nothing usable is left.
+ * removed, along with a trailing image or video extension, leading dots (a hidden file), and trailing dots and spaces,
+ * which Windows drops. A name Windows keeps for a device gets an underscore. Undefined when nothing usable is left.
  */
 export function fileStem(name: string): string | undefined {
-  let stem = name.replace(illegal, "").trim().replace(/[. ]+$/, "");
+  let stem = name.replace(illegal, "").trim().replace(/[. ]+$/, "").replace(mediaExtension, "");
+  stem = stem.replace(/[. ]+$/, "").replace(/^[. ]+/, "").replace(windowsDevice, "$1_");
   while (Buffer.byteLength(stem) > maxStemBytes) stem = [...stem].slice(0, -1).join("");
   return stem === "" ? undefined : stem;
 }

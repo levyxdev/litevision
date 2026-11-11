@@ -262,6 +262,24 @@ describe("saved file names", () => {
     expect(await generate({ name: " a/b\\c:d*e?f\"g<h>i|j 李.v2 " })).toEqual([join(folder(), "abcdefghij 李.v2.png")]);
   });
 
+  test("an image or video extension at the end of `name` is dropped, so the file gets only its own", async () => {
+    harness = await startHarness(openaiSetup());
+    expect(await generate({ name: "张三.jpg" })).toEqual([join(folder(), "张三.png")]);
+    expect(await generate({ name: "fox.PNG" })).toEqual([join(folder(), "fox.png")]);
+  });
+
+  test("leading dots are removed, so a `name` never makes a hidden file", async () => {
+    harness = await startHarness(openaiSetup());
+    expect(await generate({ name: "..fox" })).toEqual([join(folder(), "fox.png")]);
+  });
+
+  test("a name Windows reserves for a device gets an underscore", async () => {
+    harness = await startHarness(openaiSetup());
+    expect(await generate({ name: "con" })).toEqual([join(folder(), "con_.png")]);
+    expect(await generate({ name: "LPT1.v2" })).toEqual([join(folder(), "LPT1_.v2.png")]);
+    expect(await generate({ name: "console" })).toEqual([join(folder(), "console.png")]);
+  });
+
   test("a `name` with nothing a file name can hold is refused before the Job starts", async () => {
     harness = await startHarness(openaiSetup());
     const result = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "a fox", name: "/:?" } });
