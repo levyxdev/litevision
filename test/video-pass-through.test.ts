@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
 import { mp4Of, readHistory, recorded, textOf, tinyPng } from "./helpers.ts";
 
@@ -111,6 +111,14 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     harness = await startHarness(setup());
     await video({ provider_options: { seconds: "17", resolution: "4K" } });
     expect(await sentBody()).toMatchObject({ seconds: "17", resolution: "4K" });
+  });
+
+  test("a video is saved under the `name` given", async () => {
+    harness = await startHarness(setup());
+    const result = await video({ model: "wan", name: "狐狸" });
+    expect(result.isError).toBeFalsy();
+    const [file] = (result.structuredContent as { files: string[] }).files;
+    expect(basename(file!)).toBe("狐狸.mp4");
   });
 
   test("the Job history records what litevision read from the final request", async () => {

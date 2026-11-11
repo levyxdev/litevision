@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ConfigError, loadConfig, needsSettings, requireCredential, type ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
+import { fileStem, saveNamed, type FileToSave } from "./file-names.ts";
 import { appendHistory, readJob, type JobRecord } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
@@ -47,6 +48,8 @@ interface SpecBase extends ResolvedModel {
   credential: string;
   /** Absolute folder to save into; omitted, results go under a dated folder in `dirs.output`. */
   outputDir?: string;
+  /** What to name the saved files; omitted, they are named after the time the Job started. */
+  name?: string;
   /** The Comparison this Job belongs to (ADR 0009), when it is one of several started together. */
   comparison?: string;
 }
@@ -110,6 +113,8 @@ export class JobRunner {
   private readonly jobs = new Map<string, Promise<CompletedJob>>();
   private readonly abandons = new Set<() => void>();
   private closed = false;
+  /** The latest save; the next one waits for it. */
+  private saving: Promise<unknown> = Promise.resolve();
   private readonly waitLimitMs: number;
   private readonly pollIntervalMs: number;
   private readonly retryDelayMs: number;
@@ -128,6 +133,7 @@ export class JobRunner {
       requested: spec.normalised.requested,
       references: request.references.map((reference) => reference.path),
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
+      ...(spec.name === undefined ? {} : { name: spec.name }),
       providerOptions: request.providerOptions,
     });
     const target = targetOf(spec);
@@ -155,6 +161,7 @@ export class JobRunner {
       ...(request.firstFrame === undefined ? {} : { firstFrame: request.firstFrame.path }),
       ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame.path }),
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
+      ...(spec.name === undefined ? {} : { name: spec.name }),
       providerOptions: request.providerOptions,
     });
     const target = targetOf(spec);
@@ -300,25 +307,24 @@ export class JobRunner {
     try {
       const result = await run(this.context);
       if (this.closed) throw new JobAbandoned();
-      const startedAt = new Date(base.createdAt);
-      const folder = base.parameters.outputPath ?? join(this.deps.dirs.output, localDate(startedAt));
-      const saved = await saveFiles(this.deps.http, folder, base.id, startedAt, result.images, base.provider);
-      const reasons = [result.shortfall, ...saved.failures.map((failure) => failure.message)].filter((reason) => reason !== undefined);
-      if (saved.files.length === 0) {
-        throw saved.failures[0] ?? providerError("other", base.provider, reasons[0] ?? "it returned nothing.");
+      const fetched = await fetchResults(this.deps.http, result.images, base.provider);
+      const reasons = [result.shortfall, ...fetched.failures.map((failure) => failure.message)].filter((reason) => reason !== undefined);
+      if (fetched.downloaded.length === 0) {
+        throw fetched.failures[0] ?? providerError("other", base.provider, reasons[0] ?? "it returned nothing.");
       }
-      const observed = saved.facts;
+      const files = await this.save(base, fetched.downloaded);
+      const observed = fetched.facts;
       const mismatch = mismatchOf(checkResult(base.parameters, observed));
       const shortfall =
-        saved.files.length >= n
+        files.length >= n
           ? undefined
           : safe(
-              `Got ${saved.files.length} of ${n} images from ${providerLabel(base.provider)}.${reasons.length === 0 ? "" : ` ${reasons.join(" ")}`}`,
+              `Got ${files.length} of ${n} images from ${providerLabel(base.provider)}.${reasons.length === 0 ? "" : ` ${reasons.join(" ")}`}`,
             );
-      await this.append(base, "completed", { files: saved.files, shortfall, cost: result.cost, observed, mismatch });
+      await this.append(base, "completed", { files, shortfall, cost: result.cost, observed, mismatch });
       return {
         id: base.id,
-        files: saved.files,
+        files,
         observed,
         ...(shortfall === undefined ? {} : { shortfall }),
         ...(mismatch === undefined ? {} : { mismatch }),
@@ -332,6 +338,22 @@ export class JobRunner {
       await this.append(base, "failed", { error: { kind, message, ...(options.length === 0 ? {} : { options: [...options] }) } });
       throw new JobFailedError(base.id, kind, message);
     }
+  }
+
+  /**
+   * Saves a Job's results under its `name`, or the time it started, in its folder. One at a time, so Jobs finishing
+   * together, as in a Comparison, never take the same free name.
+   */
+  private save(base: JobBase, files: FileToSave[]): Promise<string[]> {
+    const startedAt = new Date(base.createdAt);
+    const folder = base.parameters.outputPath ?? join(this.deps.dirs.output, localDate(startedAt));
+    const stem = base.parameters.name === undefined ? undefined : fileStem(base.parameters.name);
+    const saving = this.saving.then(async () => {
+      await mkdir(folder, { recursive: true });
+      return saveNamed(folder, stem ?? localTime(startedAt), files, base.parameters.n > 1);
+    });
+    this.saving = saving.catch(() => undefined);
+    return saving;
   }
 
   private async append(base: JobBase, outcome: JobRecord["outcome"], progress: JobProgress = {}): Promise<void> {
@@ -365,36 +387,26 @@ function redact(text: string, credential: string): string {
   return text.split(credential).join("[redacted]");
 }
 
-async function saveFiles(
+/** Downloads what a Job brought back. One lost download does not cost the results that did arrive. */
+async function fetchResults(
   http: HttpTransport,
-  folder: string,
-  jobId: string,
-  startedAt: Date,
   results: GeneratedFile[],
   providerId: string,
-): Promise<{ files: string[]; facts: Array<MediaFacts | null>; failures: ProviderError[] }> {
-  await mkdir(folder, { recursive: true });
-  const base = `${localTime(startedAt)}-${jobId.slice(0, 8)}`;
-  const files: string[] = [];
+): Promise<{ downloaded: FileToSave[]; facts: Array<MediaFacts | null>; failures: ProviderError[] }> {
+  const downloaded: FileToSave[] = [];
   const facts: Array<MediaFacts | null> = [];
   const failures: ProviderError[] = [];
-  for (const [index, image] of results.entries()) {
-    let bytes: Uint8Array;
+  for (const result of results) {
     try {
-      bytes = "bytes" in image ? image.bytes : await download(http, image.url, providerId);
+      const bytes = "bytes" in result ? result.bytes : await download(http, result.url, providerId);
+      downloaded.push({ bytes, extension: fileTypeOf(bytes)?.extension ?? "bin" });
+      facts.push(mediaFactsOf(bytes) ?? null);
     } catch (error) {
-      // One lost download should not cost the images that did arrive.
       if (!(error instanceof ProviderError)) throw error;
       failures.push(error);
-      continue;
     }
-    const suffix = results.length === 1 ? "" : `-${index + 1}`;
-    const file = join(folder, `${base}${suffix}.${fileTypeOf(bytes)?.extension ?? "bin"}`);
-    await writeFile(file, bytes);
-    files.push(file);
-    facts.push(mediaFactsOf(bytes) ?? null);
   }
-  return { files, facts, failures };
+  return { downloaded, facts, failures };
 }
 
 async function download(http: HttpTransport, url: string, providerId: string): Promise<Uint8Array> {

@@ -16,6 +16,7 @@ import {
   type ResolvedModel,
 } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
+import { fileStem } from "./file-names.ts";
 import {
   PickError,
   pickResult,
@@ -586,6 +587,7 @@ interface ImageArgs {
   n: number;
   references: string[];
   output_path?: string;
+  name?: string;
   provider_options: Record<string, unknown>;
 }
 
@@ -595,6 +597,7 @@ interface VideoArgs {
   last_frame?: string;
   references: string[];
   output_path?: string;
+  name?: string;
   provider_options: Record<string, unknown>;
 }
 
@@ -633,6 +636,25 @@ const failedJobSchema = z.object({
   files: z.array(z.string()).describe("Always empty."),
   error: z.string().describe("Why the Job failed."),
 });
+
+/** The `name` parameter of the tools that start Jobs. */
+function nameSchema(what: string, example: string) {
+  return z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      `What to name ${what}, in any language, e.g. the person or product it is for: "张三" saves ${example}. A name already taken in the folder gets -2, -3. Omit to name them after the time the Job started, e.g. 140500.png.`,
+    );
+}
+
+/** The `name` the Agent gave, refused before the Job starts when no file could be named after it. */
+function checkedName(name: string | undefined): string | undefined {
+  if (name !== undefined && fileStem(name) === undefined) {
+    throw new ConfigError(`\`name\` "${name}" has nothing a file name can hold once the characters a path cannot hold are removed. Give another, or omit it.`);
+  }
+  return name;
+}
 
 /** The most Jobs one Comparison starts (ADR 0009). */
 export const maxComparisonVariants = 4;
@@ -679,9 +701,10 @@ export function createServer(deps: ServerDeps): McpServer {
       cwd,
     );
     const outputDir = args.output_path === undefined ? undefined : resolve(cwd, args.output_path);
+    const name = checkedName(args.name);
     return {
       model,
-      start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
+      start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
         const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
@@ -714,10 +737,11 @@ export function createServer(deps: ServerDeps): McpServer {
       cwd,
     );
     const outputDir = args.output_path === undefined ? undefined : resolve(cwd, args.output_path);
+    const name = checkedName(args.name);
     return {
       model,
       start: (comparison) =>
-        jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(comparison === undefined ? {} : { comparison }) }),
+        jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
         const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
@@ -769,6 +793,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .describe(
             "Folder to save the images in, e.g. the project's assets folder; created if missing. Relative paths resolve against litevision's working directory. Omit to save under a dated folder in the User's home directory.",
           ),
+        name: nameSchema("the images", "张三.png; several images as 张三-1.png, 张三-2.png"),
         provider_options: z
           .record(z.string(), z.unknown())
           .default({})
@@ -800,6 +825,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .min(1)
           .optional()
           .describe("Folder to save the video in; created if missing. Omit to save under a dated folder in the User's home directory."),
+        name: nameSchema("the video", "张三.mp4"),
         provider_options: z
           .record(z.string(), z.unknown())
           .default({})
@@ -828,6 +854,7 @@ export function createServer(deps: ServerDeps): McpServer {
                 .positive()
                 .optional()
                 .describe("Image Comparisons only: how many images this variant's Job makes. Defaults to 1."),
+              name: nameSchema("this variant's files", "张三.png"),
               provider_options: z
                 .record(z.string(), z.unknown())
                 .default({})
@@ -874,7 +901,13 @@ export function createServer(deps: ServerDeps): McpServer {
         prepared = await Promise.all(
           variants.map((variant) => {
             const resolved = resolveModel(config, variant.model, modality);
-            const shared = { prompt: variant.prompt, references, provider_options: variant.provider_options, ...(output_path === undefined ? {} : { output_path }) };
+            const shared = {
+              prompt: variant.prompt,
+              references,
+              provider_options: variant.provider_options,
+              ...(output_path === undefined ? {} : { output_path }),
+              ...(variant.name === undefined ? {} : { name: variant.name }),
+            };
             return modality === "video"
               ? prepareVideo(resolved, shared)
               : prepareImage(resolved, { ...shared, n: variant.n ?? 1 });

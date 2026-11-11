@@ -64,9 +64,9 @@ The page also shows the Job history, with the images and videos and any Ratings 
 
 | Tool | What it does |
 | --- | --- |
-| `generate_image` | Generates `n` images from a prompt, optionally with reference images. Size, quality and every other setting are the Model's own fields in `provider_options`, passed to the Provider as they are; without them the Provider's defaults apply. Saves the images and returns the file paths, with the size the request asked for and the size each image actually came out at. |
-| `generate_video` | Generates a video from a prompt, optionally with a first and last frame and reference images. Shape, resolution and length are the Model's own fields in `provider_options`. Saves it and returns the file path, with what the request asked for and the video's actual size and length. |
-| `generate_comparison` | Starts 2 to 4 Jobs of one Modality together, differing in prompt, Model or both, each with its own `provider_options`, so you can choose among the results. The Agent starts one only when you ask for it or agree to it. |
+| `generate_image` | Generates `n` images from a prompt, optionally with reference images. Size, quality and every other setting are the Model's own fields in `provider_options`, passed to the Provider as they are; without them the Provider's defaults apply. Saves the images, named after the optional `name`, and returns the file paths, with the size the request asked for and the size each image actually came out at. |
+| `generate_video` | Generates a video from a prompt, optionally with a first and last frame and reference images. Shape, resolution and length are the Model's own fields in `provider_options`. Saves it, named after the optional `name`, and returns the file path, with what the request asked for and the video's actual size and length. |
+| `generate_comparison` | Starts 2 to 4 Jobs of one Modality together, differing in prompt, Model or both, each with its own `provider_options` and `name`, so you can choose among the results. The Agent starts one only when you ask for it or agree to it. |
 | `get_job` | Waits for, or reports on, a Job that was still running when `generate_image`, `generate_video` or `generate_comparison` returned. |
 | `list_models` | Lists the configured Models with their Modality, Model Notes, Standing Options, a summary of their Parameter Guide, docs link and the Option Status of each `provider_options` value sent to it; for one Model, also its full Parameter Guide (each parameter's values, default and price effect, with sources and the date they were checked) or the Provider's own parameter schema where it publishes one, each Option Status with its values, date and Job, its five most recent Ratings, and the Picks of up to five Comparisons it took part in (most recently picked first). |
 | `pick_result` | Records your Pick when you choose among a Comparison's results; choosing again replaces it. A Pick says which you prefer, not that it is good, so it changes no Option Status. You can also pick in the settings page's Job history, which shows a Comparison's Jobs together. |
@@ -92,6 +92,8 @@ Fields checked together, such as `width` and `height`, share one; a nested field
 | Providers, Models (`config.json`) and Credentials (`credentials.json`, mode 600) | `~/.config/litevision/` |
 | Job history (`jobs.jsonl`) and the cached parameter descriptions Providers give (`capabilities.json`) | `~/.local/share/litevision/` |
 | Generated images and videos, unless the Agent passes `output_path` | `~/litevision/outputs/<date>/` |
+
+A saved file is named after the `name` the Agent passes, in any language, with only the characters a path cannot hold removed: `张三.png`, or `张三-1.png`, `张三-2.png` for a Job with several results. Without `name` it is named after the time the Job started, e.g. `140500.png`. A name already taken in the folder gets the next free number, `张三-2.png`, `张三-3.png`. The Job history records which files each Job saved.
 
 ## Develop
 

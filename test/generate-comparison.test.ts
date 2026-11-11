@@ -103,6 +103,24 @@ describe("generate_comparison", () => {
     ]);
   });
 
+  test("saves each variant's files under its own `name`, and records it on the variant's Job", async () => {
+    harness = await startHarness(togetherSetup());
+    const folder = join(harness.dirs.output, "2026-11-05");
+    const named = ok(await compare({ variants: [{ prompt: "a red fox", name: "fox" }, { prompt: "a red fox", model: "flux2", name: "fox" }] }));
+    expect(named.jobs.map((job: { files: string[] }) => job.files).flat().sort()).toEqual([join(folder, "fox-2.png"), join(folder, "fox.png")]);
+    const history = (await readHistory(harness)) as Array<{ parameters: { name?: string } }>;
+    expect(history.filter((job) => job.parameters.name === "fox")).toHaveLength(2);
+  });
+
+  test("saves unnamed variants finishing together under distinct names", async () => {
+    harness = await startHarness(togetherSetup());
+    const folder = join(harness.dirs.output, "2026-11-05");
+    const unnamed = ok(await compare({ variants: [{ prompt: "a red fox" }, { prompt: "a red fox", model: "flux2" }, { prompt: "a fox" }] }));
+    expect(unnamed.jobs.map((job: { files: string[] }) => job.files).flat().sort()).toEqual(
+      ["090000-2.png", "090000-3.png", "090000.png"].map((file) => join(folder, file)),
+    );
+  });
+
   test("records the Comparison on each Job's history record", async () => {
     harness = await startHarness(togetherSetup());
     const output = ok(

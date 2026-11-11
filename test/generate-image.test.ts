@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
 import { readHistory, readHistoryLines } from "./helpers.ts";
@@ -210,3 +210,73 @@ describe("generate_image", () => {
   });
 });
 
+describe("saved file names", () => {
+  const generate = async (args: Record<string, unknown> = {}) => {
+    const result = await harness!.client.callTool({ name: "generate_image", arguments: { prompt: "an ID photo", ...args } });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    return (result.structuredContent as unknown as GenerateResult).files;
+  };
+  const folder = () => join(harness!.dirs.output, "2026-10-30");
+
+  test("with `name`, the file is named after it, and a second Job with the same name gets -2", async () => {
+    harness = await startHarness(openaiSetup());
+    expect(await generate({ name: "张三" })).toEqual([join(folder(), "张三.png")]);
+    expect(await generate({ name: "张三" })).toEqual([join(folder(), "张三-2.png")]);
+    expect(await readFile(join(folder(), "张三-2.png"))).toEqual(tinyPng);
+  });
+
+  test("a Job with several results numbers them from 1, and the next Job with that name takes the next free numbers", async () => {
+    harness = await startHarness(openaiSetup({ [generationsUrl]: recorded("openai/generations-2.json") }));
+    expect(await generate({ name: "张三", n: 2 })).toEqual([join(folder(), "张三-1.png"), join(folder(), "张三-2.png")]);
+    expect(await generate({ name: "张三", n: 2 })).toEqual([join(folder(), "张三-3.png"), join(folder(), "张三-4.png")]);
+  });
+
+  test("a Job that asked for several results numbers them even when only one came back", async () => {
+    harness = await startHarness(openaiSetup());
+    expect(await generate({ name: "张三", n: 2 })).toEqual([join(folder(), "张三-1.png")]);
+  });
+
+  test("without `name`, files are named after the time the Job started, with -2 on a clash", async () => {
+    harness = await startHarness(openaiSetup());
+    expect(await generate()).toEqual([join(folder(), "140500.png")]);
+    expect(await generate()).toEqual([join(folder(), "140500-2.png")]);
+  });
+
+  test("a name taken with another extension, or in another case, still counts as taken", async () => {
+    harness = await startHarness(openaiSetup());
+    await mkdir(folder(), { recursive: true });
+    await writeFile(join(folder(), "Fox.jpg"), "");
+    expect(await generate({ name: "fox" })).toEqual([join(folder(), "fox-2.png")]);
+  });
+
+  test("only the characters a path cannot hold are removed from `name`", async () => {
+    harness = await startHarness(openaiSetup());
+    expect(await generate({ name: " a/b\\c:d*e?f\"g<h>i|j 李.v2 " })).toEqual([join(folder(), "abcdefghij 李.v2.png")]);
+  });
+
+  test("a `name` with nothing a file name can hold is refused before the Job starts", async () => {
+    harness = await startHarness(openaiSetup());
+    const result = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "a fox", name: "/:?" } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("`name`");
+    expect(harness.requests).toHaveLength(0);
+  });
+
+  test("`name` is recorded in the Job, and get_job finds the files after a restart", async () => {
+    harness = await startHarness(openaiSetup());
+    const result = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "an ID photo", name: "张三" } });
+    const { job_id, files } = result.structuredContent as unknown as GenerateResult;
+    expect((await readHistory(harness))[0]).toMatchObject({ id: job_id, parameters: { name: "张三" }, files });
+
+    await harness.restart();
+    const job = await harness.client.callTool({ name: "get_job", arguments: { job_id } });
+    expect((job.structuredContent as unknown as GenerateResult).files).toEqual([join(folder(), "张三.png")]);
+  });
+
+  test("is described on generate_image", async () => {
+    harness = await startHarness();
+    const { tools } = await harness.client.listTools();
+    const schema = tools.find((tool) => tool.name === "generate_image")!.inputSchema.properties as Record<string, { description: string }>;
+    expect(schema.name!.description).toContain("any language");
+  });
+});

@@ -36,6 +36,8 @@ export interface JobParameters {
   lastFrame?: string;
   /** Absolute folder the Agent asked to save into, when it gave one. */
   outputPath?: string;
+  /** What the Agent named the saved files, as it gave it; absent when it gave no name, and on Jobs recorded before. */
+  name?: string;
   providerOptions: Record<string, unknown>;
 }
 
