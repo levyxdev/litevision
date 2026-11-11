@@ -24,7 +24,7 @@ import {
   type ReferenceImage,
 } from "./protocols/protocol.ts";
 
-/** How long `generate_image` and `get_job` wait for a Job before saying it is still running. */
+/** How long `generate_image`, `generate_video` and `get_job` wait for a Job before saying it is still running. */
 export const defaultWaitLimitMs = 120_000;
 
 /** How often asynchronous Protocols ask their Provider whether a Job is done. */
@@ -32,6 +32,12 @@ export const defaultPollIntervalMs = 3_000;
 
 /** The delay before the first retry of a request the Provider never processed; each further retry waits twice as long. */
 export const defaultRetryDelayMs = 2_000;
+
+/** How the call that starts a Job waits for it. */
+export interface StartOptions {
+  /** false: return the Job running at once. Defaults to true: wait up to the wait limit. */
+  wait?: boolean;
+}
 
 export interface JobRunnerDeps {
   dirs: Dirs;
@@ -127,8 +133,11 @@ export class JobRunner {
     this.retryDelayMs = deps.retryDelayMs ?? defaultRetryDelayMs;
   }
 
-  /** Starts an image Job and waits for it up to the wait limit. */
-  async start(spec: JobSpec): Promise<JobState> {
+  /**
+   * Starts an image Job and waits for it up to the wait limit; with `wait` false, returns it running at once, and it
+   * runs on in the background like a Job that outlasted the wait limit.
+   */
+  async start(spec: JobSpec, { wait = true }: StartOptions = {}): Promise<JobState> {
     const { request } = spec.normalised;
     const sourceJobs = await this.sourceJobsOf(request.references);
     const base = this.baseFor(spec, "image", request.prompt, sourceJobs, {
@@ -147,11 +156,11 @@ export class JobRunner {
       if (submitted.resumeHandle !== undefined) await this.append(base, "running", { resume: submitted.resumeHandle });
       return submitted.wait();
     });
-    return this.waitFor(base.model, base.id, this.register(base.id, job));
+    return this.reply(base, job, wait);
   }
 
-  /** Starts a video Job and waits for it up to the wait limit. */
-  async startVideo(spec: VideoJobSpec): Promise<JobState> {
+  /** Starts a video Job and waits for it up to the wait limit, or not at all when `wait` is false, as {@link start}. */
+  async startVideo(spec: VideoJobSpec, { wait = true }: StartOptions = {}): Promise<JobState> {
     const { request } = spec.normalised;
     const submitVideo = spec.adapter.submitVideo;
     if (submitVideo === undefined) {
@@ -176,7 +185,16 @@ export class JobRunner {
       await this.append(base, "running", { resume: submitted.resumeHandle });
       return videoAsImages(await submitted.wait());
     });
-    return this.waitFor(base.model, base.id, this.register(base.id, job));
+    return this.reply(base, job, wait);
+  }
+
+  /**
+   * What the call that started a Job returns. A Job not waited for is still registered, so its failure is recorded
+   * and handled there, and `get` reports it.
+   */
+  private reply(base: JobBase, job: Promise<CompletedJob>, wait: boolean): Promise<JobState> {
+    const registered = this.register(base.id, job);
+    return wait ? this.waitFor(base.model, base.id, registered) : Promise.resolve({ status: "running", id: base.id, model: base.model });
   }
 
   /** A new Job's Source Jobs: the earlier Jobs that saved what its reference images and video frames hold now. */
@@ -260,6 +278,7 @@ export class JobRunner {
     });
   }
 
+  /** Keeps a Job for `get`. Its failure is handled here, so a Job no call waits for never rejects unhandled. */
   private register(id: string, job: Promise<CompletedJob>): Promise<CompletedJob> {
     this.jobs.set(id, job);
     job.catch((error: unknown) => {

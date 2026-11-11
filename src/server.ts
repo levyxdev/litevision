@@ -37,7 +37,7 @@ import {
   type RatingWithJob,
 } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
-import { JobFailedError, JobRunner, type JobState } from "./jobs.ts";
+import { JobFailedError, JobRunner, type JobState, type StartOptions } from "./jobs.ts";
 import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
@@ -63,7 +63,7 @@ export interface ServerDeps {
   openBrowser?: OpenBrowser;
   /** How long the settings page `open_settings` starts may sit idle before it shuts down. */
   settingsIdleMs?: number;
-  /** How long `generate_image` and `get_job` wait for a Job before returning its id; defaults to two minutes. */
+  /** How long `generate_image`, `generate_video` and `get_job` wait for a Job before returning its id; defaults to two minutes. */
   waitLimitMs?: number;
   /** How often asynchronous Protocols poll their Provider; defaults to three seconds. */
   pollIntervalMs?: number;
@@ -576,9 +576,16 @@ function mismatchText(mismatch: string | undefined, docsUrl: string): string {
 
 const jobStatusSchema = z
   .enum(["completed", "running"])
-  .describe('"running" when the Job outlasted the wait limit and continues in the background; call `get_job` with its `job_id`.');
+  .describe('"running" when the Job outlasted the wait limit, or `wait` was false, and continues in the background; call `get_job` with its `job_id`.');
 
-/** The fields `generate_image` and `get_job` share. */
+const waitSchema = z
+  .boolean()
+  .default(true)
+  .describe(
+    "false: start the Job and return its `job_id` at once; it runs in the background, and `get_job` collects it. Defaults to true: wait for the Job, up to two minutes.",
+  );
+
+/** The fields `generate_image`, `generate_video` and `get_job` share. */
 function jobOutput(job: JobState) {
   return {
     job_id: job.id,
@@ -593,7 +600,7 @@ function jobOutput(job: JobState) {
 }
 
 function jobText(job: JobState & { status: "running" }): string {
-  return `Job ${job.id} on ${job.model} is still running and continues in the background. Call \`get_job\` with job_id "${job.id}" to wait for it again and get the files.`;
+  return `Job ${job.id} on ${job.model} is still running and continues in the background. Call \`get_job\` with job_id "${job.id}" to wait for it and get the files.`;
 }
 
 function toolError(text: string) {
@@ -625,7 +632,8 @@ async function failureReason(error: unknown, hint: Hint | undefined): Promise<st
 /** A Job checked and ready to start, and how to report it: shared by the single-Job tools and `generate_comparison`. */
 interface PreparedJob {
   model: Model;
-  start(comparison?: string): Promise<JobState>;
+  /** Starts the Job; with `wait` false, returns it running at once. */
+  start(how?: StartOptions & { comparison?: string }): Promise<JobState>;
   report(job: JobState): { output: Record<string, unknown>; text: string };
   /** The Model's docs link, Option Statuses and Parameter Guide, for a failed Job's error (ADR 0010, ADR 0011). */
   hint: Hint;
@@ -753,7 +761,8 @@ export function createServer(deps: ServerDeps): McpServer {
     const name = checkedName(args.name);
     return {
       model,
-      start: (comparison) => jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }),
+      start: ({ comparison, wait } = {}) =>
+        jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
         const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
@@ -789,8 +798,8 @@ export function createServer(deps: ServerDeps): McpServer {
     const name = checkedName(args.name);
     return {
       model,
-      start: (comparison) =>
-        jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }),
+      start: ({ comparison, wait } = {}) =>
+        jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
         const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
@@ -804,12 +813,12 @@ export function createServer(deps: ServerDeps): McpServer {
     };
   };
 
-  /** Runs one prepared Job on its own, as `generate_image` and `generate_video` do. */
-  const runSingle = async (prepare: () => Promise<PreparedJob>) => {
+  /** Runs one prepared Job on its own, as `generate_image` and `generate_video` do; with `wait` false, in the background. */
+  const runSingle = async (wait: boolean, prepare: () => Promise<PreparedJob>) => {
     let prepared: PreparedJob | undefined;
     try {
       prepared = await prepare();
-      const { output, text } = prepared.report(await prepared.start());
+      const { output, text } = prepared.report(await prepared.start({ wait }));
       return { content: [{ type: "text" as const, text }], structuredContent: output };
     } catch (error) {
       return failure(error, prepared?.hint);
@@ -820,7 +829,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "generate_image",
     {
       description:
-        "Generate images from a text prompt with one of the User's configured Models. Saves the images locally and returns their file paths.",
+        "Generate images from a text prompt with one of the User's configured Models. Saves the images locally and returns their file paths. To make several images at once with different prompts, Models or options, start each Job with `wait: false`, then collect each with `get_job`: they run at the same time, so the whole takes about as long as the slowest.",
       // Strict, so a parameter that no longer exists (`aspect_ratio`, ADR 0010) is refused by name, not ignored.
       inputSchema: z.strictObject({
         prompt: z.string().min(1).describe("Sent to the Model verbatim."),
@@ -849,17 +858,18 @@ export function createServer(deps: ServerDeps): McpServer {
           .describe(
             "The Model's own request fields, passed through untouched, e.g. { \"size\": \"2048x1152\", \"quality\": \"high\" } for OpenAI: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt, reference image fields and response format are litevision's.",
           ),
+        wait: waitSchema,
       }),
       outputSchema: imageJobShape,
     },
-    async ({ model: alias, ...args }) => runSingle(async () => prepareImage(resolveModel(await loadConfig(deps.dirs), alias), args)),
+    async ({ model: alias, wait, ...args }) => runSingle(wait, async () => prepareImage(resolveModel(await loadConfig(deps.dirs), alias), args)),
   );
 
   server.registerTool(
     "generate_video",
     {
       description:
-        "Generate one video from a text prompt with one of the User's configured video Models, optionally from a first and last frame or reference images. Saves the video locally and returns its file path. Videos often take minutes: the Job then keeps running in the background.",
+        "Generate one video from a text prompt with one of the User's configured video Models, optionally from a first and last frame or reference images. Saves the video locally and returns its file path. Videos often take minutes: the Job then keeps running in the background. To make several videos at once, start each Job with `wait: false`, then collect each with `get_job`: they run at the same time.",
       inputSchema: z.strictObject({
         prompt: z.string().min(1).describe("Sent to the Model verbatim. Describe motion and camera movement, not only the scene."),
         model: z.string().optional().describe("Alias of the video Model to use. Omit to use the default video Model."),
@@ -881,10 +891,11 @@ export function createServer(deps: ServerDeps): McpServer {
           .describe(
             "The Model's own request fields, passed through untouched, e.g. { \"resolution\": \"1080P\", \"ratio\": \"9:16\", \"seconds\": \"10\" } for Wan 2.7: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt and media fields are litevision's.",
           ),
+        wait: waitSchema,
       }),
       outputSchema: videoJobShape,
     },
-    async ({ model: alias, ...args }) => runSingle(async () => prepareVideo(resolveModel(await loadConfig(deps.dirs), alias, "video"), args)),
+    async ({ model: alias, wait, ...args }) => runSingle(wait, async () => prepareVideo(resolveModel(await loadConfig(deps.dirs), alias, "video"), args)),
   );
 
   server.registerTool(
@@ -967,7 +978,7 @@ export function createServer(deps: ServerDeps): McpServer {
       }
 
       const comparisonId = randomUUID();
-      const settled = await Promise.allSettled(prepared.map((job) => job.start(comparisonId)));
+      const settled = await Promise.allSettled(prepared.map((job) => job.start({ comparison: comparisonId })));
       const results = await Promise.all(
         settled.map(async (outcome, index) => {
           const job = prepared[index]!;
@@ -998,7 +1009,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "get_job",
     {
       description:
-        "Get a Job's status, waiting up to two minutes while it runs; once it has completed, the paths of its saved images or video. Use it when `generate_image`, `generate_video` or `generate_comparison` returned a Job that is still running.",
+        "Get a Job's status, waiting up to two minutes while it runs; once it has completed, the paths of its saved images or video. Use it when `generate_image`, `generate_video` or `generate_comparison` returned a Job that is still running, as they do at once with `wait: false`.",
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `generate_comparison` returned."),
       },

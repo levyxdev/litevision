@@ -559,6 +559,18 @@ describe("generate_video with the together Protocol", () => {
     expect(finished.files[0]).toEndWith(".mp4");
   });
 
+  test("with wait: false, the video Job returns running at once and get_job collects it", async () => {
+    let done = false;
+    const status: Route = (request) => recorded(done ? "together/video-completed.json" : "together/video-submitted.json")(request);
+    harness = await startHarness({ ...togetherSetup({ [videoStatusUrl]: status }), waitLimitMs: 60_000 });
+    const started = ok(await video({ wait: false }));
+    expect(started).toMatchObject({ status: "running", files: [] });
+
+    done = true;
+    const finished = ok(await call("get_job", { job_id: started.job_id }));
+    expect(finished).toMatchObject({ status: "completed", observed: [{ width: 1920, height: 1080, seconds: 5 }] });
+  });
+
   test("a video shorter than requested is reported as a mismatch, and only its length option is Ignored", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1920, 1080, 2) }));
     const output = ok(await video({ provider_options: { seconds: "5", ratio: "16:9" } }));

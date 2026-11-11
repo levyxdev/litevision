@@ -25,6 +25,10 @@ litevision translates nothing. The size, resolution, quality and length go in `p
 
 Leave `n` at 1 unless the User wants several to choose from. Images from one Job differ only by chance; to explore different readings of a request, propose a Comparison instead.
 
+## Start several Jobs at once
+
+Tool calls often run one after another, even when sent together, so each waited-for `generate_image` or `generate_video` Job waits for the one before. When the User wants several separate results, such as different prompts, Models or options, start each Job with `wait: false`: it returns the `job_id` at once and the Job runs in the background. Then call `get_job` for each one; together they take about as long as the slowest.
+
 ## Name the files
 
 Pass `name` when the request says what a result is for or who it shows, in the User's own words and language: `name: "张三"` for Zhang San's ID photo saves `张三.png`. litevision adds `-1`, `-2` for several results and the next free number when the name is taken. Without it, files are named after the time the Job started. In a Comparison, give each variant its own `name` when the variants are for different things.
