@@ -288,3 +288,27 @@ describe("saved file names", () => {
     expect(schema.name!.description).toContain("any language");
   });
 });
+
+describe("reference image order", () => {
+  test("every generating tool says references are sent in the order given, as image 1, image 2, …", async () => {
+    harness = await startHarness();
+    const { tools } = await harness.client.listTools();
+    for (const name of ["generate_image", "generate_video", "generate_comparison"]) {
+      const schema = tools.find((tool) => tool.name === name)!.inputSchema.properties as Record<string, { description: string }>;
+      const references = schema.references!.description;
+      expect(references).toContain("in the order given");
+      expect(references).toContain("image 1, image 2");
+    }
+  });
+
+  test("the image tools say FLUX.1 Kontext takes only the first; generate_video says its frames are not among them", async () => {
+    harness = await startHarness();
+    const { tools } = await harness.client.listTools();
+    const references = (name: string) =>
+      (tools.find((tool) => tool.name === name)!.inputSchema.properties as Record<string, { description: string }>).references!.description;
+    expect(references("generate_image")).toContain("FLUX.1 Kontext on Together takes only the first");
+    expect(references("generate_comparison")).toContain("FLUX.1 Kontext on Together takes only the first");
+    expect(references("generate_video")).not.toContain("FLUX.1 Kontext");
+    expect(references("generate_video")).toContain("`first_frame` and `last_frame` are not among them");
+  });
+});

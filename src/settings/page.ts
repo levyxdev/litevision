@@ -1,5 +1,6 @@
 import { modelNotesMaxLength } from "../config.ts";
 import { ratingReasonMaxLength } from "../history.ts";
+import { suggestedAlias } from "./suggested-alias.ts";
 
 /**
  * The settings page: one self-contained HTML document (no external assets) talking to the settings JSON API.
@@ -180,6 +181,7 @@ let protocols = [];
 let providerIds = [];
 const notesMax = ${modelNotesMaxLength};
 const reasonMax = ${ratingReasonMaxLength};
+const suggestedAlias = ${suggestedAlias.toString()};
 
 async function api(method, path, body) {
   const init = { method, headers: { "x-litevision-token": token } };
@@ -519,12 +521,20 @@ function setUpAddModelForm() {
       + ". Pick one in the Model id field, or type your own.";
   };
 
+  // Until the User types their own Alias, suggest one from the Provider id and the model id.
+  let aliasEdited = false;
+  alias.oninput = () => (aliasEdited = alias.value !== "");
+  const refreshAliasSuggestion = () => {
+    if (!aliasEdited) alias.value = suggestedAlias(provider.value, modelId.value);
+  };
+
   // Suggest the Protocol a preset Provider's Models usually speak; the User can still change it.
   provider.onchange = () => {
     const suggested = presets.find((p) => p.id === provider.value);
     if (suggested && protocols.includes(suggested.protocol)) protocol.value = suggested.protocol;
     forgetModelIds();
     fetchResult.textContent = "";
+    refreshAliasSuggestion();
   };
   protocol.onchange = forgetModelIds;
   modality.onchange = () => showModelIds();
@@ -547,16 +557,13 @@ function setUpAddModelForm() {
     }
   });
 
-  // Until the User types their own Alias, suggest the model id.
-  let aliasEdited = false;
-  alias.oninput = () => (aliasEdited = alias.value !== "");
   modelId.oninput = () => {
     const known = knownModalities[modelId.value.trim()];
     if (known && known !== modality.value) {
       modality.value = known;
       showModelIds();
     }
-    if (!aliasEdited) alias.value = modelId.value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 64);
+    refreshAliasSuggestion();
   };
 
   const form = document.getElementById("add-model");

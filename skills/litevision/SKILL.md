@@ -13,7 +13,7 @@ Drawn from the Model makers' own prompting guides (Sources, below).
 - **Describe the scene in sentences**, most important first: the subject, the setting, the composition (framing, camera angle), the lighting, the style or medium. Sentences carry relationships a keyword list loses: who holds what, what stands behind what, where the light comes from [Google, FLUX, Seedream, OpenAI].
 - **Exact counts and positions**: "three lemons in a row on the left half, a knife lying diagonally at the bottom right", rather than "some lemons".
 - **Say what should be there**: "an empty, deserted street" rather than "no cars". FLUX has no negative prompt at all [Google, FLUX].
-- **With reference images**, name each by position ("image 1", "image 2") and say what it is for. Say what changes, then list what must stay unchanged (identity, pose, layout, lighting, text): "Change only the jacket to red leather; keep the face, pose, background and lighting of image 1 exactly as they are" [OpenAI, Google, FLUX].
+- **With reference images**, name each by position ("image 1", "image 2") and say what it is for: litevision sends `references` in the order given and has no field for an image's role, so the prompt carries it. "Image 1 is the person; image 2 is only a layout guide, take nothing else from it." Say what changes, then list what must stay unchanged (identity, pose, layout, lighting, text): "Change only the jacket to red leather; keep the face, pose, background and lighting of image 1 exactly as they are" [OpenAI, Google, FLUX].
 
 ## Set the Model's own parameters
 

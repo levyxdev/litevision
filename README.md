@@ -45,7 +45,7 @@ npx -y litevision settings
 The page listens on `127.0.0.1` only, behind a one-time token, and shuts down after a few idle minutes. On it you:
 
 1. **Add a Provider**: a name, a base URL, and its API key (the Credential). "Test connection" checks the key.
-2. **Add Models**: an Alias your Agent will use (e.g. `gpt-image-cheap`), the Provider's model id, the Protocol it speaks, and whether it makes images or videos (filled in for you when the Provider's model list says):
+2. **Add Models**: an Alias your Agent will use (e.g. `gpt-image-cheap`; suggested from the Provider id and model id, such as `together-google-flash-image-3.1`), the Provider's model id, the Protocol it speaks, and whether it makes images or videos (filled in for you when the Provider's model list says):
 
    | Protocol | For |
    | --- | --- |

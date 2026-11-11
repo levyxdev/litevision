@@ -585,6 +585,21 @@ const waitSchema = z
     "false: start the Job and return its `job_id` at once; it runs in the background, and `get_job` collects it. Defaults to true: wait for the Job, up to two minutes.",
   );
 
+/**
+ * `references` is a flat list with no role per image: the prompt says what each is for, and litevision sends the prompt
+ * verbatim (ADR 0010). So the order is the one thing litevision guarantees about them.
+ */
+function referencesSchema(purpose: string, caveat: string) {
+  return z
+    .array(z.string().min(1))
+    .default([])
+    .describe(
+      `Local paths of reference images ${purpose}. Relative paths resolve against litevision's working directory. Sent to the Model in the order given, so the prompt can call them image 1, image 2, … and say what each is for. ${caveat}`,
+    );
+}
+
+const kontextTakesFirst = "FLUX.1 Kontext on Together takes only the first.";
+
 /** The fields `generate_image`, `generate_video` and `get_job` share. */
 function jobOutput(job: JobState) {
   return {
@@ -840,10 +855,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .positive()
           .default(1)
           .describe("How many images this Job brings back: sent as the Model's own count field, or as that many requests where it has none."),
-        references: z
-          .array(z.string().min(1))
-          .default([])
-          .describe("Local paths of reference images to edit or draw on. Relative paths resolve against litevision's working directory."),
+        references: referencesSchema("to edit or draw on", kontextTakesFirst),
         output_path: z
           .string()
           .min(1)
@@ -875,10 +887,7 @@ export function createServer(deps: ServerDeps): McpServer {
         model: z.string().optional().describe("Alias of the video Model to use. Omit to use the default video Model."),
         first_frame: z.string().min(1).optional().describe("Local path of an image the video starts from."),
         last_frame: z.string().min(1).optional().describe("Local path of an image the video ends on."),
-        references: z
-          .array(z.string().min(1))
-          .default([])
-          .describe("Local paths of reference images for characters, objects or style. Relative paths resolve against litevision's working directory."),
+        references: referencesSchema("for characters, objects or style", "`first_frame` and `last_frame` are not among them."),
         output_path: z
           .string()
           .min(1)
@@ -928,10 +937,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .enum(modalities)
           .optional()
           .describe("image or video. Omit to take it from the variants' Models; when no variant names one, image."),
-        references: z
-          .array(z.string().min(1))
-          .default([])
-          .describe("Local paths of reference images every Job gets. Relative paths resolve against litevision's working directory."),
+        references: referencesSchema("every Job gets", kontextTakesFirst),
         output_path: z
           .string()
           .min(1)

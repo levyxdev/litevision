@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fixture } from "./recorded-http.ts";
+import { renderPage } from "../src/settings/page.ts";
+import { suggestedAlias } from "../src/settings/suggested-alias.ts";
 import { startSettingsHarness, type SettingsHarness, type SettingsHarnessOptions } from "./settings-harness.ts";
 
 let harness: SettingsHarness | undefined;
@@ -411,5 +413,27 @@ describe("Option Statuses (ADR 0011)", () => {
     const h = await withHistory();
     expect((await h.send("GET", "/")).text).toContain("Option Statuses");
     for (const method of ["POST", "PATCH", "PUT", "DELETE"]) expect((await h.send(method, "/api/option-statuses", { body: {} })).status).toBe(404);
+  });
+});
+
+describe("the Alias a new Model is prefilled with", () => {
+  test("starts with the Provider id, so the same model on two Providers gets two Aliases", () => {
+    expect(suggestedAlias("together", "google/flash-image-3.1")).toBe("together-google-flash-image-3.1");
+    expect(suggestedAlias("gemini", "gemini-3.1-flash-image")).toBe("gemini-3.1-flash-image");
+    expect(suggestedAlias("openrouter", "google/gemini-3.1-flash-image")).toBe("openrouter-google-gemini-3.1-flash-image");
+  });
+
+  test("is a valid Alias, and empty until there is a model id", () => {
+    expect(suggestedAlias("together", "")).toBe("");
+    expect(suggestedAlias("", "gpt-image-1")).toBe("gpt-image-1");
+    expect(suggestedAlias("relay", " /black-forest-labs/FLUX.1 [pro] ")).toBe("relay-black-forest-labs-FLUX.1-pro");
+    expect(suggestedAlias("relay", "x".repeat(80))).toBe("relay-" + "x".repeat(58));
+  });
+
+  test("is what the settings page fills in", () => {
+    const script = /<script nonce="n">([\s\S]*)<\/script>/.exec(renderPage("n"))![1]!;
+    // The page's script must still parse with the suggestion embedded in it.
+    expect(() => new Function(script)).not.toThrow();
+    expect(script).toContain("suggestedAlias(provider.value, modelId.value)");
   });
 });
