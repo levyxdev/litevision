@@ -42,6 +42,7 @@ import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
 import { byStatus, modelOptionStatuses, optionStatusNames, type OptionStatus, type OptionStatusName } from "./option-status.ts";
+import { showSourceJobs, type ShownSourceJob } from "./source-jobs.ts";
 import { mergeOptions } from "./standing-options.ts";
 import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
 import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
@@ -99,7 +100,23 @@ const optionStatusSchema = z.object({
   reason: z.string().optional().describe("Ignored: how the result differed from the request. Rejected: what the Provider said."),
 });
 
+/** A Job's Source Jobs as `get_job` and the Ratings in `list_models` give them. */
+const sourceJobsSchema = z
+  .array(
+    z.object({
+      job_id: z.string(),
+      result: z.number().describe("Which result of the Source Job, from 1."),
+      model: z.string().optional().describe("Alias of the Model that ran the Source Job."),
+      file: z.string().describe("Where the Source Job saved that result."),
+      deleted: z.boolean().describe("True when the User has deleted or moved that file since. Not an error: the Source Job still stands."),
+      reference: z.string().describe("This Job's reference image or video frame that had the result's content."),
+    }),
+  )
+  .optional()
+  .describe("Source Jobs: earlier Jobs whose results were among this Job's reference images or video frames, found by content. Absent when there are none.");
+
 /** The structured form of one Model in `list_models`. */
+
 const listedModelSchema = z.object({
   alias: z.string(),
   provider: z.string(),
@@ -163,11 +180,12 @@ const listedModelSchema = z.object({
         reason: z.string().describe("The User's reason, in their words."),
         rated_at: z.string(),
         prompt: z.string().describe("The start of the Job's prompt."),
+        source_jobs: sourceJobsSchema,
       }),
     )
     .optional()
     .describe(
-      `Only with \`model\`: the Model's ${recentRatingsShown} most recent Ratings, newest first. When they say something the Model Notes do not, propose new Model Notes to the User.`,
+      `Only with \`model\`: the Model's ${recentRatingsShown} most recent Ratings, newest first, each with its Job's Source Jobs, so a chain of edits reads in order. When they say something the Model Notes do not, propose new Model Notes to the User.`,
     ),
   recent_picks: z
     .array(
@@ -255,7 +273,10 @@ async function listedModel(
   if (!detailed) text += ` ${output.parameters}`;
   if (detailed) {
     text += `\n${optionStatusesText(statuses)}`;
-    const ratings = recentRatings(ratedJobs, model, recentRatingsShown);
+    const byId = new Map(ratedJobs.map(({ job }) => [job.id, job]));
+    const ratings: RecentRating[] = await Promise.all(
+      recentRatings(ratedJobs, model, recentRatingsShown).map(async (rated) => ({ ...rated, sources: await showSourceJobs(rated.job, byId) })),
+    );
     output.recent_ratings = ratings.map(recentRatingOutput);
     text += ratings.length === 0 ? "\nRecent Ratings: none recorded yet." : "\nRecent Ratings, newest first:";
     for (const rated of ratings) text += `\n- ${describeRecentRating(rated)}`;
@@ -302,6 +323,30 @@ function noGuide(docsUrl: string): string {
   return `litevision has no Parameter Guide for this model id; read ${docsUrl} before setting provider_options.`;
 }
 
+/** The `source_jobs` field of a Job's output, left out when it has none. */
+function sourceJobsField(sources: ShownSourceJob[]) {
+  if (sources.length === 0) return {};
+  return {
+    source_jobs: sources.map((source) => ({
+      job_id: source.jobId,
+      result: source.result,
+      ...(source.model === undefined ? {} : { model: source.model }),
+      file: source.file,
+      deleted: source.deleted,
+      reference: source.reference,
+    })),
+  };
+}
+
+/** A Job's Source Jobs in words, e.g. "Source Jobs: Job 1f2e…, result 1 on gpt-image (/out/fox.png, deleted)"; empty when it has none. */
+function sourceJobsText(sources: ShownSourceJob[]): string {
+  const described = sources.map(
+    (source) =>
+      `Job ${source.jobId}, result ${source.result}${source.model === undefined ? "" : ` on ${source.model}`} (${source.file}${source.deleted ? ", deleted" : ""})`,
+  );
+  return described.length === 0 ? "" : `Source Jobs: ${described.join("; ")}`;
+}
+
 /** A Rating as `rate_job` and `list_models` report it. */
 function ratingOutput(rating: RatingRecord) {
   return {
@@ -318,12 +363,16 @@ function ratingSubject(rating: RatingRecord): string {
   return rating.result === undefined ? `Job ${rating.jobId}` : `result ${rating.result} of Job ${rating.jobId}`;
 }
 
-function recentRatingOutput({ rating, job }: RatingWithJob) {
-  return { ...ratingOutput(rating), prompt: promptStart(job.prompt) };
+/** A recent Rating with its Job's Source Jobs, so a chain of edits reads in order. */
+type RecentRating = RatingWithJob & { sources: ShownSourceJob[] };
+
+function recentRatingOutput({ rating, job, sources }: RecentRating) {
+  return { ...ratingOutput(rating), prompt: promptStart(job.prompt), ...sourceJobsField(sources) };
 }
 
-function describeRecentRating({ rating, job }: RatingWithJob): string {
-  return `${rating.verdict} on ${ratingSubject(rating)} (${JSON.stringify(promptStart(job.prompt))}): ${rating.reason}`;
+function describeRecentRating({ rating, job, sources }: RecentRating): string {
+  const after = sources.length === 0 ? "" : ` [${sourceJobsText(sources)}]`;
+  return `${rating.verdict} on ${ratingSubject(rating)} (${JSON.stringify(promptStart(job.prompt))})${after}: ${rating.reason}`;
 }
 
 /** A Pick as `pick_result` reports it. */
@@ -966,20 +1015,25 @@ export function createServer(deps: ServerDeps): McpServer {
         requested_format: requestedFormatSchema.optional(),
         observed: observedSchema,
         mismatch: mismatchSchema,
+        source_jobs: sourceJobsSchema,
       },
     },
     async ({ job_id }) => {
       try {
         const job = await jobs.get(job_id);
+        const history = await readJobs(deps.dirs);
+        const record = history.find((candidate) => candidate.id === job_id);
+        const sources = record === undefined ? [] : await showSourceJobs(record, new Map(history.map((known) => [known.id, known])));
         const docsUrl =
           job.status === "completed" && job.mismatch !== undefined
             ? ((await jobDocs(infoDeps, job_id))?.known.docsUrl ?? "the Model's docs link in `list_models`")
             : "";
         const text =
           job.status === "running"
-            ? jobText(job)
-            : `Job ${job.id} completed: saved ${job.files.length} file(s) from ${job.model}.${observedText(job.observed)}${mismatchText(job.mismatch, docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}\n${job.files.join("\n")}`;
-        return { content: [{ type: "text", text }], structuredContent: jobOutput(job) };
+            ? `${jobText(job)}${sources.length === 0 ? "" : ` ${sourceJobsText(sources)}.`}`
+            : `Job ${job.id} completed: saved ${job.files.length} file(s) from ${job.model}.${observedText(job.observed)}${mismatchText(job.mismatch, docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}${sources.length === 0 ? "" : ` ${sourceJobsText(sources)}.`}\n${job.files.join("\n")}`;
+        const output = { ...jobOutput(job), ...sourceJobsField(sources) };
+        return { content: [{ type: "text", text }], structuredContent: output };
       } catch (error) {
         // A video often outlasts `generate_video`'s wait, so its rejection may first reach the Agent here.
         return failure(error, async (kind) => {

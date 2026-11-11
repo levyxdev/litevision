@@ -56,9 +56,13 @@ export interface JobRecord {
   parameters: JobParameters;
   /** The id of the Comparison the Job was started in (ADR 0009); absent for a Job started on its own. */
   comparison?: string;
+  /** The Job's Source Jobs, found when it started; absent when it has none, and on Jobs recorded before. */
+  sourceJobs?: SourceJob[];
   /** So far, while the Job is running. */
   durationMs: number;
   files: string[];
+  /** The content hash of each saved file, in the order of `files` (`sha256:` and the hex digest of its bytes); absent on Jobs recorded before. */
+  hashes?: string[];
   outcome: "running" | "completed" | "failed";
   /** While running: what the Protocol needs to pick the Job back up after a restart; absent for synchronous Protocols. */
   resume?: ResumeHandle;
@@ -72,6 +76,20 @@ export interface JobRecord {
   mismatch?: string;
   /** `options`: for a rejected option, the `provider_options` keys the Provider's answer named, where litevision could tell. */
   error?: { kind: ProviderErrorKind; message: string; options?: string[] };
+}
+
+/**
+ * One Source Job of a Job: an earlier Job whose result had the same content as one of the Job's reference images when
+ * the Job started. The result's file may have been deleted or moved since; the reference may be a copy of it.
+ */
+export interface SourceJob {
+  jobId: string;
+  /** Which result of the Source Job, from 1 in the order of its files. */
+  result: number;
+  /** Where the Source Job saved that result. */
+  file: string;
+  /** The reference image or video frame of this Job that had its content: absolute path, as in `parameters`. */
+  reference: string;
 }
 
 export const verdicts = ["good", "bad"] as const;

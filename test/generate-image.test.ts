@@ -155,7 +155,15 @@ describe("generate_image", () => {
     // Append-only: one record when the Job starts, one when it ends.
     expect(await readHistoryLines(harness)).toEqual([
       { ...job, durationMs: 0, files: [], outcome: "running" },
-      { ...job, durationMs: 2500, files: output.files, outcome: "completed", observed: [{ width: 1, height: 1, format: "png" }] },
+      {
+        ...job,
+        durationMs: 2500,
+        files: output.files,
+        // The SHA-256 of the fixture's 1×1 PNG, so a later Job that uses it as a reference finds this Job.
+        hashes: ["sha256:c414cd0e204de974f73753c7e28d7638e7b3691bb8b1a2bab6b25bb7fed7ce77"],
+        outcome: "completed",
+        observed: [{ width: 1, height: 1, format: "png" }],
+      },
     ]);
   });
 

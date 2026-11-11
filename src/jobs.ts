@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { ConfigError, loadConfig, needsSettings, requireCredential, type ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 import { fileStem, saveNamed, type FileToSave } from "./file-names.ts";
-import { appendHistory, readJob, type JobRecord } from "./history.ts";
+import { appendHistory, readJob, readJobs, type JobRecord, type SourceJob } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
 import type { Requested } from "./protocols/parameter-guide.ts";
@@ -12,6 +12,7 @@ import type { NormalisedRequest, NormalisedVideoRequest } from "./protocols/requ
 import { providerError, providerLabel } from "./protocols/errors.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
 import { checkResult, mismatchOf } from "./result-check.ts";
+import { contentHash, findSourceJobs } from "./source-jobs.ts";
 import {
   ProviderError,
   type GeneratedFile,
@@ -20,6 +21,7 @@ import {
   type JobVideo,
   type ProtocolAdapter,
   type ProviderErrorKind,
+  type ReferenceImage,
 } from "./protocols/protocol.ts";
 
 /** How long `generate_image` and `get_job` wait for a Job before saying it is still running. */
@@ -97,9 +99,9 @@ class JobAbandoned extends Error {
 }
 
 /** What a Job's records share; the rest of a record says where the Job stands. */
-type JobBase = Omit<JobRecord, "durationMs" | "files" | "outcome" | "resume" | "cost" | "shortfall" | "observed" | "mismatch" | "error">;
+type JobBase = Omit<JobRecord, "durationMs" | "files" | "hashes" | "outcome" | "resume" | "cost" | "shortfall" | "observed" | "mismatch" | "error">;
 
-type JobProgress = Partial<Pick<JobRecord, "files" | "resume" | "cost" | "shortfall" | "observed" | "mismatch" | "error">>;
+type JobProgress = Partial<Pick<JobRecord, "files" | "hashes" | "resume" | "cost" | "shortfall" | "observed" | "mismatch" | "error">>;
 
 const lostMessage = "litevision stopped before this Job finished, so its result is lost; start it again.";
 
@@ -128,7 +130,8 @@ export class JobRunner {
   /** Starts an image Job and waits for it up to the wait limit. */
   async start(spec: JobSpec): Promise<JobState> {
     const { request } = spec.normalised;
-    const base = this.baseFor(spec, "image", request.prompt, {
+    const sourceJobs = await this.sourceJobsOf(request.references);
+    const base = this.baseFor(spec, "image", request.prompt, sourceJobs, {
       n: request.n,
       requested: spec.normalised.requested,
       references: request.references.map((reference) => reference.path),
@@ -154,7 +157,9 @@ export class JobRunner {
     if (submitVideo === undefined) {
       throw new ConfigError(`Model "${spec.model.alias}" uses Protocol "${spec.model.protocol}", which litevision cannot make videos with.`);
     }
-    const base = this.baseFor(spec, "video", request.prompt, {
+    const frames = [request.firstFrame, request.lastFrame].filter((frame) => frame !== undefined);
+    const sourceJobs = await this.sourceJobsOf([...frames, ...request.references]);
+    const base = this.baseFor(spec, "video", request.prompt, sourceJobs, {
       n: 1,
       requested: spec.normalised.requested,
       references: request.references.map((reference) => reference.path),
@@ -174,7 +179,12 @@ export class JobRunner {
     return this.waitFor(base.model, base.id, this.register(base.id, job));
   }
 
-  private baseFor(spec: SpecBase, modality: JobBase["modality"], prompt: string, parameters: JobBase["parameters"]): JobBase {
+  /** A new Job's Source Jobs: the earlier Jobs that saved what its reference images and video frames hold now. */
+  private async sourceJobsOf(references: ReferenceImage[]): Promise<SourceJob[]> {
+    return references.length === 0 ? [] : findSourceJobs(await readJobs(this.deps.dirs), references);
+  }
+
+  private baseFor(spec: SpecBase, modality: JobBase["modality"], prompt: string, sourceJobs: SourceJob[], parameters: JobBase["parameters"]): JobBase {
     return {
       type: "job",
       id: randomUUID(),
@@ -187,6 +197,7 @@ export class JobRunner {
       prompt,
       parameters,
       ...(spec.comparison === undefined ? {} : { comparison: spec.comparison }),
+      ...(sourceJobs.length === 0 ? {} : { sourceJobs }),
     };
   }
 
@@ -313,6 +324,8 @@ export class JobRunner {
         throw fetched.failures[0] ?? providerError("other", base.provider, reasons[0] ?? "it returned nothing.");
       }
       const files = await this.save(base, fetched.downloaded);
+      // Recorded with the files, so a later Job that uses one, or a copy of it, as a reference finds this Job.
+      const hashes = fetched.downloaded.map((file) => contentHash(file.bytes));
       const observed = fetched.facts;
       const mismatch = mismatchOf(checkResult(base.parameters, observed));
       const shortfall =
@@ -321,7 +334,7 @@ export class JobRunner {
           : safe(
               `Got ${files.length} of ${n} images from ${providerLabel(base.provider)}.${reasons.length === 0 ? "" : ` ${reasons.join(" ")}`}`,
             );
-      await this.append(base, "completed", { files, shortfall, cost: result.cost, observed, mismatch });
+      await this.append(base, "completed", { files, hashes, shortfall, cost: result.cost, observed, mismatch });
       return {
         id: base.id,
         files,
@@ -370,8 +383,21 @@ export class JobRunner {
 }
 
 function baseOf(record: JobRecord): JobBase {
-  const { type, id, createdAt, model, provider, protocol, modelId, modality, prompt, parameters, comparison } = record;
-  return { type, id, createdAt, model, provider, protocol, modelId, ...(modality === undefined ? {} : { modality }), prompt, parameters, ...(comparison === undefined ? {} : { comparison }) };
+  const { type, id, createdAt, model, provider, protocol, modelId, modality, prompt, parameters, comparison, sourceJobs } = record;
+  return {
+    type,
+    id,
+    createdAt,
+    model,
+    provider,
+    protocol,
+    modelId,
+    ...(modality === undefined ? {} : { modality }),
+    prompt,
+    parameters,
+    ...(comparison === undefined ? {} : { comparison }),
+    ...(sourceJobs === undefined ? {} : { sourceJobs }),
+  };
 }
 
 function targetOf(spec: SpecBase) {

@@ -61,7 +61,7 @@ The result the User chose within a Comparison. A relative preference, not a Rati
 _Avoid_: Choice, winner, vote
 
 **Source Job**:
-An earlier Job whose result is one of a Job's reference images. A Job may have several Source Jobs, or none.
+An earlier Job whose result is one of a Job's reference images, a video's first or last frame included. litevision finds it by the content of the image, so a copy found anywhere counts. A Job may have several Source Jobs, or none.
 _Avoid_: Parent, base, derived-from
 
 **Option Status**:
