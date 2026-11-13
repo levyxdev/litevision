@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "litevision": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "litevision@latest"
+      ],
+      "env": {}
+    }
+  }
+}
