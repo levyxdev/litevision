@@ -89,8 +89,7 @@ Fields checked together, such as `width` and `height`, share one; a nested field
 
 | What | Where |
 | --- | --- |
-| Providers, Models (`config.json`) and Credentials (`credentials.json`, mode 600) | `~/.config/litevision/` |
-| Job history (`jobs.jsonl`) and the cached parameter descriptions Providers give (`capabilities.json`) | `~/.local/share/litevision/` |
+| Providers, Models (`config.json`), Credentials (`credentials.json`, mode 600), Job history (`jobs.jsonl`) and the cached parameter descriptions Providers give (`capabilities.json`) | `~/.litevision/`, or `LITEVISION_HOME` |
 | Generated images and videos, unless the Agent passes `output_path` | `~/litevision/outputs/<date>/` |
 
 A saved file is named after the `name` the Agent passes, in any language, with only the characters a path cannot hold removed, and any image or video extension it ends in (the file gets its own): `张三.png`, or `张三-1.png`, `张三-2.png` for a Job with several results. Without `name` it is named after the time the Job started, e.g. `140500.png`. A name already taken in the folder gets the next free number, `张三-2.png`, `张三-3.png`. The Job history records which files each Job saved, with a hash of each file's content. When a later Job is given one of them, or a copy of it anywhere, as a reference image or video frame, litevision finds the earlier Job by that hash and records it as a Source Job, so a chain of edits and its Ratings can be read in order. It never reads old files again: delete the ones you don't want, and a deleted one is shown as deleted.

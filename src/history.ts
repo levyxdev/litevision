@@ -164,10 +164,11 @@ export class PickError extends Error {
   }
 }
 
-const historyPath = (dirs: Dirs) => join(dirs.data, "jobs.jsonl");
+const historyPath = (dirs: Dirs) => join(dirs.home, "jobs.jsonl");
 
 export async function appendHistory(dirs: Dirs, record: JobRecord | RatingRecord | PickRecord): Promise<void> {
-  await mkdir(dirs.data, { recursive: true });
+  // The folder also holds credentials.json.
+  await mkdir(dirs.home, { recursive: true, mode: 0o700 });
   await appendFile(historyPath(dirs), `${JSON.stringify(record)}\n`);
 }
 

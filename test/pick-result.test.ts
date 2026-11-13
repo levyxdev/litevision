@@ -47,8 +47,8 @@ async function start(lines: Array<Record<string, unknown>>) {
     routes: { "POST https://api.openai.com/v1/images/generations": recorded("openai/generations.json") },
     now: () => clock,
   });
-  await mkdir(harness.dirs.data, { recursive: true });
-  await writeFile(join(harness.dirs.data, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  await mkdir(harness.dirs.home, { recursive: true });
+  await writeFile(join(harness.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
 }
 
 /** Comparison `c1`: Job `a` on gpt-image and Job `b` on dall-e. */

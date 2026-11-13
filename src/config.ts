@@ -79,7 +79,7 @@ async function readJson(path: string): Promise<unknown> {
 }
 
 export async function loadConfig(dirs: Dirs): Promise<Config> {
-  const path = join(dirs.config, "config.json");
+  const path = join(dirs.home, "config.json");
   const parsed = configSchema.safeParse((await readJson(path)) ?? {});
   if (!parsed.success) {
     throw needsSettings(`${path} is invalid: ${z.prettifyError(parsed.error)}`);
@@ -90,7 +90,7 @@ export async function loadConfig(dirs: Dirs): Promise<Config> {
 /** Reads one Provider's Credential. Never include the returned value in anything shown to the Agent. */
 export async function requireCredential(dirs: Dirs, provider: Provider): Promise<string> {
   // Only the shape is validated here, so a malformed file never echoes its contents in an error.
-  const parsed = credentialsSchema.safeParse((await readJson(join(dirs.config, "credentials.json"))) ?? {});
+  const parsed = credentialsSchema.safeParse((await readJson(join(dirs.home, "credentials.json"))) ?? {});
   if (!parsed.success) throw needsSettings("credentials.json is malformed.");
   const credential = parsed.data[provider.id]?.apiKey;
   if (credential === undefined) throw needsSettings(`Provider "${provider.id}" has no Credential saved.`);

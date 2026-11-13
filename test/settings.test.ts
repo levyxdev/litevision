@@ -199,7 +199,7 @@ describe("Providers", () => {
 
   test("makes credentials.json mode 600 even when it already existed with a wider mode", async () => {
     const h = await start({ config: { providers: [openai] }, credentials: {} });
-    await chmod(join(h.dirs.config, "credentials.json"), 0o644);
+    await chmod(join(h.dirs.home, "credentials.json"), 0o644);
 
     await h.send("PATCH", "/api/providers/openai", { body: { credential: apiKey } });
 
@@ -288,11 +288,11 @@ describe("Providers", () => {
 
   test("leaves files alone it cannot read rather than overwriting them", async () => {
     const h = await start();
-    await writeFile(join(h.dirs.config, "config.json"), "{ not json");
+    await writeFile(join(h.dirs.home, "config.json"), "{ not json");
     const response = await h.send("POST", "/api/providers", { body: openai });
     expect(response.status).toBe(409);
     expect(response.json().error).toContain("not valid JSON");
-    expect(await readFile(join(h.dirs.config, "config.json"), "utf8")).toBe("{ not json");
+    expect(await readFile(join(h.dirs.home, "config.json"), "utf8")).toBe("{ not json");
   });
 });
 

@@ -368,9 +368,9 @@ describe("Option Statuses (ADR 0011)", () => {
 
   async function withHistory(): Promise<SettingsHarness> {
     const h = await start({ ...withProviders, config: { ...withProviders.config, models: [gptImage], defaultImageModel: "gpt-image" } });
-    await mkdir(h.dirs.data, { recursive: true });
+    await mkdir(h.dirs.home, { recursive: true });
     const rating = { type: "rating", jobId: "fox", verdict: "bad", reason: "the fur looks fake", ratedAt: "2026-11-04T09:05:00.000Z" };
-    await writeFile(join(h.dirs.data, "jobs.jsonl"), `${JSON.stringify(matched)}\n${JSON.stringify(rating)}\n`);
+    await writeFile(join(h.dirs.home, "jobs.jsonl"), `${JSON.stringify(matched)}\n${JSON.stringify(rating)}\n`);
     return h;
   }
 
@@ -400,8 +400,8 @@ describe("Option Statuses (ADR 0011)", () => {
       { ...matched, parameters: sent },
       { ...slow, outcome: "failed", error: { kind: "rejected_option", message: "x The Provider said: HTTP 400: bad size", options: ["size"] } },
     ];
-    await mkdir(h.dirs.data, { recursive: true });
-    await writeFile(join(h.dirs.data, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    await mkdir(h.dirs.home, { recursive: true });
+    await writeFile(join(h.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
     const statuses = (await h.send("GET", "/api/option-statuses")).json().models["gpt-image"];
     expect(statuses.honoured).toEqual([]);
     expect(statuses.rejected).toEqual([

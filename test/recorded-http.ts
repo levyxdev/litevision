@@ -47,20 +47,19 @@ export interface TempDirsOptions {
   credentials?: unknown;
 }
 
-/** Fresh configuration, data and output directories under one temporary root. */
+/** Fresh home and output directories under one temporary root. */
 export async function makeTempDirs(options: TempDirsOptions = {}): Promise<{ root: string; dirs: Dirs }> {
   const root = await mkdtemp(join(tmpdir(), "litevision-test-"));
   const dirs: Dirs = {
-    config: join(root, "config"),
-    data: join(root, "data"),
+    home: join(root, "home"),
     output: join(root, "outputs"),
   };
-  await mkdir(dirs.config, { recursive: true });
+  await mkdir(dirs.home, { recursive: true });
   if (options.config !== undefined) {
-    await writeFile(join(dirs.config, "config.json"), JSON.stringify(options.config));
+    await writeFile(join(dirs.home, "config.json"), JSON.stringify(options.config));
   }
   if (options.credentials !== undefined) {
-    await writeFile(join(dirs.config, "credentials.json"), JSON.stringify(options.credentials));
+    await writeFile(join(dirs.home, "credentials.json"), JSON.stringify(options.credentials));
   }
   return { root, dirs };
 }

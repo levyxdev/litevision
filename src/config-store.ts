@@ -10,8 +10,8 @@ export type ConfigObject = Record<string, unknown>;
 /** `credentials.json` as stored: Credentials by Provider id. */
 export type CredentialsObject = Record<string, { apiKey: string } & Record<string, unknown>>;
 
-export const configPath = (dirs: Dirs) => join(dirs.config, "config.json");
-export const credentialsPath = (dirs: Dirs) => join(dirs.config, "credentials.json");
+export const configPath = (dirs: Dirs) => join(dirs.home, "config.json");
+export const credentialsPath = (dirs: Dirs) => join(dirs.home, "credentials.json");
 
 export async function readConfigObject(dirs: Dirs): Promise<ConfigObject> {
   const path = configPath(dirs);

@@ -139,7 +139,7 @@ describe("the Provider's own description of a Model (ADR 0004, ADR 0010)", () =>
 
   test("a cache written by an earlier litevision, with capabilities in it, still loads", async () => {
     harness = await startHarness(relaySetup({ [capabilitiesUrl]: reportCapabilities }));
-    await mkdir(harness.dirs.data, { recursive: true });
+    await mkdir(harness.dirs.home, { recursive: true });
     const earlier = {
       "live-test https://relay.example/v1 fox-1": {
         fetchedAt: new Date(clock).toISOString(),
@@ -147,7 +147,7 @@ describe("the Provider's own description of a Model (ADR 0004, ADR 0010)", () =>
         parameterSchema: { type: "object", properties: { cached: { type: "boolean" } } },
       },
     };
-    await writeFile(join(harness.dirs.data, "capabilities.json"), JSON.stringify(earlier));
+    await writeFile(join(harness.dirs.home, "capabilities.json"), JSON.stringify(earlier));
 
     const model = await describeFox();
     expect(model.parameter_schema).toEqual(earlier["live-test https://relay.example/v1 fox-1"].parameterSchema);
@@ -263,7 +263,7 @@ describe("partial results", () => {
 });
 
 describe("the settings page refreshes the Provider's description", () => {
-  const cache = async (harness: SettingsHarness) => JSON.parse(await readFile(join(harness.dirs.data, "capabilities.json"), "utf8"));
+  const cache = async (harness: SettingsHarness) => JSON.parse(await readFile(join(harness.dirs.home, "capabilities.json"), "utf8"));
 
   test("when the User adds a Model", async () => {
     settings = await startSettingsHarness({

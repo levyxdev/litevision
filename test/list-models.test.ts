@@ -156,8 +156,8 @@ describe("list_models with `model`: recent Ratings (ADR 0008)", () => {
       credentials: { openai: { apiKey: "sk-test-0000secret0000" } },
       now: () => clock,
     });
-    await mkdir(harness.dirs.data, { recursive: true });
-    await writeFile(join(harness.dirs.data, "jobs.jsonl"), jobs.map((job) => JSON.stringify(job)).join("\n") + "\n");
+    await mkdir(harness.dirs.home, { recursive: true });
+    await writeFile(join(harness.dirs.home, "jobs.jsonl"), jobs.map((job) => JSON.stringify(job)).join("\n") + "\n");
   }
 
   async function rate(at: string, args: Record<string, unknown>) {

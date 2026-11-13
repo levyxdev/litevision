@@ -64,7 +64,7 @@ const entrySchema = z.object({
 type CacheEntry = z.infer<typeof entrySchema>;
 
 /** Named for what it held before ADR 0010, so earlier caches are still read. */
-const cachePath = (dirs: Dirs) => join(dirs.data, "capabilities.json");
+const cachePath = (dirs: Dirs) => join(dirs.home, "capabilities.json");
 
 /** Keyed by where the Model lives rather than its Alias, which the User may rename. */
 function cacheKey({ model, provider }: ResolvedModel): string {

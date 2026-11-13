@@ -20,7 +20,7 @@ export function textOf(result: ToolResult): string {
 
 /** Every line of `jobs.jsonl`, in order. A Job has several: one when it starts, more as it changes. */
 export async function readHistoryLines(harness: Pick<Harness, "dirs">): Promise<Array<Record<string, unknown>>> {
-  const text = await readFile(join(harness.dirs.data, "jobs.jsonl"), "utf8");
+  const text = await readFile(join(harness.dirs.home, "jobs.jsonl"), "utf8");
   return text.trim().split("\n").map((line) => JSON.parse(line));
 }
 

@@ -1,20 +1,18 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /** Where litevision keeps configuration, Job history and generated files. */
 export interface Dirs {
-  /** Holds `config.json` and `credentials.json`. */
-  config: string;
-  /** Holds `jobs.jsonl`. */
-  data: string;
+  /** Holds `config.json`, `credentials.json`, `jobs.jsonl` and `capabilities.json`. */
+  home: string;
   /** Default output folder; each Job saves under a dated subfolder. */
   output: string;
 }
 
-export function defaultDirs(home = homedir()): Dirs {
+/** `~/.litevision`, or `LITEVISION_HOME` when set, on every system; see docs/adr/0013. */
+export function defaultDirs(home = homedir(), env = process.env): Dirs {
   return {
-    config: join(home, ".config", "litevision"),
-    data: join(home, ".local", "share", "litevision"),
+    home: env.LITEVISION_HOME ? resolve(env.LITEVISION_HOME) : join(home, ".litevision"),
     output: join(home, "litevision", "outputs"),
   };
 }

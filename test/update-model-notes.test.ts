@@ -29,7 +29,7 @@ async function start(models: unknown[], now = () => firstChange): Promise<Harnes
 }
 
 const updateNotes = (args: Record<string, unknown>) => harness!.client.callTool({ name: "update_model_notes", arguments: args });
-const readConfig = async () => JSON.parse(await readFile(join(harness!.dirs.config, "config.json"), "utf8"));
+const readConfig = async () => JSON.parse(await readFile(join(harness!.dirs.home, "config.json"), "utf8"));
 const listedNotes = async (alias: string) => {
   const result = await harness!.client.callTool({ name: "list_models", arguments: {} });
   const { models } = result.structuredContent as { models: Array<{ alias: string; notes: string }> };

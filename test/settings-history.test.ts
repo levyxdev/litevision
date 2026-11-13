@@ -47,8 +47,8 @@ async function start(): Promise<{ h: SettingsHarness; foxFiles: string[] }> {
     jobRecord("cat", "2026-10-30T11:00:00.000Z", { outcome: "running", durationMs: 500 }),
     { type: "rating", jobId: "fox", verdict: "bad", reason: "the tail is missing", ratedAt: "2026-10-30T09:10:00.000Z" },
   ];
-  await mkdir(h.dirs.data, { recursive: true });
-  await writeFile(join(h.dirs.data, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  await mkdir(h.dirs.home, { recursive: true });
+  await writeFile(join(h.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
   return { h, foxFiles };
 }
 
@@ -210,7 +210,7 @@ describe("thumbnails", () => {
 
   test("of a file that has since been deleted are 404, so the page shows a placeholder", async () => {
     const { h, foxFiles } = await start();
-    await writeFile(join(h.dirs.data, "jobs.jsonl"), JSON.stringify(jobRecord("gone", "2026-10-30T12:00:00.000Z", { files: [foxFiles[0] + ".deleted"] })) + "\n");
+    await writeFile(join(h.dirs.home, "jobs.jsonl"), JSON.stringify(jobRecord("gone", "2026-10-30T12:00:00.000Z", { files: [foxFiles[0] + ".deleted"] })) + "\n");
     expect((await h.send("GET", "/api/jobs/gone/files/0")).status).toBe(404);
   });
 });
@@ -233,8 +233,8 @@ describe("Comparisons in the Job history (ADR 0009)", () => {
       jobRecord("late", "2026-10-30T09:00:00.000Z"),
       ...extra,
     ];
-    await mkdir(h.dirs.data, { recursive: true });
-    await writeFile(join(h.dirs.data, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    await mkdir(h.dirs.home, { recursive: true });
+    await writeFile(join(h.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
     return h;
   }
 

@@ -180,7 +180,7 @@ describe("generate_comparison", () => {
     expect(five.isError).toBe(true);
     expect(textOf(five)).toContain("variants");
     expect(harness.requests).toHaveLength(0);
-    expect(await Bun.file(join(harness.dirs.data, "jobs.jsonl")).exists()).toBe(false);
+    expect(await Bun.file(join(harness.dirs.home, "jobs.jsonl")).exists()).toBe(false);
   });
 
   test("rejects a variant whose provider_options set a field litevision fills, without starting any Job", async () => {

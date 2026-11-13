@@ -82,9 +82,9 @@ export async function startSettingsHarness(options: SettingsHarnessOptions = {})
         origin: method === "GET" ? null : server.origin,
         ...sendOptions,
       }),
-    readConfig: async () => JSON.parse(await readFile(join(dirs.config, "config.json"), "utf8")),
-    readCredentials: async () => JSON.parse(await readFile(join(dirs.config, "credentials.json"), "utf8")),
-    fileMode: async (name) => (await stat(join(dirs.config, name))).mode & 0o777,
+    readConfig: async () => JSON.parse(await readFile(join(dirs.home, "config.json"), "utf8")),
+    readCredentials: async () => JSON.parse(await readFile(join(dirs.home, "credentials.json"), "utf8")),
+    fileMode: async (name) => (await stat(join(dirs.home, name))).mode & 0o777,
     async close() {
       await server.close();
       await rm(root, { recursive: true, force: true });
