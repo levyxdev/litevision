@@ -1,0 +1,1 @@
+{"cancel_requested":false,"completed":null,"created":1794762923769,"error":null,"id":"job_01HTXYZABC","kind":"img_gen","progress":{"completed":0,"detail":"","elapsed_ms":49642,"pass":1,"stage":"sampling","stage_elapsed_ms":38753,"total":16,"unit":"steps"},"queue_position":0,"result":null,"started":1794762923769,"status":"generating"}

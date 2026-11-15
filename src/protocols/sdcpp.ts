@@ -84,6 +84,13 @@ async function pollJob(jobId: string, target: ModelTarget, http: HttpTransport, 
   const url = `${baseUrlOf(target)}/sdcpp/v1/jobs/${encodeURIComponent(jobId)}`;
   for (;;) {
     const response = await sendToProvider(http, target.providerId, url, undefined, { context, poll: true });
+    if (response.status === 404 || response.status === 410) {
+      throw providerError(
+        "other",
+        target.providerId,
+        `the Runtime no longer has task ${jobId}: sd-server keeps a finished task for 10 minutes by default, and forgets every task when it restarts. Generate again.`,
+      );
+    }
     if (!response.ok) throw await errorOf(response, target.providerId);
     const parsed = jobSchema.safeParse(await response.json().catch(() => undefined));
     if (!parsed.success) throw providerError("other", target.providerId, `its status for task ${jobId} could not be read.`);

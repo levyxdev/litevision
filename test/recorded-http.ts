@@ -31,6 +31,12 @@ export function recordedTransport(routes: Routes = {}): RecordedTransport {
   return { http, requests };
 }
 
+/** Answers with each route in turn, then keeps answering with the last. */
+export function inTurn(...routes: Route[]): Route {
+  let calls = 0;
+  return (request) => routes[Math.min(calls++, routes.length - 1)]!(request);
+}
+
 /** Replays a file from `test/fixtures/` as a JSON response. */
 export function fixture(name: string, status = 200): Route {
   return async () =>

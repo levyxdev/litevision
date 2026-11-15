@@ -5,6 +5,7 @@ import type { Hardware } from "../src/local/hardware.ts";
 import { startHarness, type Harness, type HarnessOptions } from "./harness.ts";
 import { fakeDownloads, type FakeDownloads } from "./local-downloads.ts";
 import { recorded, textOf } from "./helpers.ts";
+import { inTurn } from "./recorded-http.ts";
 
 const mac16: Hardware = { platform: "macos-arm64", memoryGb: 16 };
 const tag = "master-1104-5dcfa79";
@@ -46,6 +47,7 @@ describe("local install", () => {
     expect(code, output).toBe(0);
     expect(output).toContain("Q4_K, for 16 GB unified memory");
     expect(output).toContain("FLUX Kommunity License");
+    expect(output).toContain("Speed: about 8 minutes per 1024x1024 image");
     await access(home("runtime", tag, "build", "bin", "sd-server"), constants.X_OK);
     for (const [path, bytes] of [...downloads.weights].filter(([path]) => /Q4_K|Qwen3VL|vae/.test(path))) {
       expect(await readFile(home("models", path))).toEqual(bytes);
@@ -126,6 +128,58 @@ describe("local install", () => {
     expect(output).toContain("SHA-256");
     expect(await readdir(home("models", "text_encoders"))).toEqual([]);
     expect(await exists(home("config.json"))).toBe(false);
+  });
+
+  describe("a download the connection drops", () => {
+    const name = "flux3-image-klein-Q4_K.gguf";
+    const url = () => downloads.urlOf(`https://x/${name}`);
+    const bytes = () => downloads.weights.get(`diffusion_models/${name}`)!;
+    /** Sends the first `cut` bytes, then, once they are written, resets the connection. */
+    const dropsAfter = (cut: number) => () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes().subarray(0, cut));
+            setTimeout(() => controller.error(new Error("ECONNRESET: The socket connection was closed unexpectedly.")), 20);
+          },
+        }),
+      );
+    /** Sends the rest from the byte the request's Range asks for. */
+    const resumes = (request: Request) => {
+      const from = Number(/^bytes=(\d+)-$/.exec(request.headers.get("range") ?? "")?.[1]);
+      return new Response(bytes().subarray(from), { status: 206 });
+    };
+    const ranges = () => harness!.requests.filter((request) => request.url === url()).map((request) => request.headers.get("range"));
+
+    test("is resumed from where it stopped", async () => {
+      await start({ routes: { [`GET ${url()}`]: inTurn(dropsAfter(5), resumes) } });
+      const { code, output } = await install(["--yes"]);
+
+      expect(code, output).toBe(0);
+      expect(ranges()).toEqual([null, "bytes=5-"]);
+      expect(await readFile(home("models", "diffusion_models", name))).toEqual(bytes());
+    });
+
+    test("that keeps failing stops the install, and running it again resumes", async () => {
+      await start({ routes: { [`GET ${url()}`]: inTurn(dropsAfter(3), dropsAfter(3), dropsAfter(3), dropsAfter(3), dropsAfter(3), resumes) } });
+      const failed = await install(["--yes"]);
+      expect(failed.code).toBe(1);
+      expect(failed.output).toContain("ECONNRESET");
+      expect(failed.output).toContain("again to resume");
+
+      const again = await install(["--yes"]);
+      expect(again.code, again.output).toBe(0);
+      expect(ranges().at(-1)).toBe("bytes=3-");
+      expect(await readFile(home("models", "diffusion_models", name))).toEqual(bytes());
+    });
+
+    test("is downloaded again from the start when the server ignores the Range", async () => {
+      await start({ routes: { [`GET ${url()}`]: inTurn(dropsAfter(5), () => new Response(bytes())) } });
+      const { code, output } = await install(["--yes"]);
+
+      expect(code, output).toBe(0);
+      expect(await readFile(home("models", "diffusion_models", name))).toEqual(bytes());
+    });
   });
 
   test("a quantisation that will likely not fit warns, names one that fits, and installs only with --force", async () => {

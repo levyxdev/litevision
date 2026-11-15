@@ -38,6 +38,8 @@ export interface LocalModel {
   title: string;
   does: string;
   licence: { name: string; terms: string; url: string; commercial: boolean };
+  /** How fast it ran where it was measured, so the User knows before downloading. */
+  speed: string;
   /** sd-server's built-in recipe for the Model; litevision writes it, with the files it chose, as a user recipe. */
   recipe: { id: string } & Record<string, unknown>;
   /** The weights every quantisation uses, by recipe slot. */
@@ -75,6 +77,7 @@ const flux3Klein: LocalModel = {
     url: "https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md",
     commercial: true,
   },
+  speed: "about 8 minutes per 1024x1024 image, and about 20 for an edit, on a 16 GB M4 Mac at Q4_K; smaller images are faster",
   recipe: {
     schema_version: 1,
     id: "flux3-klein",

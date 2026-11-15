@@ -1,1 +1,1 @@
-{"state":"ready","recipe":"flux3-klein","models":{"diffusion_model":"diffusion_models/flux-3-image-klein-Q4_K_M.gguf","llm":"text_encoders/qwen3-vl-4b-Q8_0.gguf","vae":"vae/flux3-vae.safetensors"},"error":null,"revision":2,"load_elapsed_seconds":41.7}
+{"error":null,"load_elapsed_seconds":0.410933375,"models":{"diffusion_model":"diffusion_models/flux3-image-klein-Q4_K.gguf","llm":"text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf","vae":"vae/flux2-vae.safetensors"},"recipe":"flux3-klein","revision":2,"state":"ready"}

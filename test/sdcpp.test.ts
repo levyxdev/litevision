@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
 import { readHistory, recorded, textOf, tinyPng } from "./helpers.ts";
+import { inTurn } from "./recorded-http.ts";
 
 const root = "http://127.0.0.1:1234";
 const statusUrl = `GET ${root}/sdcpp/v1/models/status`;
@@ -89,12 +90,6 @@ describe("generate_image with the sdcpp Protocol", () => {
     });
   });
 });
-
-/** Answers with each route in turn, then keeps answering with the last. */
-function inTurn(...routes: Route[]): Route {
-  let calls = 0;
-  return (request) => routes[Math.min(calls++, routes.length - 1)]!(request);
-}
 
 describe("an sdcpp Runtime that is not ready", () => {
   test("waits out a load under way, then generates without loading again", async () => {
@@ -185,7 +180,9 @@ describe("sdcpp failures", () => {
   });
 
   test("polls a queued Job until it completes", async () => {
-    harness = await startHarness(localSetup({ [jobUrl]: inTurn(recorded("sdcpp/job-queued.json"), recorded("sdcpp/job-completed.json")) }));
+    harness = await startHarness(
+      localSetup({ [jobUrl]: inTurn(recorded("sdcpp/job-queued.json"), recorded("sdcpp/job-generating.json"), recorded("sdcpp/job-completed.json")) }),
+    );
     expect(ok(await generate()).files).toHaveLength(2);
   });
 });
@@ -220,5 +217,19 @@ describe("an sdcpp Job across a restart", () => {
     expect(result).toMatchObject({ status: "completed" });
     expect(result.files).toHaveLength(2);
     expect(harness.requests.filter((request) => `${request.method} ${request.url}` === imgGenUrl)).toHaveLength(1);
+  });
+
+  test("get_job says why when the Runtime no longer has the finished task", async () => {
+    let forgotten = false;
+    const job: Route = (request) => (forgotten ? recorded("sdcpp/job-not-found.json", 404) : recorded("sdcpp/job-queued.json"))(request);
+    harness = await startHarness({ ...localSetup({ [jobUrl]: job }), waitLimitMs: 20 });
+    const { job_id } = ok(await generate());
+
+    await harness.restart();
+    forgotten = true;
+    const result = await harness.client.callTool({ name: "get_job", arguments: { job_id } });
+
+    expect(textOf(result)).toContain("job_01HTXYZABC");
+    expect(textOf(result)).toContain("10 minutes");
   });
 });

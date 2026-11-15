@@ -25,6 +25,8 @@ export interface LocalDeps {
   /** Asks the User a yes/no question; absent when no one can answer, as when the Agent runs the command. */
   confirm?: (question: string) => Promise<boolean>;
   print: (line: string) => void;
+  /** Waits before a download is tried again; tests pass one that does not wait. */
+  pause?: (ms: number) => Promise<void>;
 }
 
 /** A problem `local install` or `local remove` reports to whoever ran it. */
@@ -117,41 +119,71 @@ function modelFolders(config: ConfigObject): string[] {
   return Array.isArray(folders) ? folders.filter((folder): folder is string => typeof folder === "string") : [];
 }
 
-/** Downloads a file, hashing it on the way; one that does not match its pin is deleted. */
+/** How many times one download is tried before the install stops; each try resumes where the last one stopped. */
+const downloadAttempts = 5;
+
+/** A server's refusal, such as 404, which trying again would not change, unlike a dropped connection or a server error. */
+class HttpRefusal extends Error {}
+
+/**
+ * Downloads a pinned file to `target` through `<target>.partial`, resuming with a Range request after a dropped
+ * connection, also in a later install, and checks its SHA-256 once whole.
+ */
 async function download(file: PinnedFile, target: string, label: string, deps: LocalDeps): Promise<void> {
   deps.print(`Downloading ${label} (${formatSize(file.size)})…`);
   await mkdir(dirname(target), { recursive: true });
   const partial = `${target}.partial`;
-  const hash = createHash("sha256");
-  let received = 0;
   let reported = 0;
-  // Hashes each chunk on its way to disk, and reports progress on large files.
-  const hashing = new Transform({
-    transform(chunk: Buffer, _encoding, done) {
-      hash.update(chunk);
-      received += chunk.length;
-      const tenths = Math.floor((received / file.size) * 10);
-      if (file.size > 1e8 && tenths > reported && tenths < 10) {
-        reported = tenths;
-        deps.print(`  ${tenths * 10}%`);
-      }
-      done(null, chunk);
-    },
-  });
-  try {
-    const response = await deps.http(file.url);
-    if (!response.ok || response.body === null) throw new LocalError(`Downloading ${label} from ${file.url} failed: HTTP ${response.status}.`);
-    await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), hashing, createWriteStream(partial));
-  } catch (error) {
-    await rm(partial, { force: true });
-    if (error instanceof LocalError) throw error;
-    throw new LocalError(`Downloading ${label} from ${file.url} failed: ${error instanceof Error ? error.message : String(error)}`);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await downloadOnce(file, partial, (received) => {
+        // Reports progress on large files.
+        const tenths = Math.floor((received / file.size) * 10);
+        if (file.size > 1e8 && tenths > reported && tenths < 10) {
+          reported = tenths;
+          deps.print(`  ${tenths * 10}%`);
+        }
+      }, deps);
+      break;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const failed = `Downloading ${label} from ${file.url} failed: ${reason}`;
+      if (error instanceof HttpRefusal) throw new LocalError(failed);
+      if (attempt === downloadAttempts) throw new LocalError(`${failed} Run the same command again to resume.`);
+      deps.print(`  ${reason} Trying again (${attempt + 1} of ${downloadAttempts})…`);
+      await (deps.pause ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))))(2000 * attempt);
+    }
   }
-  if (hash.digest("hex") !== file.sha256) {
+  if ((await sha256Of(partial)) !== file.sha256) {
     await rm(partial, { force: true });
     throw new LocalError(`${label} does not match its pinned SHA-256, so it was deleted and the install stopped. Try again; if it fails again, the file at ${file.url} has changed.`);
   }
   await rename(partial, target);
+}
+
+/** One try: asks for the bytes after what `partial` already holds, and appends them, or starts over if the server sends it all. */
+async function downloadOnce(file: PinnedFile, partial: string, progress: (received: number) => void, deps: LocalDeps): Promise<void> {
+  const have = await stat(partial).then((info) => (info.size < file.size ? info.size : 0), () => 0);
+  const response = await deps.http(file.url, have > 0 ? { headers: { range: `bytes=${have}-` } } : undefined);
+  const resumed = have > 0 && response.status === 206;
+  if (response.status === 416) {
+    // What `partial` holds no longer fits the file: the next try starts over.
+    await rm(partial, { force: true });
+    throw new Error("HTTP 416.");
+  }
+  if (!response.ok || response.body === null) {
+    const refusal = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429;
+    throw new (refusal ? HttpRefusal : Error)(`HTTP ${response.status}.`);
+  }
+  let received = resumed ? have : 0;
+  const counting = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      received += chunk.length;
+      progress(received);
+      done(null, chunk);
+    },
+  });
+  await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), counting, createWriteStream(partial, { flags: resumed ? "a" : "w" }));
 }
 
 /** Extracts a zip with the system's bsdtar: built into macOS and Windows 10 and later. */
@@ -282,6 +314,7 @@ async function install(command: Extract<LocalCommand, { action: "install" }>, de
 
   print(`${model.title} (${model.name}): ${model.does}.`);
   print(`${model.licence.commercial ? "" : "Non-commercial use only. "}Licence: ${model.licence.name}, ${model.licence.terms}: ${model.licence.url}`);
+  print(`Speed: ${model.speed}.`);
   print(command.quant === undefined ? `Quantisation: ${quant}, for ${memory}. Others, with --quant: ${quants.filter((other) => other !== quant).join(", ")}.` : `Quantisation: ${quant}.`);
   if (!fits) print(`Warning: ${model.title} at ${quant} will likely not fit in ${memory}. ${alternative(catalog, model, platform, memoryGb)}`);
 

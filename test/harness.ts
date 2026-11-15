@@ -119,6 +119,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
         },
         confirm: cliOptions.answer === undefined ? undefined : async () => cliOptions.answer!,
         print: (line) => lines.push(line),
+        pause: async () => {},
       });
       return { code, output: lines.join("\n") };
     },
