@@ -1,6 +1,6 @@
 # Configuration and data live in one `~/.litevision` folder
 
-litevision keeps `config.json`, `credentials.json`, `jobs.jsonl` and `capabilities.json` in `~/.litevision` on every system, or in `LITEVISION_HOME` when it is set. Generated files stay in `~/litevision/outputs`, outside it: they are the User's to open and share, and a hidden folder would hide them from Finder, while sharing the outputs folder never carries a Credential with it. One folder, the same on every system, is one path to tell a User, back up or delete, as with `~/.claude` or `~/.cargo`. On Windows the folder mode 700 has no effect; the user profile's own permissions protect it.
+litevision keeps `config.json`, `credentials.json`, `jobs.jsonl`, `capabilities.json` and, for local Models, the Runtime (`runtime/`) and weights (`models/`) in `~/.litevision` on every system, or in `LITEVISION_HOME` when it is set. Generated files stay in `~/litevision/outputs`, outside it: they are the User's to open and share, and a hidden folder would hide them from Finder, while sharing the outputs folder never carries a Credential with it. One folder, the same on every system, is one path to tell a User, back up or delete, as with `~/.claude` or `~/.cargo`. On Windows the folder mode 700 has no effect; the user profile's own permissions protect it.
 
 ## Considered Options
 

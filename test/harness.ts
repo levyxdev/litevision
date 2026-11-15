@@ -2,7 +2,11 @@ import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { parseCommand } from "../src/cli.ts";
 import type { Dirs } from "../src/dirs.ts";
+import { catalog, type Catalog } from "../src/local/catalog.ts";
+import type { Hardware } from "../src/local/hardware.ts";
+import { runLocal } from "../src/local/install.ts";
 import { createServer } from "../src/server.ts";
 import { makeTempDirs, recordedTransport, type Route, type Routes } from "./recorded-http.ts";
 
@@ -24,6 +28,15 @@ export interface HarnessOptions {
   pollIntervalMs?: number;
   /** The delay before retrying a request the Provider never processed; 1 ms unless a test sets it. */
   retryDelayMs?: number;
+  /** What `local install` downloads; its files are served from `routes`. */
+  catalog?: Catalog;
+}
+
+export interface CliOptions {
+  /** The machine `local install` sees; never read from the one running the tests. */
+  hardware?: Hardware;
+  /** The User's answer when asked; absent, no one can answer, as when the Agent runs the command. */
+  answer?: boolean;
 }
 
 export interface Harness {
@@ -40,6 +53,8 @@ export interface Harness {
    * `client` to a new one on the same directories and Provider responses.
    */
   restart(): Promise<void>;
+  /** Runs a CLI command on the same home and Provider responses, as the Agent would in a terminal. */
+  cli(args: string[], options?: CliOptions): Promise<{ code: number; output: string }>;
   close(): Promise<void>;
 }
 
@@ -88,6 +103,24 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     async restart() {
       await disconnect();
       connected = await connect();
+    },
+    async cli(args, cliOptions = {}) {
+      const command = parseCommand(args);
+      if (command.kind === "exit") return { code: command.code, output: command.output };
+      if (command.kind !== "local") throw new Error(`harness.cli runs only local commands, not ${args.join(" ")}`);
+      const lines: string[] = [];
+      const code = await runLocal(command, {
+        dirs,
+        http,
+        catalog: options.catalog ?? catalog,
+        hardware: async () => {
+          if (cliOptions.hardware === undefined) throw new Error("Pass the hardware the command sees.");
+          return cliOptions.hardware;
+        },
+        confirm: cliOptions.answer === undefined ? undefined : async () => cliOptions.answer!,
+        print: (line) => lines.push(line),
+      });
+      return { code, output: lines.join("\n") };
     },
     async close() {
       await disconnect();

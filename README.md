@@ -59,6 +59,16 @@ The page listens on `127.0.0.1` only, behind a one-time token, and shuts down af
 3. **Pick a default image Model** (and a default video Model) and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
 4. **Optionally, set Standing Options** on a Model: a JSON object of the Provider's own request fields, such as `{ "quality": "high" }`, that every Job on it sends. The Agent's `provider_options` override them for one Job.
 
+### Local Models
+
+On a Mac with Apple Silicon (16 GB of memory or more) or a Windows PC with an NVIDIA GPU (8 GB of VRAM or more, CUDA 12), litevision runs open-weight image Models on your own machine, with no API key:
+
+```bash
+npx -y litevision local install flux-3-klein
+```
+
+It prints the Model's licence, the quantisation chosen for your memory and what it will download, then asks; `--yes` skips the question, `--quant` picks another quantisation, and `--force` installs a Model that will likely not fit. It downloads stable-diffusion.cpp's `sd-server` and the weights, checks every file against its pinned SHA-256, and adds the `local` Provider and the Model. Weights you already have, for example in ComfyUI, are reused instead of downloaded when `config.json` names their folder: `"localModelFolders": ["/path/to/ComfyUI/models"]`. `npx -y litevision local remove flux-3-klein` deletes the Model's weights, except files another installed Model uses. Installing again after upgrading litevision replaces an outdated `sd-server`.
+
 The page also shows the Job history, with the images and videos and any Ratings you gave, and lets you rate a Job or one of its results. Each Model shows its Option Statuses read-only: what litevision has learned about the `provider_options` values sent to it.
 
 ## Tools
@@ -90,7 +100,7 @@ Fields checked together, such as `width` and `height`, share one; a nested field
 
 | What | Where |
 | --- | --- |
-| Providers, Models (`config.json`), Credentials (`credentials.json`, mode 600), Job history (`jobs.jsonl`) and the cached parameter descriptions Providers give (`capabilities.json`) | `~/.litevision/`, or `LITEVISION_HOME` |
+| Providers, Models (`config.json`), Credentials (`credentials.json`, mode 600), Job history (`jobs.jsonl`), the cached parameter descriptions Providers give (`capabilities.json`), and for local Models `sd-server` (`runtime/`) and the weights, in ComfyUI's folder layout, with a recipe for each Model (`models/`) | `~/.litevision/`, or `LITEVISION_HOME` |
 | Generated images and videos, unless the Agent passes `output_path` | `~/litevision/outputs/<date>/` |
 
 A saved file is named after the `name` the Agent passes, in any language, with only the characters a path cannot hold removed, and any image or video extension it ends in (the file gets its own): `张三.png`, or `张三-1.png`, `张三-2.png` for a Job with several results. Without `name` it is named after the time the Job started, e.g. `140500.png`. A name already taken in the folder gets the next free number, `张三-2.png`, `张三-3.png`. The Job history records which files each Job saved, with a hash of each file's content. When a later Job is given one of them, or a copy of it anywhere, as a reference image or video frame, litevision finds the earlier Job by that hash and records it as a Source Job, so a chain of edits and its Ratings can be read in order. It never reads old files again: delete the ones you don't want, and a deleted one is shown as deleted.

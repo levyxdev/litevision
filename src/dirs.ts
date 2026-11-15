@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 
 /** Where litevision keeps configuration, Job history and generated files. */
 export interface Dirs {
-  /** Holds `config.json`, `credentials.json`, `jobs.jsonl` and `capabilities.json`. */
+  /** Holds `config.json`, `credentials.json`, `jobs.jsonl`, `capabilities.json`, and for local Models `runtime/` and `models/`. */
   home: string;
   /** Default output folder; each Job saves under a dated subfolder. */
   output: string;
