@@ -1,0 +1,1 @@
+{"id":"job_01HTXYZABC","kind":"img_gen","status":"failed","created":1775401200000,"started":1775401203000,"completed":1775401204000,"queue_position":0,"result":null,"error":{"code":"generation_failed","message":"generate_image returned empty results"}}

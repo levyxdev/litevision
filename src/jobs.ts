@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { ConfigError, loadConfig, needsSettings, requireCredential, type ResolvedModel } from "./config.ts";
+import { ConfigError, loadConfig, needsSettings, type ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 import { fileStem, saveNamed, type FileToSave } from "./file-names.ts";
 import { appendHistory, readJob, readJobs, type JobRecord, type SourceJob } from "./history.ts";
@@ -10,7 +10,7 @@ import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
 import type { Requested } from "./protocols/parameter-guide.ts";
 import type { NormalisedRequest, NormalisedVideoRequest } from "./protocols/requests.ts";
 import { providerError, providerLabel } from "./protocols/errors.ts";
-import { adapterForProtocol } from "./protocols/index.ts";
+import { adapterForProtocol, credentialFor } from "./protocols/index.ts";
 import { checkResult, mismatchOf } from "./result-check.ts";
 import { contentHash, findSourceJobs } from "./source-jobs.ts";
 import {
@@ -319,7 +319,7 @@ export class JobRunner {
     if (provider === undefined) {
       throw needsSettings(`Job "${record.id}" ran on Provider "${record.provider}", which is no longer configured, so it cannot be picked up again.`);
     }
-    const credential = await requireCredential(this.deps.dirs, provider);
+    const credential = await credentialFor(this.deps.dirs, provider, adapter);
     const target = { providerId: provider.id, baseUrl: provider.baseUrl, modelId: record.modelId, credential };
     if (video) {
       const resumeVideo = adapter.resumeVideo!;
@@ -429,7 +429,7 @@ function videoAsImages(result: JobVideo): JobImages {
 }
 
 function redact(text: string, credential: string): string {
-  return text.split(credential).join("[redacted]");
+  return credential === "" ? text : text.split(credential).join("[redacted]");
 }
 
 /** Downloads what a Job brought back. One lost download does not cost the results that did arrive. */

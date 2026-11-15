@@ -1,0 +1,1 @@
+{"state":"ready","recipe":"z-image-turbo","models":{"diffusion_model":"diffusion_models/z-image-turbo-Q4_K_M.gguf","llm":"text_encoders/qwen3-4b-Q8_0.gguf","vae":"vae/flux1-vae.safetensors"},"error":null,"revision":4,"load_elapsed_seconds":12.5}

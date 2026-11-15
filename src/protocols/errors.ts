@@ -16,6 +16,8 @@ const explanations: Record<ProviderErrorKind, string> = {
   balance: "reports insufficient balance or quota. The User needs to add credit or raise their limit with the Provider; or choose another Model.",
   refusal: "refused the request on content grounds. Rephrase the prompt, change the reference images, or choose another Model.",
   rate_limit: "is rate limiting requests. Wait a little and try again, or choose another Model.",
+  not_ready:
+    "is not ready for the Job: its Runtime is loading a Model, has none loaded, or is busy with Jobs on another Model. Wait a little and try again.",
   unsupported: "does not support this request. Choose another Model or change the request.",
   rejected_option:
     "rejected an option in the request. Fix it using what the Provider said and the Model's docs, and try again; if it names the prompt or the number of images, change that instead.",
@@ -48,6 +50,7 @@ export interface ProviderErrorResponse {
 }
 
 const patterns: Array<[ProviderErrorKind, RegExp]> = [
+  ["not_ready", /^model_(loading|not_loaded|busy)$/],
   ["balance", /insufficient|quota|billing|balance|credit|payment/i],
   ["refusal", /moderation|content.?policy|safety|nsfw|blocked|prohibited/i],
   ["auth", /api.?key|unauthori[sz]ed|unauthenticated|authentication|permission.?denied|forbidden/i],

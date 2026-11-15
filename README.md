@@ -54,6 +54,7 @@ The page listens on `127.0.0.1` only, behind a one-time token, and shuts down af
    | `venice` | Venice |
    | `apimart` | APIMart |
    | `together` | Together AI, images and videos. Models Together passes through to their makers (FLUX, Google, Qwen, …) work only once you turn on "Passthrough models" in Together's organization settings, which sends your prompts for them to those makers. |
+   | `sdcpp` | A Runtime on your own machine (stable-diffusion.cpp's `sd-server`), with no API key. The model id is a recipe in its model folder that names the weight files. |
 
 3. **Pick a default image Model** (and a default video Model) and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
 4. **Optionally, set Standing Options** on a Model: a JSON object of the Provider's own request fields, such as `{ "quality": "high" }`, that every Job on it sends. The Agent's `provider_options` override them for one Job.

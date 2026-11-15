@@ -15,12 +15,16 @@ _Avoid_: Client, bot
 ## Configuration
 
 **Provider**:
-One place the User has an account with: a base URL plus a Credential. A User might have `openai`, `gemini`, `venice` and `apimart`.
+One place litevision sends Jobs to: a base URL, plus a Credential where the Provider is an account. A User might have `openai`, `gemini`, `venice`, `apimart`, and `local` for a Runtime on their own machine, which needs no Credential.
 _Avoid_: Endpoint, vendor, relay (a relay is just a Provider)
 
 **Credential**:
 The secret a Provider needs, usually an API key. The User enters it; the Agent never sees it.
 _Avoid_: Token, secret
+
+**Runtime**:
+The inference server that runs Models on the User's own machine: stable-diffusion.cpp's `sd-server`. It loads one Model at a time, from a recipe whose id is the Model's model id.
+_Avoid_: Backend, engine, local server
 
 **Protocol**:
 The wire format litevision speaks to call a Model, independent of who hosts it. Two Models on the same Provider may use different Protocols.

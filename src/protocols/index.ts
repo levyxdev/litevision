@@ -1,8 +1,10 @@
-import { ConfigError, type Model } from "../config.ts";
+import { ConfigError, requireCredential, type Model, type Provider } from "../config.ts";
+import type { Dirs } from "../dirs.ts";
 import { apimart } from "./apimart.ts";
 import { gemini } from "./gemini.ts";
 import { openaiImages } from "./openai-images.ts";
 import type { ProtocolAdapter } from "./protocol.ts";
+import { sdcpp } from "./sdcpp.ts";
 import { together } from "./together.ts";
 import { venice } from "./venice.ts";
 
@@ -12,6 +14,7 @@ const adapters: Record<string, ProtocolAdapter> = {
   apimart,
   venice,
   together,
+  sdcpp,
 };
 
 /** The Protocols litevision supports, which a Model may use. */
@@ -32,6 +35,11 @@ export function adapterFor(model: Model): ProtocolAdapter {
     );
   }
   return adapter;
+}
+
+/** The Credential a Job on `provider` sends through `adapter`: empty for a Protocol that needs none. */
+export async function credentialFor(dirs: Dirs, provider: Provider, adapter: ProtocolAdapter): Promise<string> {
+  return adapter.needsCredential === false ? "" : requireCredential(dirs, provider);
 }
 
 /**

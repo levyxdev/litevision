@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { ConfigError, loadConfig, requireCredential, type ResolvedModel } from "./config.ts";
+import { ConfigError, loadConfig, type ResolvedModel } from "./config.ts";
 import { serialised, writeFileAtomic } from "./config-store.ts";
 import type { Dirs } from "./dirs.ts";
 import type { HttpTransport } from "./http.ts";
-import { adapterFor } from "./protocols/index.ts";
+import { adapterFor, credentialFor } from "./protocols/index.ts";
 import type { ParameterGuide } from "./protocols/parameter-guide.ts";
 import type { ProviderModelInfo } from "./protocols/protocol.ts";
 
@@ -91,7 +91,7 @@ export async function modelInfo(deps: ModelInfoDeps, resolved: ResolvedModel, op
   let entry = fresh && !options.refresh ? cached : undefined;
 
   if (entry === undefined) {
-    const credential = await requireCredential(deps.dirs, resolved.provider).catch((error: unknown) => {
+    const credential = await credentialFor(deps.dirs, resolved.provider, adapter).catch((error: unknown) => {
       if (error instanceof ConfigError) return undefined;
       throw error;
     });

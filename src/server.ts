@@ -9,7 +9,6 @@ import {
   modelNotesMaxLength,
   needsSettings,
   notesAuthors,
-  requireCredential,
   resolveModel,
   type Config,
   type Model,
@@ -45,7 +44,7 @@ import { byStatus, modelOptionStatuses, optionStatusNames, type OptionStatus, ty
 import { showSourceJobs, type ShownSourceJob } from "./source-jobs.ts";
 import { mergeOptions } from "./standing-options.ts";
 import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
-import { adapterFor, adapterForProtocol } from "./protocols/index.ts";
+import { adapterFor, adapterForProtocol, credentialFor } from "./protocols/index.ts";
 import { guideOutput, guideSummary, guideText, type ParameterGuide, type Requested } from "./protocols/parameter-guide.ts";
 import { modalities, type Modality, type ProviderErrorKind } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
@@ -759,7 +758,7 @@ export function createServer(deps: ServerDeps): McpServer {
   const prepareImage = async (resolved: ResolvedModel, args: ImageArgs): Promise<PreparedJob> => {
     const { model } = resolved;
     const adapter = adapterFor(model);
-    const credential = await requireCredential(deps.dirs, resolved.provider);
+    const credential = await credentialFor(deps.dirs, resolved.provider, adapter);
     const info = await modelInfo(infoDeps, resolved);
     const normalised = await normaliseImageRequest(
       {
@@ -796,7 +795,7 @@ export function createServer(deps: ServerDeps): McpServer {
     const { model } = resolved;
     const adapter = adapterFor(model);
     const info = videoModelInfo(resolved);
-    const credential = await requireCredential(deps.dirs, resolved.provider);
+    const credential = await credentialFor(deps.dirs, resolved.provider, adapter);
     const normalised = await normaliseVideoRequest(
       {
         prompt: args.prompt,
