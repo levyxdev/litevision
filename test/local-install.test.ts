@@ -291,8 +291,9 @@ describe("local remove", () => {
 
     const { code, output } = await harness!.cli(["local", "remove", "flux-3-klein", "--yes"]);
     expect(code, output).toBe(0);
-    expect(await readdir(home("models", "diffusion_models"))).toEqual([]);
-    expect(await exists(home("models", "recipes", "flux3-klein.json"))).toBe(false);
+    // The folders it left empty go too; the Runtime stays for the next local Model.
+    expect(await exists(home("models"))).toBe(false);
+    await access(home("runtime", tag, "build", "bin", "sd-server"), constants.X_OK);
     const after = await config();
     expect(after.models).toEqual([]);
     expect(after.defaultImageModel).toBeUndefined();
@@ -306,7 +307,7 @@ describe("local remove", () => {
     const { code, output } = await harness!.cli(["local", "remove", "flux-3-klein", "--yes"]);
     expect(code, output).toBe(0);
     expect(await readdir(home("models", "vae"))).toEqual(["flux2-vae.safetensors"]);
-    expect(await readdir(home("models", "text_encoders"))).toEqual([]);
+    expect(await readdir(home("models"))).toEqual(["recipes", "vae"]);
     expect(output).toContain("other");
   });
 

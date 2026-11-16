@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, copyFile, link, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, isAbsolute } from "node:path";
+import { chmod, copyFile, link, mkdir, readdir, readFile, rename, rm, rmdir, stat } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve, isAbsolute, sep } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -271,6 +271,17 @@ async function deleteUnused(dirs: Dirs, candidates: string[]): Promise<void> {
   }
 }
 
+/** Removes each folder that is now empty, and the folders above it up to and including `root`; never one with files. */
+async function removeEmptyFolders(root: string, folders: string[]): Promise<void> {
+  for (const folder of new Set(folders)) {
+    for (let current = folder; current === root || current.startsWith(root + sep); current = dirname(current)) {
+      // rmdir refuses a folder that is not empty, so a folder with anything left in it stays.
+      if (!(await rmdir(current).then(() => true, () => false))) break;
+      if (current === root) break;
+    }
+  }
+}
+
 const modelsOf = (config: ConfigObject): Array<Record<string, unknown>> => (Array.isArray(config.models) ? config.models.filter(isPlainObject) : []);
 const isInstalledModel = (model: Record<string, unknown>, local: LocalModel) => model.provider === localProvider.id && model.modelId === local.recipe.id;
 
@@ -409,6 +420,7 @@ async function remove(command: Extract<LocalCommand, { action: "remove" }>, deps
 
   for (const file of deleted) await rm(weightPath(dirs, file)!, { force: true });
   await rm(recipePath(dirs, model), { force: true });
+  await removeEmptyFolders(modelRoot(dirs), [...deleted.map((file) => dirname(weightPath(dirs, file)!)), dirname(recipePath(dirs, model))]);
   await updateConfig(dirs, (stored) => {
     const aliases = modelsOf(stored).filter((candidate) => isInstalledModel(candidate, model)).map((candidate) => candidate.alias);
     stored.models = modelsOf(stored).filter((candidate) => !isInstalledModel(candidate, model));
