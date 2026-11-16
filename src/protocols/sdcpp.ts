@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { HttpTransport } from "../http.ts";
 import { httpProviderError, providerError } from "./errors.ts";
+import { sdcppGuide } from "./guides/sdcpp.ts";
 import { sendToProvider } from "./send.ts";
 import { ProviderError, type GeneratedImage, type JobContext, type JobImages, type ModelTarget, type ProtocolAdapter, type SubmittedJob } from "./protocol.ts";
 
@@ -121,6 +122,8 @@ export const sdcpp: ProtocolAdapter = {
   docsUrl: () => `${docs}#post-sdcppv1img_gen`,
 
   requestFields: { image: { shape: [{ width: "width", height: "height" }], format: "output_format" } },
+
+  parameterGuide: (modelId, modality) => (modality === "image" ? sdcppGuide(modelId) : undefined),
 
   reservedOptions: ["prompt", "ref_images"],
 

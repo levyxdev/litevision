@@ -43,14 +43,13 @@ describe("local install", () => {
     expect(output).toContain("FLUX Kommunity License");
     expect(output).toContain("Speed: about 8 minutes per 1024x1024 image");
     await access(home("runtime", tag, "build", "bin", "sd-server"), constants.X_OK);
-    for (const [path, bytes] of [...downloads.weights].filter(([path]) => /Q4_K|Qwen3VL|vae/.test(path))) {
-      expect(await readFile(home("models", path))).toEqual(bytes);
-    }
-    expect((await recipe()).models).toEqual({
+    const files = {
       diffusion_model: "diffusion_models/flux3-image-klein-Q4_K.gguf",
       llm: "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
       vae: "vae/flux2-vae.safetensors",
-    });
+    };
+    for (const path of Object.values(files)) expect(await readFile(home("models", path))).toEqual(downloads.weights.get(path)!);
+    expect((await recipe()).models).toEqual(files);
     expect(await config()).toMatchObject({
       providers: [{ id: "local" }],
       models: [{ alias: "flux-3-klein", provider: "local", modelId: "flux3-klein", protocol: "sdcpp", modality: "image" }],
@@ -277,6 +276,65 @@ describe("local install", () => {
     expect(code).toBe(1);
     expect(output).toContain("flux-3-klein");
   });
+});
+
+describe("the four local Models", () => {
+  const installModel = (name: string, args: string[] = ["--yes"]) => harness!.cli(["local", "install", name, ...args], { hardware: mac16 });
+  const recipeOf = async (id: string) => JSON.parse(await readFile(home("models", "recipes", `${id}.json`), "utf8"));
+  const qwenShared = {
+    llm: "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+    llm_vision: "text_encoders/mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+    vae: "vae/qwen_image_2.1_vae_bf16.safetensors",
+  };
+
+  for (const [name, recipeId, models] of [
+    ["z-image-turbo", "z-image-turbo", { diffusion_model: "diffusion_models/z_image_turbo-Q4_K.gguf", llm: "text_encoders/Qwen3-4B-Instruct-2507-Q4_K_M.gguf", vae: "vae/ae.safetensors" }],
+    ["qwen-image-2.1", "qwen-image-21", { diffusion_model: "diffusion_models/qwen_image_2.1-Q4_K.gguf", ...qwenShared }],
+    ["qwen-image-2.1-turbo", "qwen-image-21-turbo", { diffusion_model: "diffusion_models/qwen-image-2.1-turbo-Q4_K_M.gguf", ...qwenShared }],
+  ] as const) {
+    test(`${name} installs its pinned files on its built-in recipe, and a Job runs on it`, async () => {
+      await start({ reachRuntime: true, pollIntervalMs: 5 });
+      const { code, output } = await installModel(name);
+      expect(code, output).toBe(0);
+      expect((await recipeOf(recipeId)).models).toEqual(models);
+      for (const path of Object.values(models)) expect(await readFile(home("models", path))).toEqual(downloads.weights.get(path)!);
+      expect((await config()).models).toEqual([{ alias: name, provider: "local", modelId: recipeId, protocol: "sdcpp", modality: "image" }]);
+
+      const result = await harness!.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", model: name } });
+      expect(result.isError, textOf(result)).toBeFalsy();
+    });
+  }
+
+  test("Qwen-Image-2.1 and its Turbo share the text encoder and VAE: the second downloads only its diffusion model, and removing one keeps them", async () => {
+    await start();
+    expect((await installModel("qwen-image-2.1-turbo")).code).toBe(0);
+    harness!.requests.length = 0;
+    const second = await installModel("qwen-image-2.1");
+    expect(second.code, second.output).toBe(0);
+    expect(downloaded()).toEqual([downloads.urlOf("https://x/qwen_image_2.1-Q4_K.gguf")]);
+
+    expect((await harness!.cli(["local", "remove", "qwen-image-2.1-turbo", "--yes"])).code).toBe(0);
+    for (const path of Object.values(qwenShared)) expect(await exists(home("models", path))).toBe(true);
+    expect(await exists(home("models", "diffusion_models", "qwen-image-2.1-turbo-Q4_K_M.gguf"))).toBe(false);
+  });
+
+  for (const name of ["qwen-image-2.1", "qwen-image-2.1-turbo"]) {
+    test(`installing ${name} says it is for non-commercial use only before anything is downloaded`, async () => {
+      await start();
+      const { output } = await installModel(name, []);
+      expect(output).toContain("Non-commercial use only");
+      expect(output).toContain("Qwen Research License");
+      expect(output.indexOf("Non-commercial")).toBeLessThan(output.indexOf("To download"));
+      expect(downloaded()).toEqual([]);
+    });
+  }
+
+  for (const name of ["flux-3-klein", "z-image-turbo"]) {
+    test(`installing ${name} does not call it non-commercial`, async () => {
+      await start();
+      expect((await installModel(name, [])).output).not.toContain("Non-commercial");
+    });
+  }
 });
 
 describe("local remove", () => {

@@ -10,7 +10,7 @@ import { ConfigError, defaultKey } from "../config.ts";
 import { isPlainObject, readConfigObject, updateConfig, writeFileAtomic, type ConfigObject } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
-import { memoryLabel, platformLabel, type Catalog, type LocalModel, type PinnedFile, type Platform, type WeightFile } from "./catalog.ts";
+import { licenceLine, memoryLabel, platformLabel, type Catalog, type LocalModel, type PinnedFile, type Platform, type WeightFile } from "./catalog.ts";
 import type { Hardware } from "./hardware.ts";
 
 export type LocalCommand =
@@ -324,7 +324,7 @@ async function install(command: Extract<LocalCommand, { action: "install" }>, de
   const fits = suggested !== undefined && quants.indexOf(quant) >= quants.indexOf(suggested);
 
   print(`${model.title} (${model.name}): ${model.does}.`);
-  print(`${model.licence.commercial ? "" : "Non-commercial use only. "}Licence: ${model.licence.name}, ${model.licence.terms}: ${model.licence.url}`);
+  print(licenceLine(model));
   print(`Speed: ${model.speed}.`);
   print(command.quant === undefined ? `Quantisation: ${quant}, for ${memory}. Others, with --quant: ${quants.filter((other) => other !== quant).join(", ")}.` : `Quantisation: ${quant}.`);
   if (!fits) print(`Warning: ${model.title} at ${quant} will likely not fit in ${memory}. ${alternative(catalog, model, platform, memoryGb)}`);

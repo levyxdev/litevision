@@ -67,6 +67,8 @@ On a Mac with Apple Silicon (16 GB of memory or more) or a Windows PC with an NV
 npx -y litevision local install flux-3-klein
 ```
 
+The Models are `flux-3-klein`, `z-image-turbo`, `qwen-image-2.1` and `qwen-image-2.1-turbo`; `list_models` shows each one's Parameter Guide.
+
 It prints the Model's licence, the quantisation chosen for your memory and what it will download, then asks; `--yes` skips the question, `--quant` picks another quantisation, and `--force` installs a Model that will likely not fit. It downloads stable-diffusion.cpp's `sd-server` and the weights, checks every file against its pinned SHA-256, and adds the `local` Provider and the Model. Weights you already have, for example in ComfyUI, are reused instead of downloaded when `config.json` names their folder: `"localModelFolders": ["/path/to/ComfyUI/models"]`. `npx -y litevision local remove flux-3-klein` deletes the Model's weights, except files another installed Model uses. Installing again after upgrading litevision replaces an outdated `sd-server`.
 
 litevision starts its `sd-server` when a local Job needs it and shares it between all your Agent sessions; it does not use an `sd-server` you run yourself, so you can remove yours and keep only litevision's.

@@ -199,3 +199,43 @@ describe("rejected options carry the Parameter Guide (ADR 0010)", () => {
     expect(text).toMatch(/- Rejected: \{"quality":"ultra"\}, Job \S+ on \d{4}-\d{2}-\d{2}: HTTP 400: Invalid value: 'ultra'/);
   });
 });
+
+describe("list_models: the Parameter Guides of local Models", () => {
+  async function localGuide(modelId: string): Promise<GuideOutput & { notes: string[] }> {
+    harness = await startHarness({ config: { providers: [{ id: "local" }], models: [{ alias: "mine", provider: "local", modelId, protocol: "sdcpp" }] } });
+    const result = await harness.client.callTool({ name: "list_models", arguments: { model: "mine" } });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    expect(textOf(result)).toContain("Parameter Guide for");
+    return modelsOf(result)[0]!.parameter_guide as GuideOutput & { notes: string[] };
+  }
+  const parameter = (guide: GuideOutput, name: string) => guide.parameters.find((candidate) => candidate.name === name);
+
+  for (const [modelId, licence, steps, references] of [
+    ["flux3-klein", "FLUX Kommunity License", "16", true],
+    ["z-image-turbo", "Apache License 2.0", "9", false],
+    ["qwen-image-21", "Qwen Research License", "20", true],
+    ["qwen-image-21-turbo", "Qwen Research License", "8", true],
+  ] as const) {
+    test(`${modelId}: its licence, the recipe's steps, ${references ? "reference images" : "no reference images"}, and the memory each quantisation needs`, async () => {
+      const guide = await localGuide(modelId);
+      const notes = guide.notes.join("\n");
+      expect(notes).toContain(licence);
+      expect(parameter(guide, "sample_params.sample_steps")?.default).toBe(steps);
+      expect(parameter(guide, "ref_images") !== undefined).toBe(references);
+      expect(notes).toMatch(/Q4_K\S* \d+\.\d GB/);
+      expect(notes).toContain("16 GB unified memory");
+    });
+  }
+
+  test("a Qwen-Image-2.1 guide says it is for non-commercial use only, and its sizes are multiples of 32", async () => {
+    const guide = await localGuide("qwen-image-21");
+    expect(guide.notes.join("\n")).toContain("Non-commercial use only");
+    expect(parameter(guide, "width")?.values).toContain("multiple of 32");
+  });
+
+  test("the FLUX 3 Klein guide carries what was measured on the 16 GB M4 Mac", async () => {
+    const notes = (await localGuide("flux3-klein")).notes.join("\n");
+    expect(notes).toContain("16 GB M4");
+    expect(notes).toContain("512");
+  });
+});
