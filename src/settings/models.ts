@@ -8,6 +8,7 @@ import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { standingOptionsProblem } from "../standing-options.ts";
 import { modalities, type Modality } from "../protocols/protocol.ts";
+import { addedOnlyByInstall, isLocalModel } from "../local/provider.ts";
 import { SettingsError, shortName } from "./providers.ts";
 
 /** A Model as the page sees it. */
@@ -24,6 +25,8 @@ export interface ModelView {
   standingOptions?: Record<string, unknown>;
   /** True for the default Model of its Modality. */
   default: boolean;
+  /** True for a local Model, whose Provider, model id and Protocol only `local install` sets. */
+  local?: true;
 }
 
 const alias = shortName("An Alias");
@@ -84,6 +87,7 @@ export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>,
   await updateConfig(dirs, (config) => {
     const models = modelsOf(config);
     requireFreeAlias(models, input.alias);
+    if (isLocalModel(input)) throw new SettingsError(400, addedOnlyByInstall);
     requireProvider(config, input.provider);
     const stored: StoredModel = {
       alias: input.alias,
@@ -111,6 +115,9 @@ export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typ
     const models = modelsOf(config);
     const model = models.find((candidate) => candidate.alias === wanted);
     if (model === undefined) throw notFound(wanted);
+    const target = { provider: input.provider ?? model.provider, modelId: input.modelId ?? model.modelId, protocol: input.protocol ?? model.protocol };
+    const retargeted = target.provider !== model.provider || target.modelId !== model.modelId || target.protocol !== model.protocol;
+    if (retargeted && (isLocalModel(model) || isLocalModel(target))) throw new SettingsError(400, addedOnlyByInstall);
     if (input.alias !== undefined && input.alias !== wanted) {
       requireFreeAlias(models, input.alias);
       model.alias = input.alias;
@@ -221,6 +228,7 @@ function view(model: StoredModel, defaults: { defaultImageModel: string | null; 
     ...(model.notesHistory && { notesHistory: model.notesHistory }),
     ...(model.standingOptions && { standingOptions: model.standingOptions }),
     default: model.alias === (modality === "video" ? defaults.defaultVideoModel : defaults.defaultImageModel),
+    ...(isLocalModel(model) && { local: true as const }),
   };
 }
 

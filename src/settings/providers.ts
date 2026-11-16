@@ -2,6 +2,7 @@ import { z } from "zod";
 import { providerSchema } from "../config.ts";
 import { isPlainObject, readConfigObject, readCredentialsObject, updateConfig, updateCredentials } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
+import { addedOnlyByInstall, localProviderId } from "../local/provider.ts";
 
 /** A request the settings API refuses. Its message is shown on the page. */
 export class SettingsError extends Error {
@@ -18,6 +19,8 @@ export interface ProviderView {
   id: string;
   baseUrl: string;
   credential: { last4: string } | null;
+  /** True for the local Provider, which has neither a base URL nor a Credential. */
+  local?: true;
 }
 
 export interface ProviderPreset {
@@ -73,6 +76,7 @@ export async function getProvider(dirs: Dirs, id: string): Promise<ProviderView>
 }
 
 export async function addProvider(dirs: Dirs, input: z.infer<typeof addProviderInput>): Promise<ProviderView> {
+  if (input.id === localProviderId) throw new SettingsError(400, addedOnlyByInstall);
   await updateConfig(dirs, (config) => {
     const providers = providersOf(config);
     if (providers.some((provider) => provider.id === input.id)) {
@@ -144,7 +148,7 @@ function providersOf(config: Record<string, unknown>): Array<z.infer<typeof prov
 }
 
 function view(id: string, baseUrl: string, apiKey: string | undefined): ProviderView {
-  return { id, baseUrl, credential: apiKey === undefined ? null : { last4: apiKey.slice(-4) } };
+  return { id, baseUrl, credential: apiKey === undefined ? null : { last4: apiKey.slice(-4) }, ...(id === localProviderId && { local: true as const }) };
 }
 
 function notFound(id: string): SettingsError {

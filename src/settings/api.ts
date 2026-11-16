@@ -2,6 +2,10 @@ import type { IncomingMessage } from "node:http";
 import { z } from "zod";
 import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
+import type { Catalog } from "../local/catalog.ts";
+import { checkLocal } from "../local/check.ts";
+import type { Hardware } from "../local/hardware.ts";
+import { localProviderId } from "../local/provider.ts";
 import { refreshModelInfo, refreshProviderModelInfo, type ModelInfoDeps } from "../model-info.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { fetchModelIds, testConnection } from "./connection.ts";
@@ -38,6 +42,8 @@ export interface RouteContext {
   dirs: Dirs;
   http: HttpTransport;
   now: () => Date;
+  /** What the local Provider's connection test reads. */
+  local: { catalog: Catalog; hardware: () => Promise<Hardware> };
 }
 
 /** `undefined` answers 204 No Content; `image` answers with the image's own bytes rather than JSON. */
@@ -97,7 +103,11 @@ const routes: Route[] = [
   {
     method: "POST",
     path: "/api/providers/:id/test-connection",
-    handler: async ({ dirs, http, now, params, body }) => {
+    handler: async ({ dirs, http, now, params, body, local }) => {
+      if (params.id === localProviderId) {
+        await getProvider(dirs, params.id);
+        return { body: await checkLocal(dirs, local.catalog, await local.hardware()) };
+      }
       const { protocol } = parse(protocolInput, body);
       const result = await testConnection(dirs, http, params.id!, protocol);
       if (result.result === "success") await refreshProviderModelInfo(infoDeps(dirs, http, now), params.id!, protocol);

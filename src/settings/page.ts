@@ -1,5 +1,6 @@
 import { modelNotesMaxLength } from "../config.ts";
 import { ratingReasonMaxLength } from "../history.ts";
+import { localProtocol } from "../local/provider.ts";
 import { suggestedAlias } from "./suggested-alias.ts";
 
 /**
@@ -265,7 +266,27 @@ function protocolSelect(selected) {
   return select;
 }
 
+/** The local Provider: litevision runs its Runtime on this computer, so there is no base URL or API key to set. */
+function localProviderCard(provider) {
+  const result = el("div", { className: "result" });
+  const test = el("button", { type: "button", textContent: "Test connection" });
+  test.onclick = () => act(test, async () => {
+    result.textContent = "Checking…";
+    result.className = "result";
+    const outcome = await api("POST", "/api/providers/" + encodeURIComponent(provider.id) + "/test-connection", {});
+    result.textContent = outcome.message;
+    result.className = "result " + outcome.result;
+  });
+  return el("div", { className: "card" },
+    el("div", { className: "card-head" }, el("h3", { textContent: provider.id }), el("span", { className: "chip", textContent: "On this computer" })),
+    el("p", { className: "muted", textContent: "Runs local Models on this computer, with no base URL or API key. Add or remove them with npx -y litevision local install <model> and local remove <model>." }),
+    el("div", { className: "actions" }, test),
+    result,
+  );
+}
+
 function providerCard(provider) {
+  if (provider.local) return localProviderCard(provider);
   const baseUrl = el("input", { value: provider.baseUrl, spellcheck: false });
   const credential = secretInput(provider.credential ? "New API key to replace the saved one" : "Paste your API key");
   const protocol = protocolSelect(protocolFor(provider));
@@ -331,7 +352,8 @@ async function loadProviders() {
   list.replaceChildren(...(providers.length === 0
     ? [emptyState("No Providers yet. Add one below.")]
     : providers.map(providerCard)));
-  providerIds = providers.map((p) => p.id);
+  // Local Models are added only by local install, so the Model forms never offer the local Provider.
+  providerIds = providers.filter((p) => !p.local).map((p) => p.id);
   const select = document.getElementById("model-provider");
   const chosen = select.value;
   select.replaceChildren(...options(providerIds, chosen));
@@ -429,6 +451,8 @@ function modelCard(model) {
   const modelId = el("input", { value: model.modelId, spellcheck: false });
   const protocol = el("select", {}, ...options(protocols.includes(model.protocol) ? protocols : [model.protocol, ...protocols], model.protocol));
   const modality = el("select", {}, ...options(["image", "video"], model.modality));
+  // A local Model's Provider, model id and Protocol are set by local install.
+  if (model.local) for (const input of [provider, modelId, protocol]) input.disabled = true;
   const notes = notesField(model.notes);
   const standing = standingOptionsField(model.standingOptions);
   const path = "/api/models/" + encodeURIComponent(model.alias);
@@ -757,6 +781,7 @@ async function loadJobs() {
   try {
     ({ presets } = await api("GET", "/api/presets"));
     ({ protocols } = await api("GET", "/api/protocols"));
+    protocols = protocols.filter((protocol) => protocol !== "${localProtocol}");
     setUpAddForm();
     setUpAddModelForm();
     await loadProviders();

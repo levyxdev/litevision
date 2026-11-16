@@ -9,4 +9,4 @@ v1 shipped no Skill and put all guidance in the MCP server instructions. How to 
 
 ## Consequences
 
-An Agent without Skill support gets the rules but not the tips. Model Notes record only what is particular to a Model, including where it departs from the Skill.
+An Agent without Skill support gets the rules but not the tips. The Skill also says how to set up a local Model, which, like the tips, only some conversations need. Model Notes record only what is particular to a Model, including where it departs from the Skill.

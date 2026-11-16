@@ -2,6 +2,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import type { Dirs } from "../src/dirs.ts";
+import type { Hardware } from "../src/local/hardware.ts";
 import { startSettingsServer, type SettingsServer } from "../src/settings/server.ts";
 import { makeTempDirs, recordedTransport, type Routes, type TempDirsOptions } from "./recorded-http.ts";
 
@@ -12,6 +13,8 @@ export interface SettingsHarnessOptions extends TempDirsOptions {
   idleMs?: number;
   /** The clock the settings server records changes with, e.g. who changed Model Notes when. */
   now?: () => Date;
+  /** The machine the local Provider's connection test sees; never read from the one running the tests. */
+  hardware?: Hardware;
 }
 
 /**
@@ -65,7 +68,13 @@ export interface SettingsHarness {
 export async function startSettingsHarness(options: SettingsHarnessOptions = {}): Promise<SettingsHarness> {
   const { root, dirs } = await makeTempDirs(options);
   const { http, requests } = recordedTransport(options.routes);
-  const server = await startSettingsServer({ dirs, http, idleMs: options.idleMs ?? 60_000, now: options.now });
+  const server = await startSettingsServer({ dirs, http, idleMs: options.idleMs ?? 60_000,
+    now: options.now,
+    hardware: async () => {
+      if (options.hardware === undefined) throw new Error("Pass the hardware the local Provider's connection test sees.");
+      return options.hardware;
+    },
+  });
   const token = new URL(server.url).searchParams.get("token") ?? "";
   const { host } = new URL(server.origin);
 

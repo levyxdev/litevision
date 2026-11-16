@@ -3,6 +3,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
+import { catalog, type Catalog } from "../local/catalog.ts";
+import { detectHardware, type Hardware } from "../local/hardware.ts";
 import { ConfigError } from "../config.ts";
 import { matchRoute, readJsonBody } from "./api.ts";
 import { renderPage } from "./page.ts";
@@ -16,6 +18,10 @@ export interface SettingsServerOptions {
   idleMs: number;
   /** Timestamps changes, such as who changed Model Notes when. Defaults to the system clock. */
   now?: () => Date;
+  /** The machine the local Provider's connection test checks. Defaults to this one. */
+  hardware?: () => Promise<Hardware>;
+  /** The Runtime build and Models litevision installs. Defaults to the pinned catalog. */
+  catalog?: Catalog;
 }
 
 export interface SettingsServer {
@@ -37,6 +43,7 @@ export const defaultSettingsIdleMs = 15 * 60 * 1000;
 export async function startSettingsServer(options: SettingsServerOptions): Promise<SettingsServer> {
   const token = randomBytes(32).toString("base64url");
   const now = options.now ?? (() => new Date());
+  const local = { catalog: options.catalog ?? catalog, hardware: options.hardware ?? detectHardware };
   let host = "";
   let origin = "";
 
@@ -63,7 +70,7 @@ export async function startSettingsServer(options: SettingsServerOptions): Promi
       const route = matchRoute(request.method ?? "GET", url.pathname);
       if (route === undefined) throw new SettingsError(404, "Not found.");
       const body = request.method === "GET" || request.method === "HEAD" ? undefined : await readJsonBody(request);
-      const result = await route.handler({ params: route.params, body, dirs: options.dirs, http: options.http, now });
+      const result = await route.handler({ params: route.params, body, dirs: options.dirs, http: options.http, now, local });
       if (result === undefined) {
         response.writeHead(204, commonHeaders);
         response.end();

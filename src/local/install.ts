@@ -12,6 +12,7 @@ import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
 import { licenceLine, memoryLabel, platformLabel, type Catalog, type LocalModel, type PinnedFile, type Platform, type WeightFile } from "./catalog.ts";
 import type { Hardware } from "./hardware.ts";
+import { localProtocol, localProviderId } from "./provider.ts";
 
 export type LocalCommand =
   | { kind: "local"; action: "install"; model: string; quant?: string; yes: boolean; force: boolean }
@@ -32,8 +33,7 @@ export interface LocalDeps {
 /** A problem `local install` or `local remove` reports to whoever ran it. */
 class LocalError extends Error {}
 
-/** The local Provider: no address, as litevision starts the Runtime itself (ADR 0014). */
-const localProvider = { id: "local" };
+const localProvider = { id: localProviderId };
 
 /** Runs `local install` or `local remove`; returns the exit code. */
 export async function runLocal(command: LocalCommand, deps: LocalDeps): Promise<number> {
@@ -47,7 +47,7 @@ export async function runLocal(command: LocalCommand, deps: LocalDeps): Promise<
 }
 
 const runtimeRoot = (dirs: Dirs) => join(dirs.home, "runtime");
-const modelRoot = (dirs: Dirs) => join(dirs.home, "models");
+export const modelRoot = (dirs: Dirs) => join(dirs.home, "models");
 const recipePath = (dirs: Dirs, model: LocalModel) => join(modelRoot(dirs), "recipes", `${model.recipe.id}.json`);
 /** How sd-server names a file in its first model folder: its path there. */
 const fileId = (file: WeightFile) => `${file.folder}/${file.name}`;
@@ -198,7 +198,7 @@ async function findFile(root: string, name: string): Promise<string | undefined>
 }
 
 /** The installed sd-server binary for this litevision's pinned build, if it is there. */
-function runtimeBinary(dirs: Dirs, catalog: Catalog, platform: Platform): Promise<string | undefined> {
+export function runtimeBinary(dirs: Dirs, catalog: Catalog, platform: Platform): Promise<string | undefined> {
   const build = catalog.runtime[platform];
   return findFile(join(runtimeRoot(dirs), build.tag), build.binary);
 }
@@ -249,7 +249,7 @@ interface InstalledRecipe {
 }
 
 /** Every recipe in the Runtime's model folder, litevision's or the User's: what decides which files are in use. */
-async function readRecipes(dirs: Dirs): Promise<InstalledRecipe[]> {
+export async function readRecipes(dirs: Dirs): Promise<InstalledRecipe[]> {
   const folder = join(modelRoot(dirs), "recipes");
   const recipes: InstalledRecipe[] = [];
   for (const name of await readdir(folder).catch(() => [])) {
@@ -391,7 +391,7 @@ async function install(command: Extract<LocalCommand, { action: "install" }>, de
     const installed = models.find((candidate) => isInstalledModel(candidate, model));
     alias = typeof installed?.alias === "string" ? installed.alias : freeAlias(stored, model);
     if (installed === undefined) {
-      stored.models = [...models, { alias, provider: localProvider.id, modelId: model.recipe.id, protocol: "sdcpp", modality: "image" }];
+      stored.models = [...models, { alias, provider: localProvider.id, modelId: model.recipe.id, protocol: localProtocol, modality: "image" }];
     }
   });
   await removeOutdatedRuntimes(platform, deps);
