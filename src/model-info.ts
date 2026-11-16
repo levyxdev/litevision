@@ -68,7 +68,7 @@ const cachePath = (dirs: Dirs) => join(dirs.home, "capabilities.json");
 
 /** Keyed by where the Model lives rather than its Alias, which the User may rename. */
 function cacheKey({ model, provider }: ResolvedModel): string {
-  return `${model.protocol} ${provider.baseUrl} ${model.modelId}`;
+  return `${model.protocol} ${provider.baseUrl ?? provider.id} ${model.modelId}`;
 }
 
 /**
@@ -101,7 +101,7 @@ export async function modelInfo(deps: ModelInfoDeps, resolved: ResolvedModel, op
         : await withTimeout(
             fetchModelInfo.call(
               adapter,
-              { providerId: resolved.provider.id, baseUrl: resolved.provider.baseUrl, modelId: resolved.model.modelId, credential },
+              { providerId: resolved.provider.id, baseUrl: resolved.provider.baseUrl ?? "", modelId: resolved.model.modelId, credential },
               deps.http,
             ),
             deps.timeoutMs ?? defaultModelInfoTimeoutMs,

@@ -47,7 +47,7 @@ test("the Runtime the server started stops when its client goes away", async () 
   const dirs = { home: join(home, ".litevision"), output: join(home, "litevision", "outputs") };
   await mkdir(dirs.home, { recursive: true });
   const config = {
-    providers: [{ id: "local", baseUrl: "http://127.0.0.1:1234" }],
+    providers: [{ id: "local" }],
     models: [{ alias: "flux3", provider: "local", modelId: "flux3-klein", protocol: "sdcpp" }],
     defaultImageModel: "flux3",
   };

@@ -7,6 +7,7 @@ import type { Dirs } from "../src/dirs.ts";
 import { catalog, type Catalog } from "../src/local/catalog.ts";
 import { runtimePlatform, type Hardware } from "../src/local/hardware.ts";
 import { runLocal } from "../src/local/install.ts";
+import type { Runtime } from "../src/local/runtime.ts";
 import { createServer } from "../src/server.ts";
 import { makeTempDirs, recordedTransport, type Route, type Routes } from "./recorded-http.ts";
 
@@ -35,6 +36,8 @@ export interface HarnessOptions {
    * build, and sends requests to it, on 127.0.0.1 with no recorded route, through for real.
    */
   runtime?: boolean;
+  /** Stands in for the shared Runtime with one at this address, answered from `routes`, as for a cloud Provider. */
+  runtimeAt?: string;
   /** Sends requests on 127.0.0.1 with no recorded route through for real, to a Runtime `local install` installed. */
   reachRuntime?: boolean;
   /** How long the Runtime may sit idle before its Model is unloaded; tests keep it short. */
@@ -116,6 +119,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       retryDelayMs: options.retryDelayMs ?? 1,
       catalog: options.catalog,
       runtimeIdleMs: options.runtimeIdleMs,
+      ...(options.runtimeAt === undefined ? {} : { runtime: recordedRuntime(options.runtimeAt) }),
     });
     const client = new Client({ name: "test", version: "0.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -166,6 +170,11 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       if (shared === undefined) await rm(root, { recursive: true, force: true });
     },
   };
+}
+
+/** A Runtime that is always installed and running at `url`, which never starts or stops a process. */
+function recordedRuntime(url: string): Runtime {
+  return { requireInstalled: async () => {}, address: async () => url, stop: async () => {} };
 }
 
 /** Writes the fake Runtime's launcher where litevision finds the installed Runtime build for this platform. */

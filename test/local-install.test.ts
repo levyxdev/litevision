@@ -52,7 +52,7 @@ describe("local install", () => {
       vae: "vae/flux2-vae.safetensors",
     });
     expect(await config()).toMatchObject({
-      providers: [{ id: "local", baseUrl: "http://127.0.0.1:1234" }],
+      providers: [{ id: "local" }],
       models: [{ alias: "flux-3-klein", provider: "local", modelId: "flux3-klein", protocol: "sdcpp", modality: "image" }],
     });
 
@@ -249,7 +249,14 @@ describe("local install", () => {
     expect((await config()).models.map((model: { alias: string }) => model.alias)).toEqual(["flux-3-klein", "flux-3-klein-2"]);
   });
 
-  test("switching quantisation deletes the weights the old one alone used", async () => {
+  test("drops the address an earlier install gave the local Provider: litevision starts the Runtime itself", async () => {
+    await start({ config: { providers: [{ id: "local", baseUrl: "http://127.0.0.1:1234" }], models: [] } });
+    const { code, output } = await install(["--yes"]);
+    expect(code, output).toBe(0);
+    expect((await config()).providers).toEqual([{ id: "local" }]);
+  });
+
+    test("switching quantisation deletes the weights the old one alone used", async () => {
     await start();
     await install(["--yes"]);
     await install(["--quant", "Q2_K", "--yes"]);

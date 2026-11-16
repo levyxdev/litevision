@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions } from "./harness.ts";
 import { textOf, tinyPng } from "./helpers.ts";
 
-/** Two local Models on the Runtime litevision installed; the Provider's base URL is where sd-server listens by default. */
+/** Two local Models on the Runtime litevision installed; the local Provider has no address, as litevision starts it. */
 const config = {
-  providers: [{ id: "local", baseUrl: "http://127.0.0.1:1234" }],
+  providers: [{ id: "local" }],
   models: [
     { alias: "flux3", provider: "local", modelId: "flux3-klein", protocol: "sdcpp" },
     { alias: "zimage", provider: "local", modelId: "z-image-turbo", protocol: "sdcpp" },
@@ -68,7 +68,15 @@ describe("the shared Runtime", () => {
     expect(alive((await lock(first)).runtimePid)).toBe(true);
   });
 
-  test("keeps a finished task a day, so get_job after a restart still finds it", async () => {
+  test("with no Runtime installed, a local Job does not start, and the Agent is told how to install one", async () => {
+    const first = await session({ runtime: false });
+    const result = await generate(first);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("npx -y litevision local install");
+    expect(textOf(result)).not.toContain("Job ");
+  });
+
+    test("keeps a finished task a day, so get_job after a restart still finds it", async () => {
     const first = await session();
     ok(await generate(first));
     const [start] = (await first.runtime!.events()).filter((event) => event.event === "start");

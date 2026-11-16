@@ -6,7 +6,8 @@ import { modalities, type Modality } from "./protocols/protocol.ts";
 
 export const providerSchema = z.object({
   id: z.string().min(1),
-  baseUrl: z.string().url(),
+  /** Absent for the local Provider: litevision starts the Runtime and knows its address (ADR 0014). */
+  baseUrl: z.string().url().optional(),
 });
 
 /** Model Notes stay short so `list_models` costs the Agent little context. */

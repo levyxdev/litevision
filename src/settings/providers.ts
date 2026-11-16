@@ -63,7 +63,7 @@ const storedProviders = z.array(providerSchema);
 export async function listProviders(dirs: Dirs): Promise<ProviderView[]> {
   const providers = providersOf(await readConfigObject(dirs));
   const credentials = await readCredentialsObject(dirs);
-  return providers.map((provider) => view(provider.id, provider.baseUrl, credentials[provider.id]?.apiKey));
+  return providers.map((provider) => view(provider.id, provider.baseUrl ?? "", credentials[provider.id]?.apiKey));
 }
 
 export async function getProvider(dirs: Dirs, id: string): Promise<ProviderView> {

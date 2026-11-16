@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { writeFileAtomic } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
+import { ConfigError } from "../config.ts";
 import type { HttpTransport } from "../http.ts";
 import { providerError } from "../protocols/errors.ts";
 import type { Catalog } from "./catalog.ts";
@@ -59,8 +60,21 @@ function freePort(): Promise<number> {
   });
 }
 
+/** Where local Jobs run; the harness stands in for it with recorded responses. */
+export interface Runtime {
+  /** Rejects with what to install when litevision has no Runtime installed on this machine. */
+  requireInstalled(): Promise<void>;
+  /**
+   * The shared Runtime's address, started if none runs. Called only while holding the queue's turn, so two processes
+   * never start one at once. With `start` false, as for a Job picked up after a restart, none is started: undefined.
+   */
+  address(options?: { start?: boolean }): Promise<string | undefined>;
+  /** Stops the Runtime this process started; a Job another process had running on it then fails. */
+  stop(): Promise<void>;
+}
+
 /** Starts, shares and stops the Runtime for one litevision process. */
-export class RuntimeManager {
+export class RuntimeManager implements Runtime {
   /** Identifies this manager in the lock, as two may share a process. */
   private readonly id = randomUUID();
   /** The Runtime this manager stops: one it started or adopted. */
@@ -100,14 +114,17 @@ export class RuntimeManager {
     }
   }
 
-  /**
-   * Where a local Job goes: the shared Runtime litevision installed, started if none runs, or, without one installed,
-   * the Provider's own base URL, a Runtime the User runs. Called only while holding the queue's turn, so two processes
-   * never start one at once. With `start` false, as for a Job picked up after a restart, none is started: undefined.
-   */
-  async address(configured: string, { start = true }: { start?: boolean } = {}): Promise<string | undefined> {
+  async requireInstalled(): Promise<void> {
+    if ((await this.binary()) !== undefined) return;
+    const names = this.deps.catalog.models.map((model) => model.name).join(", ");
+    throw new ConfigError(
+      `litevision has no Runtime installed for local Models. With the User's agreement, run \`npx -y litevision local install <model>\`, where <model> is one of: ${names}.`,
+    );
+  }
+
+  async address({ start = true }: { start?: boolean } = {}): Promise<string | undefined> {
     const binary = await this.binary();
-    if (binary === undefined) return configured;
+    if (binary === undefined) return undefined;
     const lock = await this.live();
     if (lock !== undefined) {
       // A Runtime whose litevision died without stopping it is adopted, so that one stops it.
@@ -173,7 +190,6 @@ export class RuntimeManager {
     });
   }
 
-  /** Stops the Runtime this manager started or adopted; a Job another process had running on it then fails. */
   async stop(): Promise<void> {
     clearInterval(this.idleTimer);
     this.idleTimer = undefined;

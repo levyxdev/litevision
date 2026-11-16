@@ -11,11 +11,12 @@ const loadUrl = `POST ${root}/sdcpp/v1/models/load`;
 const imgGenUrl = `POST ${root}/sdcpp/v1/img_gen`;
 const jobUrl = `GET ${root}/sdcpp/v1/jobs/job_01HTXYZABC`;
 
-/** A local Provider with no Credential, its Runtime at sd-server's default address, and FLUX 3 Klein ready on it. */
+/** The local Provider, with no Credential or address, its Runtime answering from recorded responses, and FLUX 3 Klein ready on it. */
 function localSetup(routes: HarnessOptions["routes"] = {}): HarnessOptions {
   return {
+    runtimeAt: root,
     config: {
-      providers: [{ id: "local", baseUrl: root }],
+      providers: [{ id: "local" }],
       models: [{ alias: "flux3", provider: "local", modelId: "flux3-klein", protocol: "sdcpp" }],
       defaultImageModel: "flux3",
     },

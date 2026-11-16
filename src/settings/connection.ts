@@ -79,7 +79,7 @@ async function prepare<T>(
   if (credential === undefined) {
     return { kind: "failure", message: `Provider "${providerId}" has no Credential saved. Save one, then try again.` };
   }
-  const target = { providerId, baseUrl: provider.baseUrl, credential };
+  const target = { providerId, baseUrl: provider.baseUrl ?? "", credential };
   return {
     kind: "ready",
     run: (http) => providerCall.call(adapter, target, http),

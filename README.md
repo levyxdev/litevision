@@ -54,7 +54,7 @@ The page listens on `127.0.0.1` only, behind a one-time token, and shuts down af
    | `venice` | Venice |
    | `apimart` | APIMart |
    | `together` | Together AI, images and videos. Models Together passes through to their makers (FLUX, Google, Qwen, …) work only once you turn on "Passthrough models" in Together's organization settings, which sends your prompts for them to those makers. |
-   | `sdcpp` | A Runtime on your own machine (stable-diffusion.cpp's `sd-server`), with no API key. The model id is a recipe in its model folder that names the weight files. |
+   | `sdcpp` | Local Models that `litevision local install` sets up (see below), with no API key or base URL. The model id is a recipe in the Runtime's model folder that names the weight files. |
 
 3. **Pick a default image Model** (and a default video Model) and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
 4. **Optionally, set Standing Options** on a Model: a JSON object of the Provider's own request fields, such as `{ "quality": "high" }`, that every Job on it sends. The Agent's `provider_options` override them for one Job.
@@ -68,6 +68,8 @@ npx -y litevision local install flux-3-klein
 ```
 
 It prints the Model's licence, the quantisation chosen for your memory and what it will download, then asks; `--yes` skips the question, `--quant` picks another quantisation, and `--force` installs a Model that will likely not fit. It downloads stable-diffusion.cpp's `sd-server` and the weights, checks every file against its pinned SHA-256, and adds the `local` Provider and the Model. Weights you already have, for example in ComfyUI, are reused instead of downloaded when `config.json` names their folder: `"localModelFolders": ["/path/to/ComfyUI/models"]`. `npx -y litevision local remove flux-3-klein` deletes the Model's weights, except files another installed Model uses. Installing again after upgrading litevision replaces an outdated `sd-server`.
+
+litevision starts its `sd-server` when a local Job needs it and shares it between all your Agent sessions; it does not use an `sd-server` you run yourself, so you can remove yours and keep only litevision's.
 
 The page also shows the Job history, with the images and videos and any Ratings you gave, and lets you rate a Job or one of its results. Each Model shows its Option Statuses read-only: what litevision has learned about the `provider_options` values sent to it.
 

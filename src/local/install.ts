@@ -32,8 +32,8 @@ export interface LocalDeps {
 /** A problem `local install` or `local remove` reports to whoever ran it. */
 class LocalError extends Error {}
 
-/** The local Provider: the Runtime at sd-server's default address. */
-const localProvider = { id: "local", baseUrl: "http://127.0.0.1:1234" };
+/** The local Provider: no address, as litevision starts the Runtime itself (ADR 0014). */
+const localProvider = { id: "local" };
 
 /** Runs `local install` or `local remove`; returns the exit code. */
 export async function runLocal(command: LocalCommand, deps: LocalDeps): Promise<number> {
@@ -384,7 +384,9 @@ async function install(command: Extract<LocalCommand, { action: "install" }>, de
   let alias = "";
   await updateConfig(dirs, (stored) => {
     const providers = Array.isArray(stored.providers) ? stored.providers : [];
-    if (!providers.some((provider) => isPlainObject(provider) && provider.id === localProvider.id)) stored.providers = [...providers, { ...localProvider }];
+    const isLocal = (provider: unknown) => isPlainObject(provider) && provider.id === localProvider.id;
+    // An earlier install gave it sd-server's default address, which nothing uses any more.
+    stored.providers = providers.some(isLocal) ? providers.map((provider) => (isLocal(provider) ? { ...localProvider } : provider)) : [...providers, { ...localProvider }];
     const models = modelsOf(stored);
     const installed = models.find((candidate) => isInstalledModel(candidate, model));
     alias = typeof installed?.alias === "string" ? installed.alias : freeAlias(stored, model);

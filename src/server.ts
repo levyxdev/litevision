@@ -38,7 +38,7 @@ import {
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, JobRunner, type JobState, type StartOptions } from "./jobs.ts";
 import { catalog, type Catalog } from "./local/catalog.ts";
-import { RuntimeManager } from "./local/runtime.ts";
+import { RuntimeManager, type Runtime } from "./local/runtime.ts";
 import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
@@ -74,6 +74,8 @@ export interface ServerDeps {
   catalog?: Catalog;
   /** How long the Runtime's Model may sit idle before it is unloaded; defaults to ten minutes. */
   runtimeIdleMs?: number;
+  /** Where local Jobs run; defaults to the shared Runtime litevision installed. */
+  runtime?: Runtime;
 }
 
 export const instructions = `litevision generates images and videos through Models the User has configured with their own Providers. Before writing a prompt, use the litevision Skill. If you do not have it, mention once that the User can install it with \`npx skills add levyxdev/litevision\`.
@@ -759,7 +761,7 @@ export function createServer(deps: ServerDeps): McpServer {
   const now = deps.now ?? (() => new Date());
   const cwd = deps.cwd ?? process.cwd();
   const infoDeps: ModelInfoDeps = { dirs: deps.dirs, http: deps.http, now };
-  const runtime = new RuntimeManager({ dirs: deps.dirs, http: deps.http, catalog: deps.catalog ?? catalog, idleMs: deps.runtimeIdleMs });
+  const runtime = deps.runtime ?? new RuntimeManager({ dirs: deps.dirs, http: deps.http, catalog: deps.catalog ?? catalog, idleMs: deps.runtimeIdleMs });
   const jobs = new JobRunner({
     dirs: deps.dirs,
     http: deps.http,

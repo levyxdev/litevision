@@ -7,7 +7,7 @@ import { fileStem, saveNamed, type FileToSave } from "./file-names.ts";
 import { appendHistory, readJob, readJobs, type JobRecord, type SourceJob } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { QueuePlace, withdraw } from "./local/queue.ts";
-import type { RuntimeManager } from "./local/runtime.ts";
+import type { Runtime } from "./local/runtime.ts";
 import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
 import type { Requested } from "./protocols/parameter-guide.ts";
 import type { NormalisedRequest, NormalisedVideoRequest } from "./protocols/requests.ts";
@@ -54,7 +54,7 @@ export interface JobRunnerDeps {
   /** Defaults to {@link defaultRetryDelayMs}. */
   retryDelayMs?: number;
   /** Where Jobs on a Protocol that runs on the Runtime go, once the machine-wide queue gives them their turn. */
-  runtime: RuntimeManager;
+  runtime: Runtime;
 }
 
 interface SpecBase extends ResolvedModel {
@@ -211,7 +211,7 @@ export class JobRunner {
       ...(spec.name === undefined ? {} : { name: spec.name }),
       providerOptions: request.providerOptions,
     });
-    const target = targetOf(spec);
+    const target = await this.targetOf(spec);
     // Recorded before the Provider is called, so a Job lost with this process is never silently forgotten.
     await this.append(base, "running");
     const job = this.track(base, spec.credential, spec.adapter, target, async (target, context, control) => {
@@ -244,7 +244,7 @@ export class JobRunner {
       ...(spec.name === undefined ? {} : { name: spec.name }),
       providerOptions: request.providerOptions,
     });
-    const target = targetOf(spec);
+    const target = await this.targetOf(spec);
     await this.append(base, "running");
     const job = this.track(base, spec.credential, spec.adapter, target, async (target, context, control) => {
       const submitted = await submitVideo.call(spec.adapter, request, target, this.deps.http, context);
@@ -262,6 +262,17 @@ export class JobRunner {
   private reply(base: JobBase, job: Promise<CompletedJob>, wait: boolean): Promise<JobState> {
     const registered = this.register(base.id, job);
     return wait ? this.waitFor(base.model, base.id, registered) : Promise.resolve({ status: "running", id: base.id, model: base.model });
+  }
+
+  /**
+   * Where a new Job goes, checked before it starts: a cloud Provider's base URL; for a Job on the Runtime, which has
+   * its address only once the Job's turn comes, the installed Runtime.
+   */
+  private async targetOf(spec: SpecBase): Promise<ModelTarget> {
+    const { provider, model, credential, adapter } = spec;
+    if (adapter.onRuntime) await this.deps.runtime.requireInstalled();
+    else if (provider.baseUrl === undefined) throw needsSettings(`Provider "${provider.id}" has no base URL.`);
+    return { providerId: provider.id, baseUrl: provider.baseUrl ?? "", modelId: model.modelId, credential };
   }
 
   /** A new Job's Source Jobs: the earlier Jobs that saved what its reference images and video frames hold now. */
@@ -347,8 +358,7 @@ export class JobRunner {
     // No process here runs the Job; a local one's task may still be on the Runtime. A cloud one another session waits
     // for ends there too: that session finds it cancelled before saving anything.
     if (runtime && record.resume !== undefined && adapter?.cancel !== undefined) {
-      const provider = (await loadConfig(this.deps.dirs)).providers.find((candidate) => candidate.id === record.provider);
-      const baseUrl = provider === undefined ? undefined : await this.deps.runtime.address(provider.baseUrl, { start: false });
+      const baseUrl = await this.deps.runtime.address({ start: false });
       const target = { providerId: record.provider, baseUrl: baseUrl ?? "", modelId: record.modelId, credential: "" };
       if (baseUrl !== undefined) await adapter.cancel(record.resume, target, this.deps.http).catch(() => undefined);
     }
@@ -447,7 +457,7 @@ export class JobRunner {
       throw needsSettings(`Job "${record.id}" ran on Provider "${record.provider}", which is no longer configured, so it cannot be picked up again.`);
     }
     const credential = await credentialFor(this.deps.dirs, provider, adapter);
-    const target = { providerId: provider.id, baseUrl: provider.baseUrl, modelId: record.modelId, credential };
+    const target = { providerId: provider.id, baseUrl: provider.baseUrl ?? "", modelId: record.modelId, credential };
     if (video) {
       const resumeVideo = adapter.resumeVideo!;
       return this.track(base, credential, adapter, target, async (target, context, control) => {
@@ -548,7 +558,7 @@ export class JobRunner {
     });
     try {
       while (!(await place.take())) await queued.pause();
-      const baseUrl = await this.deps.runtime.address(target.baseUrl, { start: !resuming });
+      const baseUrl = await this.deps.runtime.address({ start: !resuming });
       if (baseUrl === undefined) {
         throw providerError("other", base.provider, "the Runtime that ran this Job has stopped, and its tasks with it. Generate again.");
       }
@@ -623,9 +633,7 @@ function baseOf(record: JobRecord): JobBase {
   };
 }
 
-function targetOf(spec: SpecBase) {
-  return { providerId: spec.provider.id, baseUrl: spec.provider.baseUrl, modelId: spec.model.modelId, credential: spec.credential };
-}
+
 
 /** A video Job is saved like an image Job with one result. */
 function videoAsImages(result: JobVideo): JobImages {
