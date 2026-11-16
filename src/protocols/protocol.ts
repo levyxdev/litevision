@@ -106,13 +106,18 @@ export interface JobContext {
    * sets. Rejects when litevision shuts down, like `pause`.
    */
   backoff(retry: number): Promise<void>;
+  /**
+   * Resolves at once, or rejects when the Job was cancelled before its Provider has it: call it before submitting
+   * after a long wait the Job does not pause in, such as a Runtime loading a Model.
+   */
+  checkCancelled(): Promise<void>;
 }
 
 /**
  * `rejected_option`: the Provider answered 400 or 422 naming a parameter of the request, which the Agent can fix.
- * `not_ready`: a Runtime cannot take the Job yet.
+ * `not_ready`: a Runtime cannot take the Job yet. `cancelled`: the Job was cancelled with `cancel_job`.
  */
-export type ProviderErrorKind = "auth" | "balance" | "refusal" | "rate_limit" | "not_ready" | "unsupported" | "rejected_option" | "other";
+export type ProviderErrorKind = "auth" | "balance" | "refusal" | "rate_limit" | "not_ready" | "unsupported" | "rejected_option" | "cancelled" | "other";
 
 /** A failure reported by, or while reaching, a Provider. Its message names the Provider. */
 export class ProviderError extends Error {
@@ -160,6 +165,17 @@ export interface ProtocolAdapter {
    * Credential, and the adapter gets an empty one. True when omitted.
    */
   needsCredential?: boolean;
+  /**
+   * True for a Protocol whose Jobs run on the Runtime (ADR 0014): they wait for their turn in the machine-wide queue,
+   * and go to the shared Runtime litevision installed, started when none runs, instead of the Provider's base URL.
+   */
+  onRuntime?: boolean;
+  /**
+   * Asks the Provider to stop a Job it has, from the resume handle its `submit` gave. The Job then ends when the
+   * Provider says it was cancelled, which `wait` reports as a ProviderError of kind `cancelled`. Optional: without it,
+   * `cancel_job` stops waiting for the Job, and the Provider may still finish it.
+   */
+  cancel?(handle: ResumeHandle, target: ModelTarget, http: HttpTransport): Promise<void>;
   /**
    * Asks the Provider to describe one Model's parameters; its answer wins over the built-in Parameter Guide (ADR 0010).
    * Optional. Resolves to undefined when the Provider knows nothing about the model id; a failure is thrown.

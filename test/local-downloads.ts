@@ -23,9 +23,15 @@ async function zip(files: Record<string, string>): Promise<Buffer> {
   }
 }
 
-/** What each Runtime archive holds: the binary inside a folder, as release archives may have it, and the CUDA runtime. */
+/** Runs the fake Runtime, logging next to itself. */
+const fakeRuntimeLauncher = `#!/bin/sh\nFAKE_RUNTIME_DIR="$(dirname "$0")" exec '${process.execPath}' '${join(import.meta.dir, "fake-runtime.ts")}' "$@"\n`;
+
+/**
+ * What each Runtime archive holds: the binary inside a folder, as release archives may have it, and the CUDA runtime.
+ * The macOS binary is the fake Runtime, so a Job can run on what `local install` installed.
+ */
 const archiveContents: Record<string, Record<string, string>> = {
-  "sd-master-5dcfa79-bin-Darwin-macOS-26.7.2-arm64.zip": { "build/bin/sd-server": "#!/bin/sh\n", "build/bin/libggml.dylib": "dylib" },
+  "sd-master-5dcfa79-bin-Darwin-macOS-26.7.2-arm64.zip": { "build/bin/sd-server": fakeRuntimeLauncher, "build/bin/libggml.dylib": "dylib" },
   "sd-master-5dcfa79-bin-win-cuda12-x64.zip": { "sd-server.exe": "MZ" },
   "cudart-sd-bin-win-cu12-x64.zip": { "cudart64_12.dll": "dll" },
 };

@@ -27,7 +27,7 @@ Leave `n` at 1 unless the User wants several to choose from. Images from one Job
 
 ## Start several Jobs at once
 
-Tool calls often run one after another, even when sent together, so each waited-for `generate_image` or `generate_video` Job waits for the one before. When the User wants several separate results, such as different prompts, Models or options, start each Job with `wait: false`: it returns the `job_id` at once and the Job runs in the background. Then call `get_job` for each one; together they take about as long as the slowest.
+Tool calls often run one after another, even when sent together, so each waited-for `generate_image` or `generate_video` Job waits for the one before. When the User wants several separate results, such as different prompts, Models or options, start each Job with `wait: false`: it returns the `job_id` at once and the Job runs in the background. Then call `get_job` for each one; together they take about as long as the slowest. When the User no longer wants a running Job, call `cancel_job`.
 
 ## Name the files
 

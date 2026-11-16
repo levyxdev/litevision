@@ -6,6 +6,8 @@ import type { Dirs } from "./dirs.ts";
 import { fileStem, saveNamed, type FileToSave } from "./file-names.ts";
 import { appendHistory, readJob, readJobs, type JobRecord, type SourceJob } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
+import { QueuePlace, withdraw } from "./local/queue.ts";
+import type { RuntimeManager } from "./local/runtime.ts";
 import { fileTypeOf, mediaFactsOf, type MediaFacts } from "./media.ts";
 import type { Requested } from "./protocols/parameter-guide.ts";
 import type { NormalisedRequest, NormalisedVideoRequest } from "./protocols/requests.ts";
@@ -19,9 +21,11 @@ import {
   type JobContext,
   type JobImages,
   type JobVideo,
+  type ModelTarget,
   type ProtocolAdapter,
   type ProviderErrorKind,
   type ReferenceImage,
+  type ResumeHandle,
 } from "./protocols/protocol.ts";
 
 /** How long `generate_image`, `generate_video` and `get_job` wait for a Job before saying it is still running. */
@@ -49,6 +53,8 @@ export interface JobRunnerDeps {
   pollIntervalMs?: number;
   /** Defaults to {@link defaultRetryDelayMs}. */
   retryDelayMs?: number;
+  /** Where Jobs on a Protocol that runs on the Runtime go, once the machine-wide queue gives them their turn. */
+  runtime: RuntimeManager;
 }
 
 interface SpecBase extends ResolvedModel {
@@ -97,6 +103,61 @@ export class JobFailedError extends Error {
   }
 }
 
+/** Raised inside a Job that was cancelled before its Provider had it, or whose Provider cannot cancel it. */
+class JobCancelled extends Error {}
+
+/**
+ * What a running Job's caller can do to it: ask to cancel it. Checked at every pause; once the Provider has the Job
+ * and can cancel it, it is asked to, and the Job runs on until the Provider says it stopped. Otherwise the Job stops.
+ */
+class JobControl {
+  requested = false;
+  private cancelTask: (() => Promise<void>) | undefined;
+  private sent = false;
+  /** Rejects once a cancel is requested for a Job its Provider cannot cancel, so the Job stops at once. */
+  readonly stopped: Promise<never>;
+  private stop!: (error: JobCancelled) => void;
+
+  constructor(readonly onRuntime: boolean) {
+    this.stopped = new Promise<never>((_, reject) => {
+      this.stop = reject;
+    });
+    this.stopped.catch(() => {});
+  }
+
+  /** The Provider has the Job: from now on, a cancel is sent to it, where the Protocol can. */
+  submitted(adapter: ProtocolAdapter, handle: ResumeHandle, target: ModelTarget, http: HttpTransport): void {
+    const cancel = adapter.cancel;
+    if (cancel !== undefined) this.cancelTask = () => cancel.call(adapter, handle, target, http);
+  }
+
+  request(): void {
+    this.requested = true;
+    if (!this.onRuntime) this.stop(new JobCancelled());
+  }
+
+  async check(): Promise<void> {
+    if (!this.requested) return;
+    if (this.cancelTask === undefined) throw new JobCancelled();
+    if (this.sent) return;
+    this.sent = true;
+    await this.cancelTask();
+  }
+}
+
+/** What a cancelled Job's record and error say. */
+function cancelledMessage(onRuntime: boolean, providerId: string): string {
+  return onRuntime
+    ? "The Job was cancelled."
+    : `The Job was cancelled: litevision stopped waiting for it, but ${providerLabel(providerId)} may still finish it and bill for it.`;
+}
+
+/** What `cancel` did: stopped the Job, or asked its Runtime to, which stops it at its next step. */
+export interface CancelOutcome {
+  status: "cancelled" | "cancelling";
+  message: string;
+}
+
 /** Raised inside a Job when litevision shuts down under it. Nothing more is recorded, so the Job can be resumed. */
 class JobAbandoned extends Error {
   constructor() {
@@ -119,6 +180,8 @@ const lostMessage = "litevision stopped before this Job finished, so its result 
 export class JobRunner {
   /** Every Job this process has run or resumed, settled or not. */
   private readonly jobs = new Map<string, Promise<CompletedJob>>();
+  /** The Jobs this process is running now. */
+  private readonly controls = new Map<string, JobControl>();
   private readonly abandons = new Set<() => void>();
   private closed = false;
   /** The latest save; the next one waits for it. */
@@ -151,9 +214,12 @@ export class JobRunner {
     const target = targetOf(spec);
     // Recorded before the Provider is called, so a Job lost with this process is never silently forgotten.
     await this.append(base, "running");
-    const job = this.track(base, spec.credential, async (context) => {
+    const job = this.track(base, spec.credential, spec.adapter, target, async (target, context, control) => {
       const submitted = await spec.adapter.submit(request, target, this.deps.http, context);
-      if (submitted.resumeHandle !== undefined) await this.append(base, "running", { resume: submitted.resumeHandle });
+      if (submitted.resumeHandle !== undefined) {
+        await this.append(base, "running", { resume: submitted.resumeHandle });
+        control.submitted(spec.adapter, submitted.resumeHandle, target, this.deps.http);
+      }
       return submitted.wait();
     });
     return this.reply(base, job, wait);
@@ -180,9 +246,10 @@ export class JobRunner {
     });
     const target = targetOf(spec);
     await this.append(base, "running");
-    const job = this.track(base, spec.credential, async (context) => {
+    const job = this.track(base, spec.credential, spec.adapter, target, async (target, context, control) => {
       const submitted = await submitVideo.call(spec.adapter, request, target, this.deps.http, context);
       await this.append(base, "running", { resume: submitted.resumeHandle });
+      control.submitted(spec.adapter, submitted.resumeHandle, target, this.deps.http);
       return videoAsImages(await submitted.wait());
     });
     return this.reply(base, job, wait);
@@ -250,6 +317,65 @@ export class JobRunner {
     return this.waitFor(record.model, id, job);
   }
 
+  /**
+   * Cancels a running Job. One this process runs stops at its next pause; on the Runtime, sd-server stops it at its
+   * next step, keeping the Model loaded. A local Job another process runs is stopped by that process, through the
+   * queue. A cloud Job is only no longer waited for: its Provider may still finish it and bill for it.
+   */
+  async cancel(id: string): Promise<CancelOutcome> {
+    const record = await readJob(this.deps.dirs, id);
+    if (record === undefined) throw new ConfigError(`litevision has no Job "${id}". Use the \`job_id\` that \`generate_image\` returned.`);
+    if (record.outcome !== "running") {
+      const ended = record.outcome === "completed" ? "already completed" : record.error?.kind === "cancelled" ? "already been cancelled" : "already failed";
+      throw new ConfigError(`Job ${id} has ${ended}; there is nothing to cancel.`);
+    }
+    const adapter = adapterForProtocol(record.protocol);
+    const control = this.controls.get(id);
+    const job = this.jobs.get(id);
+    const runtime = adapter?.onRuntime === true;
+    const elsewhere = runtime && (await withdraw(this.deps.dirs, id));
+    if (control !== undefined && job !== undefined) {
+      control.request();
+      return this.settled(id, job);
+    }
+    if (elsewhere) {
+      return {
+        status: "cancelling",
+        message: "Another litevision session runs this Job and stops it: at once while it waits for its turn, else at the Runtime's next step. Call `get_job` to see it end.",
+      };
+    }
+    // No process here runs the Job; a local one's task may still be on the Runtime. A cloud one another session waits
+    // for ends there too: that session finds it cancelled before saving anything.
+    if (runtime && record.resume !== undefined && adapter?.cancel !== undefined) {
+      const provider = (await loadConfig(this.deps.dirs)).providers.find((candidate) => candidate.id === record.provider);
+      const baseUrl = provider === undefined ? undefined : await this.deps.runtime.address(provider.baseUrl, { start: false });
+      const target = { providerId: record.provider, baseUrl: baseUrl ?? "", modelId: record.modelId, credential: "" };
+      if (baseUrl !== undefined) await adapter.cancel(record.resume, target, this.deps.http).catch(() => undefined);
+    }
+    const message = cancelledMessage(runtime, record.provider);
+    await this.append(baseOf(record), "failed", { error: { kind: "cancelled", message } });
+    return { status: "cancelled", message };
+  }
+
+  /** How a Job this process runs ended once cancelled, waiting up to the wait limit for it to stop. */
+  private async settled(id: string, job: Promise<CompletedJob>): Promise<CancelOutcome> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<"waiting">((resolve) => {
+      timer = setTimeout(() => resolve("waiting"), this.waitLimitMs);
+    });
+    try {
+      const ended = await Promise.race([job.then(() => "completed" as const), limit]);
+      if (ended === "completed") throw new ConfigError(`Job ${id} completed before it could be cancelled. Call \`get_job\` for its files.`);
+      return { status: "cancelling", message: "The Runtime stops the Job at its next step. Call `get_job` to see it end." };
+    } catch (error) {
+      if (error instanceof JobFailedError && error.kind === "cancelled") return { status: "cancelled", message: error.message };
+      if (error instanceof JobAbandoned) return { status: "cancelling", message: "litevision is shutting down." };
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Abandons every running Job where it stands, as if the process had stopped; `get` resumes them later. */
   close(): void {
     this.closed = true;
@@ -260,6 +386,7 @@ export class JobRunner {
   private readonly context: JobContext = {
     pause: () => this.sleep(this.pollIntervalMs),
     backoff: (retry) => this.sleep(this.retryDelayMs * 2 ** (retry - 1)),
+    checkCancelled: async () => {},
   };
 
   /** Resolves after `ms`, or rejects with {@link JobAbandoned} when litevision shuts down first. */
@@ -323,19 +450,42 @@ export class JobRunner {
     const target = { providerId: provider.id, baseUrl: provider.baseUrl, modelId: record.modelId, credential };
     if (video) {
       const resumeVideo = adapter.resumeVideo!;
-      return this.track(base, credential, async (context) => videoAsImages(await resumeVideo.call(adapter, handle, target, this.deps.http, context).wait()));
+      return this.track(base, credential, adapter, target, async (target, context, control) => {
+        control.submitted(adapter, handle, target, this.deps.http);
+        return videoAsImages(await resumeVideo.call(adapter, handle, target, this.deps.http, context).wait());
+      }, true);
     }
     const resumeImages = adapter.resume!;
-    return this.track(base, credential, (context) => resumeImages.call(adapter, handle, target, this.deps.http, context).wait());
+    return this.track(base, credential, adapter, target, (target, context, control) => {
+      control.submitted(adapter, handle, target, this.deps.http);
+      return resumeImages.call(adapter, handle, target, this.deps.http, context).wait();
+    }, true);
   }
 
-  /** Runs a Job to its end: saves what it brought back and records how it went. */
-  private async track(base: JobBase, credential: string, run: (context: JobContext) => Promise<JobImages>): Promise<CompletedJob> {
+  /**
+   * Runs a Job to its end: saves what it brought back and records how it went. A Job on the Runtime first waits for
+   * its turn in the machine-wide queue, and goes to the Runtime's address.
+   */
+  private async track(
+    base: JobBase,
+    credential: string,
+    adapter: ProtocolAdapter,
+    target: ModelTarget,
+    run: RunJob,
+    /** A Job picked up after a restart: its task is on the Runtime that ran it, or gone with it. */
+    resuming = false,
+  ): Promise<CompletedJob> {
     // A Provider may echo the Credential back in an error; it must never reach the Agent or the history.
     const safe = (text: string) => redact(text, credential);
     const { n } = base.parameters;
+    const control = new JobControl(adapter.onRuntime === true);
+    this.controls.set(base.id, control);
+    const context = checkedContext(this.context, () => control.check());
     try {
-      const result = await run(this.context);
+      const running = control.onRuntime ? this.onRuntime(base, target, context, control, run, resuming) : run(target, context, control);
+      const result = await Promise.race([running, control.stopped]);
+      // Cancelled from another session, which cannot reach this one but through the Job history.
+      if ((await readJob(this.deps.dirs, base.id))?.error?.kind === "cancelled") throw new JobCancelled();
       if (this.closed) throw new JobAbandoned();
       const fetched = await fetchResults(this.deps.http, result.images, base.provider);
       const reasons = [result.shortfall, ...fetched.failures.map((failure) => failure.message)].filter((reason) => reason !== undefined);
@@ -364,11 +514,47 @@ export class JobRunner {
       };
     } catch (error) {
       if (error instanceof JobAbandoned || this.closed) throw new JobAbandoned();
+      if (error instanceof JobCancelled || (error instanceof ProviderError && error.kind === "cancelled")) {
+        const message = cancelledMessage(control.onRuntime, base.provider);
+        await this.append(base, "failed", { error: { kind: "cancelled", message } });
+        throw new JobFailedError(base.id, "cancelled", message);
+      }
       const kind = error instanceof ProviderError ? error.kind : "other";
       const message = safe((error as Error).message);
       const options = error instanceof ProviderError ? error.options : [];
       await this.append(base, "failed", { error: { kind, message, ...(options.length === 0 ? {} : { options: [...options] }) } });
       throw new JobFailedError(base.id, kind, message);
+    } finally {
+      this.controls.delete(base.id);
+    }
+  }
+
+  /**
+   * Runs a Job on the Runtime once the machine-wide queue gives it the turn, which it holds until the Job ends: the
+   * Runtime holds one Model and will not switch it under a running Job. Its queue file going away cancels it.
+   */
+  private async onRuntime(
+    base: JobBase,
+    target: ModelTarget,
+    context: JobContext,
+    control: JobControl,
+    run: RunJob,
+    resuming: boolean,
+  ): Promise<JobImages> {
+    const place = await QueuePlace.join(this.deps.dirs, base.id, base.modelId);
+    const queued = checkedContext(this.context, async () => {
+      if (await place.withdrawn()) control.request();
+      await control.check();
+    });
+    try {
+      while (!(await place.take())) await queued.pause();
+      const baseUrl = await this.deps.runtime.address(target.baseUrl, { start: !resuming });
+      if (baseUrl === undefined) {
+        throw providerError("other", base.provider, "the Runtime that ran this Job has stopped, and its tasks with it. Generate again.");
+      }
+      return await run({ ...target, baseUrl }, queued, control);
+    } finally {
+      await place.leave();
     }
   }
 
@@ -399,6 +585,24 @@ export class JobRunner {
       ...defined,
     });
   }
+}
+
+/** How a Job runs once litevision knows where its Provider is: submit or pick up, then wait. */
+type RunJob = (target: ModelTarget, context: JobContext, control: JobControl) => Promise<JobImages>;
+
+/** The Job runner's context, with `check` run after every pause and before a submission. */
+function checkedContext(context: JobContext, check: () => Promise<void>): JobContext {
+  return {
+    pause: async () => {
+      await context.pause();
+      await check();
+    },
+    backoff: async (retry) => {
+      await context.backoff(retry);
+      await check();
+    },
+    checkCancelled: check,
+  };
 }
 
 function baseOf(record: JobRecord): JobBase {

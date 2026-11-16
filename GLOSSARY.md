@@ -23,7 +23,7 @@ The secret a Provider needs, usually an API key. The User enters it; the Agent n
 _Avoid_: Token, secret
 
 **Runtime**:
-The inference server that runs Models on the User's own machine: stable-diffusion.cpp's `sd-server`. It loads one Model at a time, from a recipe whose id is the Model's model id.
+The inference server that runs Models on the User's own machine: stable-diffusion.cpp's `sd-server`. It loads one Model at a time, from a recipe whose id is the Model's model id. One per machine, shared by every litevision process.
 _Avoid_: Backend, engine, local server
 
 **Protocol**:

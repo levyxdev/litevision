@@ -88,7 +88,7 @@ async function pollJob(jobId: string, target: ModelTarget, http: HttpTransport, 
       throw providerError(
         "other",
         target.providerId,
-        `the Runtime no longer has task ${jobId}: sd-server keeps a finished task for 10 minutes by default, and forgets every task when it restarts. Generate again.`,
+        `the Runtime no longer has task ${jobId}: sd-server forgets every task when it restarts, and keeps a finished one for a day when litevision started it, else for 10 minutes by default. Generate again.`,
       );
     }
     if (!response.ok) throw await errorOf(response, target.providerId);
@@ -100,7 +100,8 @@ async function pollJob(jobId: string, target: ModelTarget, http: HttpTransport, 
       if (images.length === 0) throw providerError("other", target.providerId, `task ${jobId} completed without images.`);
       return { images };
     }
-    if (job.status === "failed" || job.status === "cancelled") {
+    if (job.status === "cancelled") throw providerError("cancelled", target.providerId, job.error?.message ?? `task ${jobId} cancelled.`);
+    if (job.status === "failed") {
       throw providerError("other", target.providerId, job.error?.message ?? `task ${jobId} ${job.status}.`);
     }
     // "queued" or "generating".
@@ -115,6 +116,8 @@ function waitForJob(jobId: string, target: ModelTarget, http: HttpTransport, con
 export const sdcpp: ProtocolAdapter = {
   needsCredential: false,
 
+  onRuntime: true,
+
   docsUrl: () => `${docs}#post-sdcppv1img_gen`,
 
   requestFields: { image: { shape: [{ width: "width", height: "height" }], format: "output_format" } },
@@ -123,6 +126,7 @@ export const sdcpp: ProtocolAdapter = {
 
   async submit(request, target, http, context) {
     await ensureLoaded(target, http, context);
+    await context.checkCancelled();
     const body = {
       prompt: request.prompt,
       batch_count: request.n,
@@ -139,5 +143,15 @@ export const sdcpp: ProtocolAdapter = {
 
   resume(handle, target, http, context) {
     return waitForJob(String(handle.jobId), target, http, context);
+  },
+
+  /** sd-server cancels a queued task at once, and a generating one at its next step; the Model stays loaded. */
+  async cancel(handle, target, http) {
+    const url = `${baseUrlOf(target)}/sdcpp/v1/jobs/${encodeURIComponent(String(handle.jobId))}/cancel`;
+    const response = await http(url, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch((error: Error) => {
+      throw providerError("other", target.providerId, `cancelling task ${String(handle.jobId)} failed: ${error.message}`);
+    });
+    // A task the Runtime no longer has, or one already finished, needs no cancelling.
+    if (!response.ok && response.status !== 404 && response.status !== 409 && response.status !== 410) throw await errorOf(response, target.providerId);
   },
 };

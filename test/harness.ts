@@ -1,11 +1,11 @@
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { parseCommand } from "../src/cli.ts";
 import type { Dirs } from "../src/dirs.ts";
 import { catalog, type Catalog } from "../src/local/catalog.ts";
-import type { Hardware } from "../src/local/hardware.ts";
+import { runtimePlatform, type Hardware } from "../src/local/hardware.ts";
 import { runLocal } from "../src/local/install.ts";
 import { createServer } from "../src/server.ts";
 import { makeTempDirs, recordedTransport, type Route, type Routes } from "./recorded-http.ts";
@@ -30,6 +30,34 @@ export interface HarnessOptions {
   retryDelayMs?: number;
   /** What `local install` downloads; its files are served from `routes`. */
   catalog?: Catalog;
+  /**
+   * Installs a fake Runtime binary, a script that serves sd-server's API, where litevision looks for this platform's
+   * build, and sends requests to it, on 127.0.0.1 with no recorded route, through for real.
+   */
+  runtime?: boolean;
+  /** Sends requests on 127.0.0.1 with no recorded route through for real, to a Runtime `local install` installed. */
+  reachRuntime?: boolean;
+  /** How long the Runtime may sit idle before its Model is unloaded; tests keep it short. */
+  runtimeIdleMs?: number;
+  /** Runs this harness on another's home and output folders, as a second session on the same machine. */
+  shareHomeWith?: Harness;
+}
+
+/** One event the fake Runtime logged: `start` (with `args`), `load`, `unload`, `generate`, `done` or `cancel`. */
+export interface RuntimeEvent {
+  event: string;
+  recipe?: string | null;
+  id?: string;
+  args?: string[];
+  at: number;
+  pid: number;
+}
+
+export interface FakeRuntime {
+  /** Everything the fake Runtime did so far, across every start, in order. */
+  events(): Promise<RuntimeEvent[]>;
+  /** How long each Job takes on the Runtime from now on. */
+  setJobMs(ms: number): Promise<void>;
 }
 
 export interface CliOptions {
@@ -48,6 +76,10 @@ export interface Harness {
   requests: Request[];
   /** Every URL litevision asked to open in the User's browser, in order. No browser is launched. */
   openedUrls: string[];
+  /** With the `runtime` option, or on a home shared with a harness that has it. */
+  runtime: FakeRuntime | undefined;
+  /** @internal The temporary root this harness's home is under. */
+  root: string;
   /**
    * Stands in for the MCP server process restarting: closes this server, abandoning its running Jobs, and connects
    * `client` to a new one on the same directories and Provider responses.
@@ -59,10 +91,12 @@ export interface Harness {
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const { root, dirs } = await makeTempDirs(options);
-  const cwd = join(root, "cwd");
+  const shared = options.shareHomeWith;
+  const { root, dirs } = shared === undefined ? await makeTempDirs(options) : { root: shared.root, dirs: shared.dirs };
+  const cwd = join(root, shared === undefined ? "cwd" : `cwd-${crypto.randomUUID()}`);
   await mkdir(cwd, { recursive: true });
-  const { http, requests } = recordedTransport(options.routes);
+  const runtime = shared?.runtime ?? (options.runtime ? await installFakeRuntime(root, dirs, options.catalog ?? catalog) : undefined);
+  const { http, requests } = recordedTransport(options.routes, (url) => (runtime !== undefined || options.reachRuntime === true) && url.hostname === "127.0.0.1");
   const openedUrls: string[] = [];
 
   const connect = async () => {
@@ -80,6 +114,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       waitLimitMs: options.waitLimitMs,
       pollIntervalMs: options.pollIntervalMs,
       retryDelayMs: options.retryDelayMs ?? 1,
+      catalog: options.catalog,
+      runtimeIdleMs: options.runtimeIdleMs,
     });
     const client = new Client({ name: "test", version: "0.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -100,6 +136,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     cwd,
     requests,
     openedUrls,
+    runtime,
+    root,
     async restart() {
       await disconnect();
       connected = await connect();
@@ -125,7 +163,31 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     },
     async close() {
       await disconnect();
-      await rm(root, { recursive: true, force: true });
+      if (shared === undefined) await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+/** Writes the fake Runtime's launcher where litevision finds the installed Runtime build for this platform. */
+export async function installFakeRuntime(root: string, dirs: Dirs, catalog: Catalog): Promise<FakeRuntime> {
+  const platform = runtimePlatform();
+  if (platform === undefined) throw new Error("The fake Runtime needs a platform litevision has a Runtime build for.");
+  const build = catalog.runtime[platform];
+  const folder = join(dirs.home, "runtime", build.tag);
+  const logs = join(root, "fake-runtime");
+  await mkdir(folder, { recursive: true });
+  await mkdir(logs, { recursive: true });
+  const binary = join(folder, build.binary);
+  const script = join(import.meta.dir, "fake-runtime.ts");
+  await writeFile(binary, `#!/bin/sh\nFAKE_RUNTIME_DIR='${logs}' exec '${process.execPath}' '${script}' "$@"\n`);
+  await chmod(binary, 0o755);
+  return {
+    async events() {
+      const text = await readFile(join(logs, "log.jsonl"), "utf8").catch(() => "");
+      return text.trim() === "" ? [] : text.trim().split("\n").map((line) => JSON.parse(line) as RuntimeEvent);
+    },
+    async setJobMs(ms) {
+      await writeFile(join(logs, "fake.json"), JSON.stringify({ jobMs: ms }));
     },
   };
 }

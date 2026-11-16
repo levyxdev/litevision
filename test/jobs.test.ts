@@ -175,3 +175,51 @@ describe("several Jobs with wait: false", () => {
     expect((await readHistory(harness))[0]).toMatchObject({ id: job_id, outcome: "failed" });
   });
 });
+
+describe("cancel_job on a cloud Model", () => {
+  test("stops waiting for the Job at once, and says the Provider may still bill for it", async () => {
+    const generation = held();
+    harness = await startHarness(openaiSetup(generation.route));
+    const started = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", wait: false } });
+    const { job_id } = started.structuredContent as unknown as JobResult;
+
+    const cancelled = await harness.client.callTool({ name: "cancel_job", arguments: { job_id } });
+    expect(cancelled.structuredContent).toMatchObject({ job_id, status: "cancelled" });
+    expect(textOf(cancelled)).toContain('Provider "openai" may still finish it and bill for it');
+
+    // The Provider's late answer changes nothing.
+    generation.release();
+    const job = await harness.client.callTool({ name: "get_job", arguments: { job_id } });
+    expect(textOf(job)).toContain("was cancelled");
+    expect((await readHistory(harness))[0]).toMatchObject({ id: job_id, outcome: "failed", error: { kind: "cancelled" } });
+  });
+
+  test("cancelled from another session, the session waiting for it saves nothing when the Provider answers", async () => {
+    const generation = held();
+    harness = await startHarness(openaiSetup(generation.route));
+    const other = await startHarness({ ...openaiSetup(generation.route), shareHomeWith: harness });
+    try {
+      const started = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", wait: false } });
+      const { job_id } = started.structuredContent as unknown as JobResult;
+
+      expect((await other.client.callTool({ name: "cancel_job", arguments: { job_id } })).structuredContent).toMatchObject({ status: "cancelled" });
+      generation.release();
+      expect(textOf(await harness.client.callTool({ name: "get_job", arguments: { job_id } }))).toContain("was cancelled");
+      expect((await readHistory(harness))[0]).toMatchObject({ outcome: "failed", error: { kind: "cancelled" } });
+    } finally {
+      await other.close();
+    }
+  });
+
+    test("a Job no session runs any more is recorded as cancelled, so get_job does not pick it up again", async () => {
+    const generation = held();
+    harness = await startHarness(openaiSetup(generation.route));
+    const started = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", wait: false } });
+    const { job_id } = started.structuredContent as unknown as JobResult;
+    await harness.restart();
+
+    expect((await harness.client.callTool({ name: "cancel_job", arguments: { job_id } })).structuredContent).toMatchObject({ status: "cancelled" });
+    expect(textOf(await harness.client.callTool({ name: "get_job", arguments: { job_id } }))).toContain("was cancelled");
+    generation.release();
+  });
+});

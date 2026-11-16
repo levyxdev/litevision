@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Hardware } from "../src/local/hardware.ts";
 import { startHarness, type Harness, type HarnessOptions } from "./harness.ts";
 import { fakeDownloads, type FakeDownloads } from "./local-downloads.ts";
-import { recorded, textOf } from "./helpers.ts";
+import { textOf } from "./helpers.ts";
 import { inTurn } from "./recorded-http.ts";
 
 const mac16: Hardware = { platform: "macos-arm64", memoryGb: 16 };
@@ -34,14 +34,8 @@ const config = async () => JSON.parse(await readFile(home("config.json"), "utf8"
 const recipe = async () => JSON.parse(await readFile(home("models", "recipes", "flux3-klein.json"), "utf8"));
 
 describe("local install", () => {
-  test("leaves a Runtime, the weights and a configured Model that the sdcpp Protocol uses", async () => {
-    await start({
-      routes: {
-        "GET http://127.0.0.1:1234/sdcpp/v1/models/status": recorded("sdcpp/status-ready.json"),
-        "POST http://127.0.0.1:1234/sdcpp/v1/img_gen": recorded("sdcpp/submitted.json", 202),
-        "GET http://127.0.0.1:1234/sdcpp/v1/jobs/job_01HTXYZABC": recorded("sdcpp/job-completed.json"),
-      },
-    });
+  test("leaves a Runtime, the weights and a configured Model that a Job runs on", async () => {
+    await start({ reachRuntime: true, pollIntervalMs: 5 });
     const { code, output } = await install(["--yes"]);
 
     expect(code, output).toBe(0);

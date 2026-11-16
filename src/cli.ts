@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
+import { constants } from "node:os";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createInterface } from "node:readline/promises";
@@ -83,6 +84,9 @@ if (isEntry) {
   if (command.kind === "serve") {
     // stdout carries the MCP protocol, so nothing else may be printed to it.
     await createServer({ dirs: defaultDirs(), http: fetchTransport }).connect(new StdioServerTransport());
+    // A Runtime this process started is stopped on exit, so the client going away, however it does, is an exit.
+    process.stdin.once("end", () => process.exit(0));
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => process.exit(128 + constants.signals[signal]));
   } else if (command.kind === "settings") {
     await runSettings();
   } else if (command.kind === "local") {

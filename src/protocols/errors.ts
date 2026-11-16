@@ -21,6 +21,7 @@ const explanations: Record<ProviderErrorKind, string> = {
   unsupported: "does not support this request. Choose another Model or change the request.",
   rejected_option:
     "rejected an option in the request. Fix it using what the Provider said and the Model's docs, and try again; if it names the prompt or the number of images, change that instead.",
+  cancelled: "stopped the Job, which was cancelled.",
   other: "failed to complete the Job.",
 };
 

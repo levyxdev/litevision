@@ -16,13 +16,14 @@ export interface RecordedTransport {
   requests: Request[];
 }
 
-/** The injected HTTP transport: replays recorded Provider responses, and fails any request without one. */
-export function recordedTransport(routes: Routes = {}): RecordedTransport {
+/** The injected HTTP transport: replays recorded Provider responses, and fails any request without one unless `passThrough` sends it on. */
+export function recordedTransport(routes: Routes = {}, passThrough: (url: URL) => boolean = () => false): RecordedTransport {
   const requests: Request[] = [];
   const http: HttpTransport = async (input, init) => {
     const request = new Request(input, init);
     requests.push(request.clone() as Request);
     const route = routes[`${request.method} ${request.url}`];
+    if (route === undefined && passThrough(new URL(request.url))) return fetch(request);
     if (route === undefined) {
       throw new Error(`No recorded response for ${request.method} ${request.url}`);
     }

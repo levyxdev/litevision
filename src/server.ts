@@ -37,6 +37,8 @@ import {
 } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, JobRunner, type JobState, type StartOptions } from "./jobs.ts";
+import { catalog, type Catalog } from "./local/catalog.ts";
+import { RuntimeManager } from "./local/runtime.ts";
 import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
@@ -68,6 +70,10 @@ export interface ServerDeps {
   pollIntervalMs?: number;
   /** The delay before the first retry of a request the Provider never processed; defaults to two seconds. */
   retryDelayMs?: number;
+  /** Where litevision finds the Runtime build it installed; defaults to the pinned catalog. */
+  catalog?: Catalog;
+  /** How long the Runtime's Model may sit idle before it is unloaded; defaults to ten minutes. */
+  runtimeIdleMs?: number;
 }
 
 export const instructions = `litevision generates images and videos through Models the User has configured with their own Providers. Before writing a prompt, use the litevision Skill. If you do not have it, mention once that the User can install it with \`npx skills add levyxdev/litevision\`.
@@ -627,7 +633,8 @@ function toolError(text: string) {
  */
 async function failure(error: unknown, hint: Hint | undefined) {
   const reason = await failureReason(error, hint);
-  return toolError(error instanceof JobFailedError ? `Job ${error.jobId} failed: ${reason}` : reason);
+  if (!(error instanceof JobFailedError)) return toolError(reason);
+  return toolError(error.kind === "cancelled" ? `Job ${error.jobId}: ${reason}` : `Job ${error.jobId} failed: ${reason}`);
 }
 
 /** What to add to a failed Job's error, given how it failed. */
@@ -752,7 +759,16 @@ export function createServer(deps: ServerDeps): McpServer {
   const now = deps.now ?? (() => new Date());
   const cwd = deps.cwd ?? process.cwd();
   const infoDeps: ModelInfoDeps = { dirs: deps.dirs, http: deps.http, now };
-  const jobs = new JobRunner({ dirs: deps.dirs, http: deps.http, now, waitLimitMs: deps.waitLimitMs, pollIntervalMs: deps.pollIntervalMs, retryDelayMs: deps.retryDelayMs });
+  const runtime = new RuntimeManager({ dirs: deps.dirs, http: deps.http, catalog: deps.catalog ?? catalog, idleMs: deps.runtimeIdleMs });
+  const jobs = new JobRunner({
+    dirs: deps.dirs,
+    http: deps.http,
+    now,
+    waitLimitMs: deps.waitLimitMs,
+    pollIntervalMs: deps.pollIntervalMs,
+    retryDelayMs: deps.retryDelayMs,
+    runtime,
+  });
 
   /** Checks an image Job against its Model before anything is sent, so a bad request starts no Job. */
   const prepareImage = async (resolved: ResolvedModel, args: ImageArgs): Promise<PreparedJob> => {
@@ -1061,6 +1077,32 @@ export function createServer(deps: ServerDeps): McpServer {
   );
 
   server.registerTool(
+    "cancel_job",
+    {
+      description:
+        "Cancel a running Job, such as a long local one the User no longer wants. On a local Model the Runtime stops it at its next step and keeps the Model loaded; a Job still waiting for its turn never starts. On a cloud Model litevision only stops waiting: the Provider may still finish the Job and bill for it.",
+      inputSchema: {
+        job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `generate_comparison` returned."),
+      },
+      outputSchema: {
+        job_id: z.string(),
+        status: z
+          .enum(["cancelled", "cancelling"])
+          .describe('"cancelling" while the Runtime or another litevision session has yet to stop it; call `get_job` to see it end.'),
+        message: z.string(),
+      },
+    },
+    async ({ job_id }) => {
+      try {
+        const outcome = await jobs.cancel(job_id);
+        return { content: [{ type: "text", text: `Job ${job_id}: ${outcome.message}` }], structuredContent: { job_id, ...outcome } };
+      } catch (error) {
+        return failure(error, undefined);
+      }
+    },
+  );
+
+  server.registerTool(
     "rate_job",
     {
       description:
@@ -1243,6 +1285,7 @@ export function createServer(deps: ServerDeps): McpServer {
   });
   server.server.onclose = () => {
     jobs.close();
+    void runtime.stop();
     void settings.close();
   };
 

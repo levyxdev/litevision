@@ -25,3 +25,10 @@ export async function detectHardware(): Promise<Hardware> {
   if (process.platform === "win32" && process.arch === "x64") return { platform: "windows-cuda12", memoryGb: await nvidiaVramGb() };
   return { platform: undefined, name: `${process.platform}-${process.arch}` };
 }
+
+/** The platform litevision has a Runtime build for that this process runs on, if any; no hardware is read. */
+export function runtimePlatform(): Platform | undefined {
+  if (process.platform === "darwin" && process.arch === "arm64") return "macos-arm64";
+  if (process.platform === "win32" && process.arch === "x64") return "windows-cuda12";
+  return undefined;
+}
