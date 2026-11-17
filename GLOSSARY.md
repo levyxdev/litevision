@@ -52,6 +52,10 @@ _Avoid_: Capabilities (they suggest limits litevision enforces), parameter schem
 One generation request sent to one Model, from submission until its results are saved locally. Every generation is a Job, even when the Provider answers immediately.
 _Avoid_: Task (APIMart's word for its own server-side job), request, run
 
+**Job history**:
+litevision's record of the User's Jobs, with their Ratings and Picks. Deleting a Job removes it from the Job history for good.
+_Avoid_: History, log, records
+
 **Comparison**:
 A set of Jobs started together for one request so the User can pick among their results. Its Jobs may differ in prompt, in Model, or both, but all share one Modality. Started only when the User asks for it or agrees to it.
 _Avoid_: Batch, group, candidate set
