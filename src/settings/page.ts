@@ -134,6 +134,14 @@ export function renderPage(nonce: string): string {
   .filters select { width: auto; flex: 1 1 140px; max-width: 220px; }
   .filters .count { flex: 1 0 auto; text-align: right; font-size: 13px; color: var(--muted); }
   .more { display: flex; justify-content: center; margin-top: 4px; }
+  .report { display: grid; gap: 4px; padding: 12px 16px; margin-bottom: 12px; border: 1px solid var(--border);
+    border-left: 3px solid var(--ok); border-radius: 12px; background: var(--surface); font-size: 13px; }
+  .report[hidden] { display: none; }
+  .report .report-head { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  .report .report-head > span { flex: 1; }
+  .report p { overflow-wrap: anywhere; color: var(--muted); }
+  .comparison-head { display: flex; align-items: flex-start; gap: 10px; }
+  .comparison-head > div { flex: 1; min-width: 0; }
 
   #status { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
     background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none;
@@ -210,6 +218,7 @@ export function renderPage(nonce: string): string {
       <select id="filter-modality" aria-label="Media type"><option value="">Images and videos</option><option value="image">Images</option><option value="video">Videos</option></select>
       <span id="job-count" class="count" aria-live="polite"></span>
     </div>
+    <div id="job-report" class="report" role="status" hidden></div>
     <div id="job-list"><p class="muted">Loading…</p></div>
     <div class="more"><button id="show-more" type="button" hidden>Show more</button></div>
   </section>
@@ -792,7 +801,8 @@ function jobCard(job) {
     el("div", {},
       el("div", { className: "card-head" }, el("h3", { textContent: job.model }),
         ...(isPicked(job) ? [el("span", { className: "chip accent", textContent: "Picked" })] : []),
-        el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome })),
+        el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome }),
+        deleteButton("Delete", [job], "Delete this Job")),
       el("p", { className: "job-meta", textContent: job.modelId + " on " + job.provider + " · " + when + " · " + formatDuration(job.durationMs) })),
     el("p", { className: "prompt", textContent: job.prompt }),
     ...(job.files.length === 0 ? [] : [el("div", { className: "thumbs" }, ...job.files.map((file, index) => resultThumbnail(job, file, index)))]),
@@ -809,8 +819,11 @@ function comparisonCard(jobs) {
   const status = !pick ? "Not picked yet."
     : "Picked: " + (pick.result === undefined ? "" : "result " + pick.result + " of ") + (picked ? picked.model + "'s Job" : "Job " + pick.jobId) + ".";
   return el("div", { className: "comparison" },
-    el("div", { className: "comparison-head" }, el("h3", { textContent: "Comparison · " + (jobs.length === jobs[0].comparison.size ? jobs.length + " Jobs" : jobs.length + " of its " + jobs[0].comparison.size + " Jobs match the filters") }),
-      el("p", { textContent: status + " A Pick says which you prefer; it is not a Rating." })),
+    el("div", { className: "comparison-head" },
+      el("div", {},
+        el("h3", { textContent: "Comparison · " + (jobs.length === jobs[0].comparison.size ? jobs.length + " Jobs" : jobs.length + " of its " + jobs[0].comparison.size + " Jobs match the filters") }),
+        el("p", { textContent: status + " A Pick says which you prefer; it is not a Rating." })),
+      deleteButton(jobs.length === jobs[0].comparison.size ? "Delete Comparison" : "Delete these " + jobs.length, jobs, "Delete the Comparison's Jobs shown here")),
     ...jobs.map(jobCard));
 }
 
@@ -826,6 +839,67 @@ function jobEntries(jobs) {
     i = end;
   }
   return entries;
+}
+
+/** "1 Job", "3 Results": a count and its noun. */
+function count(n, noun) {
+  return n + " " + noun + (n === 1 ? "" : "s");
+}
+
+/** What deleting these Jobs would remove, from what the page shows of them; running Jobs are never deleted. */
+function deletionOf(jobs) {
+  const doomed = jobs.filter((job) => job.outcome !== "running");
+  const ids = new Set(doomed.map((job) => job.id));
+  const picked = new Set(doomed.filter((job) => job.comparison && job.comparison.pick && ids.has(job.comparison.pick.jobId)).map((job) => job.comparison.id));
+  return { ids: [...ids], results: doomed.reduce((sum, job) => sum + job.files.length, 0), picks: picked.size };
+}
+
+/** "Delete 2 Jobs, 3 Results and 1 Pick for good?" */
+function deletionQuestion({ ids, results, picks }) {
+  const parts = [count(ids.length, "Job"), count(results, "Result")];
+  if (picks > 0) parts.push(count(picks, "Pick"));
+  return "Delete " + parts.slice(0, -1).join(", ") + " and " + parts.at(-1) + " for good?\\n\\nThis cannot be undone. Result files you changed since they were saved are left, and your reference images are never deleted.";
+}
+
+/** A button that deletes these Jobs once the User confirms; disabled when none of them can be deleted. */
+function deleteButton(label, jobs, title) {
+  const button = el("button", { type: "button", className: "small danger", textContent: label, title });
+  const deletion = deletionOf(jobs);
+  if (deletion.ids.length === 0) {
+    button.disabled = true;
+    button.title = "A running Job cannot be deleted: cancel it first.";
+  }
+  button.onclick = () => deleteJobs(button, { jobIds: deletion.ids }, deletionQuestion(deletion));
+  return button;
+}
+
+/** Asks the User, then deletes, redraws the Job history and shows what was deleted and what was left. */
+async function deleteJobs(button, body, question) {
+  if (!confirm(question)) return;
+  await act(button, async () => {
+    const report = await api("POST", "/api/jobs/delete", body);
+    showReport(report);
+    await loadJobs(true);
+  });
+}
+
+const skipReasons = { "content-changed": "changed since the Job saved it", "already-gone": "already gone" };
+
+/** The deletion report above the Job history, until the User closes it. */
+function showReport(report) {
+  const box = document.getElementById("job-report");
+  const close = el("button", { type: "button", className: "small", textContent: "Close" });
+  close.onclick = () => (box.hidden = true);
+  const lines = [];
+  for (const skipped of report.skippedFiles) lines.push("Left " + skipped.file + ": " + skipReasons[skipped.reason] + ".");
+  if (report.runningJobs.length > 0) lines.push(count(report.runningJobs.length, "Job") + " still running, so not deleted. Cancel them first.");
+  if (report.notFound.length > 0) lines.push(count(report.notFound.length, "Job") + " had already been deleted.");
+  for (const pick of report.picksRemoved) lines.push("A Comparison lost its Pick with the Job it picked.");
+  for (const used of report.referencesOfOtherJobs) lines.push(used.file + " was a reference image of " + count(used.jobIds.length, "remaining Job") + ".");
+  box.replaceChildren(
+    el("div", { className: "report-head" }, el("span", { textContent: "Deleted " + count(report.deletedJobs.length, "Job") + " and " + count(report.deletedFiles.length, "file") + "." }), close),
+    ...lines.map((line) => el("p", { textContent: line })));
+  box.hidden = false;
 }
 
 /** The Job history tab's filters, as the API takes them; empty values are left out. */

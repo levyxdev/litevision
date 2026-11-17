@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { z } from "zod";
+import { deleteJobs } from "../deletion.ts";
 import type { Dirs } from "../dirs.ts";
 import type { HttpTransport } from "../http.ts";
 import type { Catalog } from "../local/catalog.ts";
@@ -191,6 +192,12 @@ const routes: Route[] = [
     handler: async ({ dirs, query }) => ({ body: await jobHistoryPage(dirs, parse(jobHistoryQuery, Object.fromEntries(query))) }),
   },
   {
+    // Deletes for good, as delete_jobs does; the page asks the User first.
+    method: "POST",
+    path: "/api/jobs/delete",
+    handler: async ({ dirs, body }) => ({ body: await deleteJobs(dirs, { jobIds: parse(deleteJobsInput, body).jobIds }) }),
+  },
+  {
     method: "POST",
     path: "/api/jobs/:id/rating",
     handler: async ({ dirs, now, params, body }) => ({
@@ -216,6 +223,10 @@ const routes: Route[] = [
 function infoDeps(dirs: Dirs, http: HttpTransport, now: () => Date): ModelInfoDeps {
   return { dirs, http, now };
 }
+
+const deleteJobsInput = z.object({
+  jobIds: z.array(z.string().min(1), { message: "Choose the Jobs to delete." }).min(1, "Choose the Jobs to delete."),
+});
 
 const protocolInput = z.object({ protocol: z.string().trim().min(1, "Choose a Protocol.") });
 
