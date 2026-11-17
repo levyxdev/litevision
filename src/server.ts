@@ -15,6 +15,7 @@ import {
   type ResolvedModel,
 } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
+import { readEvidence, type Evidence } from "./evidence.ts";
 import { fileStem } from "./file-names.ts";
 import {
   PickError,
@@ -28,7 +29,7 @@ import {
   recentPicks,
   recentRatings,
   verdicts,
-  type JobRecord,
+  type ModelKey,
   type PickRecord,
   type PickWithJob,
   type RatedJob,
@@ -224,7 +225,7 @@ async function listedModel(
   isDefault: boolean,
   detailed: boolean,
   ratedJobs: RatedJob[],
-  jobs: JobRecord[],
+  evidence: Evidence[],
 ) {
   const base = {
     alias: model.alias,
@@ -269,7 +270,7 @@ async function listedModel(
     };
   }
 
-  const statuses = modelOptionStatuses(jobs, model);
+  const statuses = modelOptionStatuses(evidence, model);
   const output: z.infer<typeof listedModelSchema> = {
     ...base,
     docs_url: described.docsUrl,
@@ -466,9 +467,9 @@ function optionStatusesBrief(statuses: OptionStatus[]): string {
     .join("");
 }
 
-/** What the Job history says about a Model's `provider_options` (ADR 0011). */
-async function modelStatuses(deps: Pick<ModelInfoDeps, "dirs">, model: Model): Promise<OptionStatus[]> {
-  return modelOptionStatuses(await readJobs(deps.dirs), model);
+/** What the evidence of ended Jobs says about a Model's `provider_options` (ADR 0011, ADR 0015). */
+async function modelStatuses(deps: Pick<ModelInfoDeps, "dirs">, model: ModelKey & { modality?: Modality }): Promise<OptionStatus[]> {
+  return modelOptionStatuses(await readEvidence(deps.dirs), model);
 }
 
 /**
@@ -487,7 +488,7 @@ async function jobDocs(deps: ModelInfoDeps, jobId: string): Promise<{ known: Par
     const model = { alias: job.model, provider: job.provider, modelId: job.modelId, protocol: job.protocol, modality };
     known = await modelInfo(deps, { model, provider });
   }
-  return { known, provider: job.provider, statuses: modelOptionStatuses(await readJobs(deps.dirs), job) };
+  return { known, provider: job.provider, statuses: await modelStatuses(deps, job) };
 }
 
 /**
@@ -1210,7 +1211,7 @@ export function createServer(deps: ServerDeps): McpServer {
           }
         }
         const ratedJobs = await readRatedJobs(deps.dirs);
-        const jobs = await readJobs(deps.dirs);
+        const evidence = await readEvidence(deps.dirs);
         const entries = await Promise.all(
           models.map((model) =>
             listedModel(
@@ -1220,7 +1221,7 @@ export function createServer(deps: ServerDeps): McpServer {
               model.alias === (model.modality === "video" ? defaultVideoModel : defaultModel),
               alias !== undefined,
               ratedJobs,
-              jobs,
+              evidence,
             ),
           ),
         );

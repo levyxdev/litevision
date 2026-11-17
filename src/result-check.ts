@@ -8,6 +8,9 @@ import { parseShape, parseSize } from "./protocols/parameter-guide.ts";
  * names them, and a video's length. What it finds decides whether the options it read are Honoured or Ignored.
  */
 
+/** What a request asked for, as far as the result check reads it: a Job's parameters, or its evidence (ADR 0015). */
+export type CheckedRequest = Pick<JobParameters, "providerOptions" | "requested" | "size" | "seconds" | "followsFirstFrame">;
+
 /** One thing the result check compared. */
 export interface ResultCheck {
   /** The result's shape, its pixel size, a video's length, or the file format. */
@@ -27,7 +30,7 @@ const durationToleranceSeconds = 0.5;
  * it could not tell, so the shape is not checked. Jobs recorded before that check against the size litevision chose,
  * or `width` and `height` in `provider_options` when the Agent set both.
  */
-function expectedShape(parameters: JobParameters): { ratio: number; asked: string } | undefined {
+function expectedShape(parameters: CheckedRequest): { ratio: number; asked: string } | undefined {
   if (parameters.requested !== undefined) {
     const parsed = parameters.requested.shape === null ? undefined : parseShape(parameters.requested.shape);
     return parsed === undefined ? undefined : { ratio: parsed.ratio, asked: parsed.label };
@@ -45,7 +48,7 @@ function expectedShape(parameters: JobParameters): { ratio: number; asked: strin
  * What the result check compared for a completed Job, as far as the saved files' headers tell. Something the request
  * asks for that litevision cannot read, or a result it cannot read, is not checked.
  */
-export function checkResult(parameters: JobParameters, observed: Array<MediaFacts | null>): ResultCheck[] {
+export function checkResult(parameters: CheckedRequest, observed: Array<MediaFacts | null>): ResultCheck[] {
   const files = observed.filter((facts) => facts !== null);
   const checks: ResultCheck[] = [];
   const expected = parameters.followsFirstFrame ? undefined : expectedShape(parameters);

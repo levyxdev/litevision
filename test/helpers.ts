@@ -24,6 +24,12 @@ export async function readHistoryLines(harness: Pick<Harness, "dirs">): Promise<
   return text.trim().split("\n").map((line) => JSON.parse(line));
 }
 
+/** Every line of `evidence.jsonl`, in order (ADR 0015); none while there is no file. */
+export async function readEvidenceLines(harness: Pick<Harness, "dirs">): Promise<Array<Record<string, unknown>>> {
+  const text = await readFile(join(harness.dirs.home, "evidence.jsonl"), "utf8").catch(() => "");
+  return text.trim() === "" ? [] : text.trim().split("\n").map((line) => JSON.parse(line));
+}
+
 /** Each Job's latest record in `jobs.jsonl`, ordered by when the Job started. Rating records are left out. */
 export async function readHistory(harness: Pick<Harness, "dirs">): Promise<Array<Record<string, unknown>>> {
   const latest = new Map<unknown, Record<string, unknown>>();

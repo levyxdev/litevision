@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defaultKey, modelNotesMaxLength, modelSchema, type NotesHistory } from "../config.ts";
 import { isPlainObject, readConfigObject, updateConfig, type ConfigObject } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
-import { readJobs } from "../history.ts";
+import { readEvidence } from "../evidence.ts";
 import { byStatus, modelOptionStatuses, type OptionStatus, type OptionStatusName } from "../option-status.ts";
 import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
@@ -70,9 +70,9 @@ export async function listModels(
  */
 export async function listOptionStatuses(dirs: Dirs): Promise<{ models: Record<string, Record<OptionStatusName, OptionStatus[]>> }> {
   const models = modelsOf(await readConfigObject(dirs));
-  const jobs = await readJobs(dirs);
+  const evidence = await readEvidence(dirs);
   return {
-    models: Object.fromEntries(models.map((model) => [model.alias, byStatus(modelOptionStatuses(jobs, { ...model, modality: modalityOf(model) }))])),
+    models: Object.fromEntries(models.map((model) => [model.alias, byStatus(modelOptionStatuses(evidence, { ...model, modality: modalityOf(model) }))])),
   };
 }
 

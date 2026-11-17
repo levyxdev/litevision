@@ -361,9 +361,9 @@ export interface ModelKey {
   modelId: string;
 }
 
-/** Whether a Job ran on the given upstream model. */
-export function ranOn(job: JobRecord, model: ModelKey): boolean {
-  return job.provider === model.provider && job.protocol === model.protocol && job.modelId === model.modelId;
+/** Whether a Job, or its evidence, ran on the given upstream model. */
+export function ranOn(ran: ModelKey, model: ModelKey): boolean {
+  return ran.provider === model.provider && ran.protocol === model.protocol && ran.modelId === model.modelId;
 }
 
 /** A current Rating with the Job it is about. */

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ConfigError, loadConfig, needsSettings, type ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
+import { appendEvidence } from "./evidence.ts";
 import { fileStem, saveNamed, type FileToSave } from "./file-names.ts";
 import { appendHistory, readJob, readJobs, type JobRecord, type SourceJob } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
@@ -587,13 +588,15 @@ export class JobRunner {
   private async append(base: JobBase, outcome: JobRecord["outcome"], progress: JobProgress = {}): Promise<void> {
     if (this.closed) throw new JobAbandoned();
     const defined = Object.fromEntries(Object.entries(progress).filter(([, value]) => value !== undefined));
-    await appendHistory(this.deps.dirs, {
+    const record: JobRecord = {
       ...base,
       durationMs: this.deps.now().getTime() - Date.parse(base.createdAt),
       files: [],
       outcome,
       ...defined,
-    });
+    };
+    await appendHistory(this.deps.dirs, record);
+    await appendEvidence(this.deps.dirs, record);
   }
 }
 

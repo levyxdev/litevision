@@ -1,4 +1,5 @@
-import { ranOn, type JobRecord, type ModelKey } from "./history.ts";
+import type { Evidence } from "./evidence.ts";
+import { ranOn, type ModelKey } from "./history.ts";
 import { namesOption, providerSaid } from "./protocols/errors.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
 import { checkedOptionKeys, fieldsChecked, fieldsToRead, optionKeyOf, valueAt, type RequestFields } from "./protocols/parameter-guide.ts";
@@ -6,7 +7,8 @@ import type { Modality } from "./protocols/protocol.ts";
 import { checkResult } from "./result-check.ts";
 
 /**
- * The Option Status of each `provider_options` value on a Model (ADR 0011), derived from the Job history on every read,
+ * The Option Status of each `provider_options` value on a Model (ADR 0011), derived on every read from the evidence
+ * each ended Job left apart from the Job history (ADR 0015),
  * from facts alone: what the result check found and what the Provider's errors named. A Rating or a Pick never
  * changes it.
  */
@@ -76,8 +78,8 @@ function unitsOf(options: Record<string, unknown>, fields: RequestFields): Unit[
 }
 
 /**
- * Every Option Status of a Model, newest evidence first. `jobs` are in Job history order, by when each Job last
- * changed (as {@link readJobs} gives them), so a Job's evidence counts from when it arrived. `fields` are the request
+ * Every Option Status of a Model, newest evidence first. `evidence` is in the order the Jobs ended (as
+ * {@link readEvidence} gives it), so a Job's evidence counts from when it arrived. `fields` are the request
  * fields its result check reads (from {@link fieldsToRead}), which say which options a check covered and which it
  * reads together.
  *
@@ -87,7 +89,7 @@ function unitsOf(options: Record<string, unknown>, fields: RequestFields): Unit[
  * names Rejected, and leaves the rest alone. Only the
  * latest Accepted value of each unit is kept, since it says nothing an earlier one did not.
  */
-export function optionStatuses(jobs: JobRecord[], model: ModelKey, fields: RequestFields): OptionStatus[] {
+export function optionStatuses(evidence: Evidence[], model: ModelKey, fields: RequestFields): OptionStatus[] {
   /** By unit keys, then by the values' JSON. */
   const statuses = new Map<string, Map<string, OptionStatus>>();
   const record = ({ keys, values }: Unit, status: Omit<OptionStatus, "options">) => {
@@ -101,17 +103,17 @@ export function optionStatuses(jobs: JobRecord[], model: ModelKey, fields: Reque
     ofUnit.set(id, { options: values, ...status });
     arrived.set(ofUnit.get(id)!, jobsSeen);
   };
-  /** When each Option Status's evidence arrived, counting Jobs in history order. */
+  /** When each Option Status's evidence arrived, counting Jobs in the order they ended. */
   const arrived = new Map<OptionStatus, number>();
   let jobsSeen = 0;
 
-  for (const job of jobs.filter((candidate) => ranOn(candidate, model))) {
+  for (const ofJob of evidence.filter((candidate) => ranOn(candidate, model))) {
     jobsSeen += 1;
-    const options = job.parameters?.providerOptions ?? {};
+    const options = ofJob.request.providerOptions ?? {};
     const units = unitsOf(options, fields);
-    const evidence = { jobId: job.id, date: job.createdAt };
-    if (job.outcome === "failed") {
-      const { error } = job;
+    const source = { jobId: ofJob.jobId, date: ofJob.createdAt };
+    if (ofJob.outcome === "failed") {
+      const { error } = ofJob;
       if (error?.kind !== "rejected_option" && error?.kind !== "unsupported") continue;
       const said = providerSaid(error.message);
       // The keys the Provider's answer named, as recorded with the Job; for Jobs recorded without them, the keys its message
@@ -119,15 +121,15 @@ export function optionStatuses(jobs: JobRecord[], model: ModelKey, fields: Reque
       const names = (key: string) => (error.options !== undefined ? error.options.includes(key) : said !== undefined && namesOption(said, key));
       const named = (key: string) => names(key) || names(optionKeyOf(key));
       for (const unit of units) {
-        if (unit.keys.some(named)) record(unit, { status: "rejected", ...evidence, reason: said ?? error.message });
+        if (unit.keys.some(named)) record(unit, { status: "rejected", ...source, reason: said ?? error.message });
       }
       continue;
     }
-    if (job.outcome !== "completed") continue;
+    if (ofJob.outcome !== "completed") continue;
     const checked = checkedOptionKeys(fields, options);
     /** Per unit, the problems the checks that read it found; empty when they found none. */
     const found = new Map<Unit, string[]>();
-    for (const check of checkResult(job.parameters, job.observed ?? [])) {
+    for (const check of checkResult(ofJob.request, ofJob.observed ?? [])) {
       const keys = checked[check.of];
       const unit = units.find((candidate) => keys.some((key) => candidate.keys.includes(key)));
       if (unit === undefined) continue;
@@ -135,9 +137,9 @@ export function optionStatuses(jobs: JobRecord[], model: ModelKey, fields: Reque
     }
     for (const unit of units) {
       const problems = found.get(unit);
-      if (problems === undefined) record(unit, { status: "accepted", ...evidence });
-      else if (problems.length === 0) record(unit, { status: "honoured", ...evidence });
-      else record(unit, { status: "ignored", ...evidence, reason: problems.join("; ") });
+      if (problems === undefined) record(unit, { status: "accepted", ...source });
+      else if (problems.length === 0) record(unit, { status: "honoured", ...source });
+      else record(unit, { status: "ignored", ...source, reason: problems.join("; ") });
     }
   }
 
@@ -154,10 +156,10 @@ export function optionStatuses(jobs: JobRecord[], model: ModelKey, fields: Reque
  * A Model's Option Statuses, with the fields its result check reads taken from its Protocol and Parameter Guide; a
  * Protocol litevision does not know checks nothing, so its options are only ever Accepted or Rejected.
  */
-export function modelOptionStatuses(jobs: JobRecord[], model: ModelKey & { modality?: Modality }): OptionStatus[] {
+export function modelOptionStatuses(evidence: Evidence[], model: ModelKey & { modality?: Modality }): OptionStatus[] {
   const adapter = adapterForProtocol(model.protocol);
   const fields = adapter === undefined ? { shape: [] } : fieldsToRead(adapter, model.modelId, model.modality ?? "image");
-  return optionStatuses(jobs, model, fields);
+  return optionStatuses(evidence, model, fields);
 }
 
 /** Option Statuses grouped by status, each group newest first. */
