@@ -398,7 +398,8 @@ describe("Option Statuses (ADR 0011)", () => {
     const lines = [
       { ...slow, outcome: "running" },
       { ...matched, parameters: sent },
-      { ...slow, outcome: "failed", error: { kind: "rejected_option", message: "x The Provider said: HTTP 400: bad size", options: ["size"] } },
+      // Two hours after it started: after `fox`, which took a second from 09:00.
+      { ...slow, outcome: "failed", durationMs: 7_200_000, error: { kind: "rejected_option", message: "x The Provider said: HTTP 400: bad size", options: ["size"] } },
     ];
     await mkdir(h.dirs.home, { recursive: true });
     await writeFile(join(h.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");

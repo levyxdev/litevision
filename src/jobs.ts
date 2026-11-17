@@ -600,7 +600,8 @@ export class JobRunner {
       ...defined,
     };
     await appendHistory(this.deps.dirs, record);
-    await appendEvidence(this.deps.dirs, record);
+    // Evidence that fails to be written is written on the next read (ADR 0015); the Job itself went as recorded.
+    await appendEvidence(this.deps.dirs, record).catch(() => undefined);
   }
 }
 

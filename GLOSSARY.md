@@ -49,7 +49,7 @@ _Avoid_: Capabilities (they suggest limits litevision enforces), parameter schem
 ## Generation
 
 **Job**:
-One generation request sent to one Model, from submission until its results are saved locally. Every generation is a Job, even when the Provider answers immediately.
+One generation request sent to one Model, from submission until its results are saved locally. Every generation is a Job, even when the Provider answers immediately. A Job still running when the litevision session running it ended is _interrupted_: `get_job` picks it up again where the Provider allows, and it can be deleted.
 _Avoid_: Task (APIMart's word for its own server-side job), request, run
 
 **Result**:
@@ -83,6 +83,10 @@ _Avoid_: Parent, base, derived-from
 **Option Status**:
 What the latest evidence says about one `provider_options` value on one Model, from facts alone, never from a Rating: _Honoured_ (the result was checked and matched), _Ignored_ (the result was checked and did not match), _Rejected_ (the Provider's error named it), or _Accepted_ (not rejected, but its effect cannot be checked). Fields checked together, such as a width and a height, share one Option Status.
 _Avoid_: Known-good options, suspect options, working options
+
+**Evidence**:
+What one ended Job showed about its Model's `provider_options`: the values sent, what each Result turned out to be, and what the Provider's error said. Option Statuses are derived from it. litevision keeps it when the Job is deleted, without the prompt or any path.
+_Avoid_: Facts, log, history
 
 **Standing Options**:
 The `provider_options` the User has set for a Model, sent with every Job of that Model. Whatever the Agent passes for a Job overrides them. Set only by the User, unlike an Option Status, which litevision learns from past Jobs.

@@ -1,6 +1,7 @@
-import { access, appendFile, link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Dirs } from "./dirs.ts";
+import { withFileLock } from "./file-lock.ts";
 import { readJobs, type JobRecord, type ModelKey } from "./history.ts";
 import type { MediaFacts } from "./media.ts";
 import type { Modality } from "./protocols/protocol.ts";
@@ -9,7 +10,8 @@ import type { CheckedRequest } from "./result-check.ts";
 /**
  * Option Status evidence, `evidence.jsonl` (ADR 0015): append-only, one line per Job when it ends, holding only the
  * facts an Option Status reads. It outlives the Job history, which the User may delete, so it holds no prompt, no
- * Result or Reference path, no Rating and no Pick. Every read and write of the evidence goes through this module.
+ * Result or Reference path, no Rating and no Pick. Every read and write of the evidence goes through this module, and
+ * holds one machine-wide lock, so evidence is never written twice by two processes repairing it at once.
  */
 
 /** One line of `evidence.jsonl`: what one ended Job says about its Model's `provider_options`. */
@@ -18,6 +20,8 @@ export interface Evidence extends ModelKey {
   jobId: string;
   /** When the Job started, as an ISO date-time. */
   createdAt: string;
+  /** When the Job ended, as an ISO date-time; evidence counts in this order. Absent on evidence written before. */
+  endedAt?: string;
   /** Absent for Jobs recorded before videos existed, which are all image Jobs. */
   modality?: Modality;
   outcome: "completed" | "failed";
@@ -33,6 +37,7 @@ export interface Evidence extends ModelKey {
 }
 
 const evidencePath = (dirs: Dirs) => join(dirs.home, "evidence.jsonl");
+const lockPath = (dirs: Dirs) => join(dirs.home, "evidence.lock");
 
 /** The failures whose error an Option Status reads. */
 const optionErrors: ReadonlySet<string> = new Set(["rejected_option", "unsupported"]);
@@ -46,6 +51,7 @@ function evidenceOf(job: JobRecord): Evidence | undefined {
     type: "evidence",
     jobId: job.id,
     createdAt: job.createdAt,
+    endedAt: new Date(Date.parse(job.createdAt) + job.durationMs).toISOString(),
     provider: job.provider,
     protocol: job.protocol,
     modelId: job.modelId,
@@ -62,81 +68,71 @@ function withoutUndefined<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as T;
 }
 
-/** Records the evidence of a Job that has just ended. */
+/** Records the evidence of a Job that has just ended. When it fails, the next read writes it (see {@link readEvidence}). */
 export async function appendEvidence(dirs: Dirs, job: JobRecord): Promise<void> {
   const evidence = evidenceOf(job);
   if (evidence === undefined) return;
-  if ((await ensureEvidence(dirs)).has(job.id)) return;
   // The folder also holds credentials.json.
   await mkdir(dirs.home, { recursive: true, mode: 0o700 });
-  await appendFile(evidencePath(dirs), `${JSON.stringify(evidence)}\n`);
+  await withFileLock(lockPath(dirs), () => appendFile(evidencePath(dirs), `${JSON.stringify(evidence)}\n`));
 }
 
 /**
- * Every Job's evidence, in the order the Jobs ended. A Job recorded twice, as when it ended while the evidence was
- * first being written, counts once, where it last appears, as in the Job history. Lines that cannot be read are skipped.
+ * Every Job's evidence, in the order the Jobs ended. First it writes the evidence of every ended Job the Job history
+ * has and the evidence lacks: all of them on the first run after upgrading, else any whose evidence failed to be
+ * written when it ended. A Job recorded twice counts once, as its latest line says. Lines that cannot be read are
+ * skipped.
  */
 export async function readEvidence(dirs: Dirs): Promise<Evidence[]> {
-  await ensureEvidence(dirs);
-  let text: string;
-  try {
-    text = await readFile(evidencePath(dirs), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  const byJob = new Map<string, Evidence>();
-  for (const line of text.split("\n")) {
-    if (line.trim() === "") continue;
-    let record: unknown;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
+  // Before anything is configured there is no evidence, nor a folder to keep the lock in.
+  if (!(await exists(dirs.home))) return [];
+  const evidence = await withFileLock(lockPath(dirs), async () => {
+    const written = parseEvidence(await readEvidenceText(dirs));
+    const known = new Set(written.map((line) => line.jobId));
+    const missing = (await readJobs(dirs)).flatMap((job) => {
+      const lacking = known.has(job.id) ? undefined : evidenceOf(job);
+      return lacking === undefined ? [] : [lacking];
+    });
+    if (missing.length > 0) {
+      await mkdir(dirs.home, { recursive: true, mode: 0o700 });
+      await appendFile(evidencePath(dirs), missing.map((line) => `${JSON.stringify(line)}\n`).join(""));
     }
-    if (!isEvidence(record)) continue;
-    // Re-inserting moves the Job to where its latest line is.
-    byJob.delete(record.jobId);
-    byJob.set(record.jobId, record);
-  }
-  return [...byJob.values()];
+    return [...written, ...missing];
+  });
+  const byJob = new Map(evidence.map((line) => [line.jobId, line]));
+  // Stable, so Jobs that ended together keep the order they were written in.
+  return [...byJob.values()].sort((a, b) => endOf(a) - endOf(b));
 }
 
-/**
- * Writes the evidence of every Job already in the Job history, when there is no evidence yet: the first run after
- * upgrading. It appears whole or not at all, so several litevision processes starting together leave one; a Job that
- * ends meanwhile is appended after it, and may appear twice. With no ended Job to write, it writes nothing. Returns the ids of the Jobs this call wrote, none when the evidence was
- * already there or another process wrote it first.
- */
-async function ensureEvidence(dirs: Dirs): Promise<Set<string>> {
-  const path = evidencePath(dirs);
-  if (await exists(path)) return new Set();
-  const written = (await readJobs(dirs)).flatMap((job) => {
-    const evidence = evidenceOf(job);
-    return evidence === undefined ? [] : [evidence];
-  });
-  if (written.length === 0) return new Set();
-  await mkdir(dirs.home, { recursive: true, mode: 0o700 });
-  const draft = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  await writeFile(draft, written.map((evidence) => `${JSON.stringify(evidence)}\n`).join(""));
+/** When a Job ended; evidence written before it said so counts from when the Job started. */
+const endOf = (evidence: Evidence) => Date.parse(evidence.endedAt ?? evidence.createdAt);
+
+async function readEvidenceText(dirs: Dirs): Promise<string> {
   try {
-    await link(draft, path);
-    return new Set(written.map((evidence) => evidence.jobId));
+    return await readFile(evidencePath(dirs), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    return new Set();
-  } finally {
-    await unlink(draft);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
   }
+}
+
+function parseEvidence(text: string): Evidence[] {
+  return text.split("\n").flatMap((line) => {
+    if (line.trim() === "") return [];
+    try {
+      const record: unknown = JSON.parse(line);
+      return isEvidence(record) ? [record] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
+  return access(path).then(
+    () => true,
+    () => false,
+  );
 }
 
 function isEvidence(value: unknown): value is Evidence {

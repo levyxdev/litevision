@@ -142,6 +142,26 @@ describe("Option Status evidence", () => {
   });
 });
 
+describe("evidence that could not be written", () => {
+  test("never fails the Job; the next read writes it, in the order the Jobs ended", async () => {
+    let tick = 0;
+    harness = await startHarness({ ...openaiSetup(), now: () => new Date(Date.UTC(2026, 10, 17, 12, 0, tick++)) });
+    // A folder where the evidence goes makes every write fail.
+    await mkdir(join(harness.dirs.home, "evidence.jsonl"), { recursive: true });
+    const first = await harness.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { quality: "high" } } });
+    expect(first.isError).toBeFalsy();
+    const firstId = (first.structuredContent as { job_id: string; status: string }).job_id;
+    expect(first.structuredContent).toMatchObject({ status: "completed" });
+    expect((await readHistory(harness)).at(-1)).toMatchObject({ id: firstId, outcome: "completed" });
+
+    await rm(join(harness.dirs.home, "evidence.jsonl"), { recursive: true });
+    const secondId = await generate({ provider_options: { quality: "high" } });
+
+    expect((await statuses()).accepted).toMatchObject([{ options: { quality: "high" }, job_id: secondId }]);
+    expect((await evidenceLines()).map((line) => line.jobId).sort()).toEqual([firstId, secondId].sort());
+  });
+});
+
 describe("the first run after upgrading", () => {
   /** A Job of the gpt-image Model as an earlier release recorded it in the Job history. */
   function jobRecord(id: string, createdAt: string, overrides: Record<string, unknown>): Record<string, unknown> {
