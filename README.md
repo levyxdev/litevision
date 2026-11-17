@@ -90,7 +90,7 @@ The page also shows the Job history, with the images and videos and any Ratings 
 | `pick_result` | Records your Pick when you choose among a Comparison's results; choosing again replaces it. A Pick says which you prefer, not that it is good, so it changes no Option Status. You can also pick in the settings page's Job history, which shows a Comparison's Jobs together. |
 | `rate_job` | Records your verdict on a Job or on one of its results (good or bad, plus a reason) when you state one. A Rating judges the result, never the options that produced it, so it changes no Option Status. |
 | `update_model_notes` | Replaces a Model's Notes, only with text you agreed to. You can undo it in the settings page. |
-| `open_settings` | Opens the settings page. |
+| `open_settings` | Opens the settings page, on its Providers, Models or Job history tab when the Agent names one. |
 
 ## Option Status
 

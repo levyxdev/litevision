@@ -51,7 +51,7 @@ import { adapterFor, adapterForProtocol, credentialFor } from "./protocols/index
 import { guideOutput, guideSummary, guideText, type ParameterGuide, type Requested } from "./protocols/parameter-guide.ts";
 import { modalities, type Modality, type ProviderErrorKind } from "./protocols/protocol.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
-import { settingsOpener } from "./settings/opener.ts";
+import { settingsOpener, settingsTabs } from "./settings/opener.ts";
 import { defaultSettingsIdleMs } from "./settings/server.ts";
 import { version } from "../package.json";
 
@@ -1296,12 +1296,17 @@ export function createServer(deps: ServerDeps): McpServer {
     "open_settings",
     {
       description:
-        "Open litevision's settings page in the User's browser, where the User adds Providers, enters Credentials and sets up Models. Call it whenever litevision reports that something is not configured. The User enters Credentials only on that page, never in the conversation.",
-      inputSchema: {},
+        "Open litevision's settings page in the User's browser, where the User adds Providers, enters Credentials and sets up Models, and reviews, rates and deletes past Jobs. Call it whenever litevision reports that something is not configured. The User enters Credentials only on that page, never in the conversation.",
+      inputSchema: {
+        tab: z
+          .enum(settingsTabs)
+          .optional()
+          .describe("The tab to open: `providers`, `models` or `history` (the Job history). Omit to open the page as it opens by default."),
+      },
     },
-    async () => {
+    async ({ tab }) => {
       try {
-        await settings.open();
+        await settings.open(tab);
       } catch {
         // The page URL carries the one-time token, so it is never given to the Agent.
         return toolError(

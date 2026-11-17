@@ -35,9 +35,31 @@ export function renderPage(nonce: string): string {
   p { margin: 0; }
   .muted { color: var(--muted); }
   header p { color: var(--muted); }
-  section { margin-top: 44px; }
-  .section-head { margin-bottom: 14px; }
+  .tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 4px; margin-top: 28px; background: var(--bg);
+    border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tabs a { padding: 10px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--muted);
+    font-weight: 500; text-decoration: none; white-space: nowrap; }
+  .tabs a:hover { color: var(--text); }
+  .tabs a:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus); border-radius: 6px 6px 0 0; }
+  .tabs a[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  section { margin-top: 24px; }
+  section[hidden], form[hidden] { display: none; }
+  .section-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+  .section-head > div { flex: 1; min-width: 0; }
   .section-head p { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  details.card { padding: 0; gap: 0; }
+  details.card > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 14px 20px;
+    cursor: pointer; list-style: none; border-radius: 12px; }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before { content: ""; flex: none; width: 7px; height: 7px; margin-right: 2px;
+    border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); transition: transform 0.15s; }
+  details.card[open] > summary::before { transform: rotate(45deg); }
+  details.card > summary:hover { background: var(--hover); }
+  details.card > summary:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus); }
+  details.card > summary h3 { flex: 0 1 auto; }
+  .summary-meta { flex: 1 1 160px; min-width: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .card-body { display: grid; gap: 16px; padding: 4px 20px 20px; }
 
   .card { display: grid; gap: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
     padding: 20px; margin-bottom: 12px; }
@@ -122,12 +144,19 @@ export function renderPage(nonce: string): string {
     <p>Credentials you enter here are saved on this computer only, in a file only you can read. They never pass through your Agent.</p>
   </header>
 
-  <section id="providers">
-    <div class="section-head"><h2>Providers</h2></div>
-    <div id="provider-list"><p class="muted">Loading…</p></div>
+  <nav class="tabs" role="tablist" aria-label="Settings">
+    <a id="tab-providers" href="#providers" role="tab" aria-controls="providers">Providers</a>
+    <a id="tab-models" href="#models" role="tab" aria-controls="models">Models</a>
+    <a id="tab-history" href="#history" role="tab" aria-controls="history">Job history</a>
+  </nav>
 
-    <form id="add-provider" class="card" autocomplete="off">
-      <h3>Add a Provider</h3>
+  <section id="providers" role="tabpanel" aria-labelledby="tab-providers">
+    <div class="section-head">
+      <div><h2>Providers</h2><p>Where litevision sends Jobs, with the API key each one needs.</p></div>
+      <button id="show-add-provider" type="button" aria-controls="add-provider" aria-expanded="false">Add a Provider</button>
+    </div>
+    <form id="add-provider" class="card" autocomplete="off" hidden>
+      <div class="card-head"><h3>Add a Provider</h3><button type="button" class="small" data-close>Cancel</button></div>
       <div class="fields">
         <div class="field"><label for="add-preset">Preset</label><select id="add-preset"></select></div>
         <div class="field"><label for="add-id">Name</label><input id="add-id" required spellcheck="false" placeholder="openai"></div>
@@ -136,17 +165,16 @@ export function renderPage(nonce: string): string {
       </div>
       <div class="actions"><button class="primary" type="submit">Add Provider</button></div>
     </form>
+    <div id="provider-list"><p class="muted">Loading…</p></div>
   </section>
 
-  <section id="models">
+  <section id="models" role="tabpanel" aria-labelledby="tab-models" hidden>
     <div class="section-head">
-      <h2>Models</h2>
-      <p>Your Agent picks a Model by its Alias. Model Notes tell it what each Model is good or bad at.</p>
+      <div><h2>Models</h2><p>Your Agent picks a Model by its Alias. Model Notes tell it what each Model is good or bad at.</p></div>
+      <button id="show-add-model" type="button" aria-controls="add-model" aria-expanded="false">Add a Model</button>
     </div>
-    <div id="model-list"><p class="muted">Loading…</p></div>
-
-    <form id="add-model" class="card" autocomplete="off">
-      <h3>Add a Model</h3>
+    <form id="add-model" class="card" autocomplete="off" hidden>
+      <div class="card-head"><h3>Add a Model</h3><button type="button" class="small" data-close>Cancel</button></div>
       <div class="fields">
         <div class="field"><label for="model-provider">Provider</label><select id="model-provider" required></select></div>
         <div class="field"><label for="model-protocol">Protocol</label><select id="model-protocol" required></select></div>
@@ -162,12 +190,13 @@ export function renderPage(nonce: string): string {
       </div>
       <div class="actions"><button class="primary" type="submit">Add Model</button></div>
     </form>
+    <div id="model-list"><p class="muted">Loading…</p></div>
   </section>
 
-  <section id="history">
+  <section id="history" role="tabpanel" aria-labelledby="tab-history" hidden>
     <div class="section-head">
-      <h2>Job history</h2>
-      <p>Newest first. Rate a Job, or one of its results, to keep your verdict on it; rating it again replaces the earlier Rating. In a Comparison, pick the result you prefer; picking again replaces the earlier Pick.</p>
+      <div><h2>Job history</h2>
+      <p>Newest first. Rate a Job, or one of its results, to keep your verdict on it; rating it again replaces the earlier Rating. In a Comparison, pick the result you prefer; picking again replaces the earlier Pick.</p></div>
     </div>
     <div id="job-list"><p class="muted">Loading…</p></div>
   </section>
@@ -349,8 +378,9 @@ function providerCard(provider) {
 async function loadProviders() {
   const list = document.getElementById("provider-list");
   const { providers } = await api("GET", "/api/providers");
+  if (providers.length === 0) addProviderForm.show();
   list.replaceChildren(...(providers.length === 0
-    ? [emptyState("No Providers yet. Add one below.")]
+    ? [emptyState("No Providers yet. Add one with Add a Provider.")]
     : providers.map(providerCard)));
   // Local Models are added only by local install, so the Model forms never offer the local Provider.
   providerIds = providers.filter((p) => !p.local).map((p) => p.id);
@@ -460,10 +490,12 @@ function modelCard(model) {
   const save = el("button", { type: "button", className: "primary", textContent: "Save" });
   save.onclick = () => act(save, async () => {
     await api("PATCH", path, { alias: alias.value, provider: provider.value, modelId: modelId.value, protocol: protocol.value, modality: modality.value, notes: notes.textarea.value, standingOptions: standing.read() });
+    // A renamed Model stays open under its new Alias.
+    if (openModels.delete(model.alias)) openModels.add(alias.value.trim());
     await loadModels();
   }, "Model saved.");
 
-  const makeDefault = el("button", { type: "button", className: "small", textContent: "Make default" });
+  const makeDefault = el("button", { type: "button", textContent: "Make default" });
   makeDefault.onclick = () => act(makeDefault, async () => {
     await api("PUT", "/api/default-" + model.modality + "-model", { alias: model.alias });
     await loadModels();
@@ -480,20 +512,31 @@ function modelCard(model) {
 
   notes.wrapper.append(...notesHistoryRow(model, path));
 
-  return el("div", { className: "card" },
-    el("div", { className: "card-head" }, el("h3", { textContent: model.alias }),
-      model.default ? el("span", { className: "chip accent", textContent: "Default " + model.modality }) : makeDefault),
-    el("div", { className: "fields" },
-      field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), field("Makes", modality), notes.wrapper, standing.wrapper,
-      optionStatusesView(optionStatuses[model.alias])),
-    el("div", { className: "actions" }, save, el("span", { className: "spacer" }), remove),
+  const statuses = optionStatuses[model.alias] || {};
+  const flagged = (statuses.ignored || []).length + (statuses.rejected || []).length;
+  const card = el("details", { className: "card", open: openModels.has(model.alias) },
+    el("summary", {},
+      el("h3", { textContent: model.alias }),
+      el("span", { className: "summary-meta", textContent: model.modelId + " on " + model.provider }),
+      el("span", { className: "chip", textContent: model.modality === "video" ? "Videos" : "Images" }),
+      ...(model.default ? [el("span", { className: "chip accent", textContent: "Default " + model.modality })] : []),
+      ...(flagged === 0 ? [] : [el("span", { className: "chip ignored", title: "Some provider_options were Ignored or Rejected: open to see which.", textContent: flagged + " Ignored or Rejected" })])),
+    el("div", { className: "card-body" },
+      el("div", { className: "fields" },
+        field("Alias", alias), field("Provider", provider), field("Model id", modelId), field("Protocol", protocol), field("Makes", modality), notes.wrapper, standing.wrapper,
+        optionStatusesView(statuses)),
+      el("div", { className: "actions" }, save, ...(model.default ? [] : [makeDefault]), el("span", { className: "spacer" }), remove)),
   );
+  card.ontoggle = () => (card.open ? openModels.add(model.alias) : openModels.delete(model.alias));
+  return card;
 }
 
 // The saved Models, so the fetched model list can say which model ids are already added.
 let savedModels = [];
 // Each saved Model's Option Statuses, by Alias.
 let optionStatuses = {};
+// The Aliases of the Model cards the User has open, kept open when the list is redrawn.
+const openModels = new Set();
 // Redraws the fetched model list; set by setUpAddModelForm.
 let showModelIds = () => {};
 
@@ -503,8 +546,9 @@ async function loadModels() {
   savedModels = models;
   optionStatuses = statuses.models;
   showModelIds();
+  if (models.length === 0 && providerIds.length > 0) addModelForm.show();
   list.replaceChildren(...(models.length === 0
-    ? [emptyState(providerIds.length === 0 ? "Add a Provider first, then add its Models below." : "No Models yet. Add one below.")]
+    ? [emptyState(providerIds.length === 0 ? "Add a Provider first, then add its Models here." : "No Models yet. Add one with Add a Model.")]
     : models.map(modelCard)));
 }
 
@@ -599,6 +643,7 @@ function setUpAddModelForm() {
       await api("POST", "/api/models", body);
       modelId.value = alias.value = notes.value = "";
       aliasEdited = false;
+      addModelForm.hide();
       await loadModels();
     }, "Model added.");
   };
@@ -629,6 +674,7 @@ function setUpAddForm() {
       credential.value = "";
       preset.value = "";
       applyPreset();
+      addProviderForm.hide();
       await loadProviders();
     }, "Provider added.");
   };
@@ -776,6 +822,43 @@ async function loadJobs() {
     ? [emptyState("No Jobs yet. Images your Agent generates will appear here.")]
     : jobEntries(jobs)));
 }
+
+const tabs = ["providers", "models", "history"];
+/** Shows the tab the URL fragment names, or the first. */
+function showTab() {
+  const current = tabs.includes(location.hash.slice(1)) ? location.hash.slice(1) : tabs[0];
+  for (const tab of tabs) {
+    document.getElementById(tab).hidden = tab !== current;
+    document.getElementById("tab-" + tab).setAttribute("aria-selected", String(tab === current));
+  }
+}
+window.addEventListener("hashchange", showTab);
+showTab();
+
+/** An "Add" form, hidden until its button is pressed; it hides again on Cancel. */
+function toggledForm(formId, buttonId) {
+  const form = document.getElementById(formId);
+  const button = document.getElementById(buttonId);
+  const show = () => {
+    form.hidden = false;
+    button.hidden = true;
+    button.setAttribute("aria-expanded", "true");
+  };
+  const hide = () => {
+    form.hidden = true;
+    button.hidden = false;
+    button.setAttribute("aria-expanded", "false");
+  };
+  button.onclick = () => {
+    show();
+    const first = form.querySelector("input, select");
+    if (first) first.focus();
+  };
+  form.querySelector("[data-close]").onclick = hide;
+  return { show, hide };
+}
+const addProviderForm = toggledForm("add-provider", "show-add-provider");
+const addModelForm = toggledForm("add-model", "show-add-model");
 
 (async () => {
   try {

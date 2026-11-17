@@ -48,6 +48,26 @@ describe("open_settings", () => {
     expect(await page.text()).toContain("Providers");
   });
 
+  test("opens the page on the tab asked for, and without one on the page as it opens by default", async () => {
+    harness = await startHarness(configured);
+
+    for (const tab of ["providers", "models", "history"]) {
+      const result = await harness.client.callTool({ name: "open_settings", arguments: { tab } });
+      expect(result.isError).toBeFalsy();
+      expect(new URL(harness.openedUrls.at(-1)!).hash).toBe("#" + tab);
+    }
+    await openSettings();
+    expect(new URL(harness.openedUrls.at(-1)!).hash).toBe("");
+    expect(new Set(harness.openedUrls.map((url) => new URL(url).search)).size).toBe(1);
+  });
+
+  test("refuses a tab that does not exist", async () => {
+    harness = await startHarness(configured);
+    const result = await harness.client.callTool({ name: "open_settings", arguments: { tab: "billing" } });
+    expect(result.isError).toBe(true);
+    expect(harness.openedUrls).toEqual([]);
+  });
+
   test("reuses the running settings page instead of starting another", async () => {
     harness = await startHarness();
     await openSettings();

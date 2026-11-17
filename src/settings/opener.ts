@@ -1,9 +1,13 @@
 import type { OpenBrowser } from "./browser.ts";
 import { startSettingsServer, type SettingsServer, type SettingsServerOptions } from "./server.ts";
 
+/** The settings page's tabs, each opened by its URL fragment. */
+export const settingsTabs = ["providers", "models", "history"] as const;
+export type SettingsTab = (typeof settingsTabs)[number];
+
 export interface SettingsOpener {
-  /** Opens the settings page in the User's browser, starting it unless one is already running. */
-  open(): Promise<void>;
+  /** Opens the settings page in the User's browser, on `tab` when given, starting it unless one is already running. */
+  open(tab?: SettingsTab): Promise<void>;
   /** Shuts down the running settings page, if any. */
   close(): Promise<void>;
 }
@@ -29,8 +33,9 @@ export function settingsOpener(options: SettingsServerOptions & { openBrowser: O
   }
 
   return {
-    async open() {
-      await options.openBrowser((await current()).url);
+    async open(tab) {
+      const { url } = await current();
+      await options.openBrowser(tab === undefined ? url : `${url}#${tab}`);
     },
     async close() {
       const server = await running?.catch(() => undefined);
