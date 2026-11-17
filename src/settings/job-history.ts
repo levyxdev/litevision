@@ -15,7 +15,7 @@ import {
   type RatingRecord,
 } from "../history.ts";
 import { fileTypeOf } from "../media.ts";
-import type { Modality } from "../protocols/protocol.ts";
+import { modalities, type Modality } from "../protocols/protocol.ts";
 import { SettingsError } from "./providers.ts";
 
 /**
@@ -69,8 +69,79 @@ export interface ListedJob {
   shortfall?: string;
   /** How a completed Job's result differs from its request (ADR 0006). */
   mismatch?: string;
-  /** For a Job of a Comparison: the Comparison's id and its current Pick, whichever of its Jobs that is. */
-  comparison?: { id: string; pick: ListedPick | null };
+  /**
+   * For a Job of a Comparison: the Comparison's id, how many Jobs it has in the Job history (filters may show fewer),
+   * and its current Pick, whichever of its Jobs that is.
+   */
+  comparison?: { id: string; size: number; pick: ListedPick | null };
+}
+
+/** How many entries, a Job or a whole Comparison each, one page of the Job history holds. */
+export const jobHistoryPageSize = 20;
+
+const outcomes = ["completed", "failed", "running"] as const;
+
+/** Which Jobs the Job history tab shows: those matching every filter given. */
+export const jobFilterInput = z.object({
+  /** The Alias the Job recorded, whether or not a Model has it now. */
+  model: z.string().min(1).optional(),
+  outcome: z.enum(outcomes, { message: "Choose completed, failed or running." }).optional(),
+  modality: z.enum(modalities, { message: "Choose image or video." }).optional(),
+});
+export type JobFilter = z.infer<typeof jobFilterInput>;
+
+export const jobHistoryQuery = jobFilterInput.extend({
+  /** How many entries to skip: 0, or the `nextOffset` of the page before. */
+  offset: z.coerce.number({ message: "Give the offset as a whole number." }).int("Give the offset as a whole number.").nonnegative("Give the offset as a whole number.").default(0),
+});
+
+/** One page of the Job history tab. */
+export interface JobHistoryPage {
+  /** The page's Jobs, a Comparison's together, newest entry first. */
+  jobs: ListedJob[];
+  /** How many entries match the filters, on every page. */
+  total: number;
+  /** How many Jobs those entries hold. */
+  totalJobs: number;
+  /** Where the next page starts; null on the last. */
+  nextOffset: number | null;
+  /** Every Alias a Job in the history recorded, for the Model filter; renamed and removed Models' included. */
+  aliases: string[];
+}
+
+/** One page of the Job history, filtered. A Comparison counts as one entry and is never split between pages. */
+export async function jobHistoryPage(dirs: Dirs, query: z.infer<typeof jobHistoryQuery>): Promise<JobHistoryPage> {
+  const { offset, ...filter } = query;
+  const listed = await listJobHistory(dirs);
+  const entries = entriesOf(listed.filter((job) => matches(job, filter)));
+  const end = offset + jobHistoryPageSize;
+  return {
+    jobs: entries.slice(offset, end).flat(),
+    total: entries.length,
+    totalJobs: entries.reduce((count, entry) => count + entry.length, 0),
+    nextOffset: end < entries.length ? end : null,
+    aliases: [...new Set(listed.map((job) => job.model))].sort(),
+  };
+}
+
+/** Whether a Job matches every filter given. */
+function matches(job: ListedJob, filter: JobFilter): boolean {
+  return (
+    (filter.model === undefined || job.model === filter.model) &&
+    (filter.outcome === undefined || job.outcome === filter.outcome) &&
+    (filter.modality === undefined || job.modality === filter.modality)
+  );
+}
+
+/** The listed Jobs as entries: one Job, or a Comparison's Jobs, which {@link listJobHistory} keeps next to each other. */
+function entriesOf(jobs: ListedJob[]): ListedJob[][] {
+  const entries: ListedJob[][] = [];
+  for (const job of jobs) {
+    const last = entries.at(-1);
+    if (job.comparison !== undefined && last?.[0]?.comparison?.id === job.comparison.id) last.push(job);
+    else entries.push([job]);
+  }
+  return entries;
 }
 
 /**
@@ -103,7 +174,7 @@ export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
       ...(job.error === undefined ? {} : { error: job.error.message }),
       ...(job.shortfall === undefined ? {} : { shortfall: job.shortfall }),
       ...(job.mismatch === undefined ? {} : { mismatch: `The result does not match the request: ${job.mismatch}.` }),
-      ...(job.comparison === undefined ? {} : { comparison: { id: job.comparison, pick: pick === undefined ? null : listedPick(pick) } }),
+      ...(job.comparison === undefined ? {} : { comparison: { id: job.comparison, size: 0, pick: pick === undefined ? null : listedPick(pick) } }),
     } satisfies ListedJob;
   });
   const byComparison = new Map<string, ListedJob[]>();
@@ -113,6 +184,7 @@ export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
     byComparison.set(job.comparison.id, ofComparison);
     ofComparison.unshift(job);
   }
+  for (const ofComparison of byComparison.values()) for (const job of ofComparison) job.comparison!.size = ofComparison.length;
   return listed.flatMap((job) => {
     if (job.comparison === undefined) return [job];
     const ofComparison = byComparison.get(job.comparison.id);

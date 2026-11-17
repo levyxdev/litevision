@@ -70,7 +70,7 @@ export async function startSettingsServer(options: SettingsServerOptions): Promi
       const route = matchRoute(request.method ?? "GET", url.pathname);
       if (route === undefined) throw new SettingsError(404, "Not found.");
       const body = request.method === "GET" || request.method === "HEAD" ? undefined : await readJsonBody(request);
-      const result = await route.handler({ params: route.params, body, dirs: options.dirs, http: options.http, now, local });
+      const result = await route.handler({ params: route.params, query: url.searchParams, body, dirs: options.dirs, http: options.http, now, local });
       if (result === undefined) {
         response.writeHead(204, commonHeaders);
         response.end();

@@ -130,6 +130,10 @@ export function renderPage(nonce: string): string {
   .option-statuses ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
   .option-statuses li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; overflow-wrap: anywhere; }
   .chip.ignored, .chip.rejected { color: var(--danger); border-color: currentColor; }
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .filters select { width: auto; flex: 1 1 140px; max-width: 220px; }
+  .filters .count { flex: 1 0 auto; text-align: right; font-size: 13px; color: var(--muted); }
+  .more { display: flex; justify-content: center; margin-top: 4px; }
 
   #status { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
     background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none;
@@ -198,7 +202,16 @@ export function renderPage(nonce: string): string {
       <div><h2>Job history</h2>
       <p>Newest first. Rate a Job, or one of its results, to keep your verdict on it; rating it again replaces the earlier Rating. In a Comparison, pick the result you prefer; picking again replaces the earlier Pick.</p></div>
     </div>
+    <div class="filters" role="group" aria-label="Filter the Job history">
+      <select id="filter-model" aria-label="Model"><option value="">All Models</option></select>
+      <select id="filter-outcome" aria-label="Status">
+        <option value="">Any status</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="running">Running</option>
+      </select>
+      <select id="filter-modality" aria-label="Media type"><option value="">Images and videos</option><option value="image">Images</option><option value="video">Videos</option></select>
+      <span id="job-count" class="count" aria-live="polite"></span>
+    </div>
     <div id="job-list"><p class="muted">Loading…</p></div>
+    <div class="more"><button id="show-more" type="button" hidden>Show more</button></div>
   </section>
 </main>
 <div id="status" role="status" aria-live="polite"></div>
@@ -732,7 +745,7 @@ function pickRow(job) {
     const body = { jobId: job.id };
     if (target.value !== "") body.result = Number(target.value);
     await api("POST", "/api/comparisons/" + encodeURIComponent(job.comparison.id) + "/pick", body);
-    await loadJobs();
+    await loadJobs(true);
   }, "Pick saved.");
   const controls = job.files.length > 1 ? [target, button] : [button];
   return [el("div", { className: "actions" }, el("span", { className: "spacer muted", textContent: "Prefer this one?" }), ...controls)];
@@ -758,7 +771,7 @@ function ratingRow(job) {
       const body = { verdict, reason: reason.value };
       if (target.value !== "") body.result = Number(target.value);
       await api("POST", "/api/jobs/" + encodeURIComponent(job.id) + "/rating", body);
-      await loadJobs();
+      await loadJobs(true);
     }, "Rating saved.");
     return button;
   };
@@ -796,7 +809,7 @@ function comparisonCard(jobs) {
   const status = !pick ? "Not picked yet."
     : "Picked: " + (pick.result === undefined ? "" : "result " + pick.result + " of ") + (picked ? picked.model + "'s Job" : "Job " + pick.jobId) + ".";
   return el("div", { className: "comparison" },
-    el("div", { className: "comparison-head" }, el("h3", { textContent: "Comparison · " + jobs.length + " Jobs" }),
+    el("div", { className: "comparison-head" }, el("h3", { textContent: "Comparison · " + (jobs.length === jobs[0].comparison.size ? jobs.length + " Jobs" : jobs.length + " of its " + jobs[0].comparison.size + " Jobs match the filters") }),
       el("p", { textContent: status + " A Pick says which you prefer; it is not a Rating." })),
     ...jobs.map(jobCard));
 }
@@ -815,13 +828,72 @@ function jobEntries(jobs) {
   return entries;
 }
 
-async function loadJobs() {
-  const list = document.getElementById("job-list");
-  const { jobs } = await api("GET", "/api/jobs");
-  list.replaceChildren(...(jobs.length === 0
-    ? [emptyState("No Jobs yet. Images your Agent generates will appear here.")]
-    : jobEntries(jobs)));
+/** The Job history tab's filters, as the API takes them; empty values are left out. */
+function jobFilter() {
+  const filter = {};
+  for (const name of ["model", "outcome", "modality"]) {
+    const value = document.getElementById("filter-" + name).value;
+    if (value !== "") filter[name] = value;
+  }
+  return filter;
 }
+
+function jobsPath(offset) {
+  return "/api/jobs?" + new URLSearchParams({ ...jobFilter(), offset: String(offset) });
+}
+
+// How many entries are loaded, and where the next page starts; null once all are.
+let loadedEntries = 0;
+let nextOffset = null;
+
+/** Shows the Job history's first page, or with \`keep\` as many entries as are loaded now, as after rating a Job. */
+async function loadJobs(keep) {
+  const list = document.getElementById("job-list");
+  const wanted = keep ? Math.max(loadedEntries, 1) : 1;
+  let page = await api("GET", jobsPath(0));
+  const jobs = [...page.jobs];
+  let loaded = page.nextOffset === null ? page.total : page.nextOffset;
+  while (page.nextOffset !== null && loaded < wanted) {
+    page = await api("GET", jobsPath(page.nextOffset));
+    jobs.push(...page.jobs);
+    loaded = page.nextOffset === null ? page.total : page.nextOffset;
+  }
+  showAliases(page.aliases);
+  const filtered = Object.keys(jobFilter()).length > 0;
+  list.replaceChildren(...(jobs.length === 0
+    ? [emptyState(filtered ? "No Jobs match these filters." : "No Jobs yet. Images your Agent generates will appear here.")]
+    : jobEntries(jobs)));
+  showLoaded(loaded, page);
+}
+
+async function showMore(button) {
+  await act(button, async () => {
+    const page = await api("GET", jobsPath(nextOffset));
+    document.getElementById("job-list").append(...jobEntries(page.jobs));
+    showLoaded(page.nextOffset === null ? page.total : page.nextOffset, page);
+  });
+}
+
+function showLoaded(loaded, page) {
+  loadedEntries = loaded;
+  nextOffset = page.nextOffset;
+  document.getElementById("show-more").hidden = nextOffset === null;
+  document.getElementById("job-count").textContent = page.total === 0 ? ""
+    : loaded < page.total ? "Showing " + loaded + " of " + page.total + " entries" : page.total + (page.total === 1 ? " entry" : " entries");
+}
+
+/** Offers every Alias the Job history records, keeping the one chosen. */
+function showAliases(aliases) {
+  const select = document.getElementById("filter-model");
+  const chosen = select.value;
+  const all = chosen === "" || aliases.includes(chosen) ? aliases : [chosen, ...aliases];
+  select.replaceChildren(el("option", { value: "", textContent: "All Models" }), ...options(all, chosen));
+}
+
+for (const name of ["model", "outcome", "modality"]) {
+  document.getElementById("filter-" + name).onchange = () => loadJobs().catch((error) => showStatus(error.message, true));
+}
+document.getElementById("show-more").onclick = (event) => showMore(event.currentTarget);
 
 const tabs = ["providers", "models", "history"];
 /** Shows the tab the URL fragment names, or the first. */

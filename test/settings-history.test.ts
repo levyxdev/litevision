@@ -83,7 +83,7 @@ describe("Job history", () => {
 
   test("is empty before any Job has run", async () => {
     harness = await startSettingsHarness();
-    expect((await harness.send("GET", "/api/jobs")).json()).toEqual({ jobs: [] });
+    expect((await harness.send("GET", "/api/jobs")).json()).toEqual({ jobs: [], total: 0, totalJobs: 0, nextOffset: null, aliases: [] });
   });
 
   test("the page has a Job history area", async () => {
@@ -245,7 +245,7 @@ describe("Comparisons in the Job history (ADR 0009)", () => {
     const jobs = await listed(h);
 
     expect(jobs.map((job) => job.id)).toEqual(["late", "left", "failed", "right", "between", "early"]);
-    for (const job of jobs.slice(1, 4)) expect(job.comparison).toEqual({ id: "cmp", pick: null });
+    for (const job of jobs.slice(1, 4)) expect(job.comparison).toEqual({ id: "cmp", size: 3, pick: null });
     expect(jobs[0]).not.toHaveProperty("comparison");
     expect(jobs[4]).not.toHaveProperty("comparison");
   });
@@ -260,7 +260,7 @@ describe("Comparisons in the Job history (ADR 0009)", () => {
     expect((await readHistoryLines(h)).at(-1)).toEqual({ type: "pick", comparison: "cmp", jobId: "left", result: 2, pickedAt });
     const jobs = await listed(h);
     for (const id of ["left", "failed", "right"]) {
-      expect(jobs.find((job) => job.id === id)!.comparison).toEqual({ id: "cmp", pick: { jobId: "left", result: 2, pickedAt } });
+      expect(jobs.find((job) => job.id === id)!.comparison).toEqual({ id: "cmp", size: 3, pick: { jobId: "left", result: 2, pickedAt } });
     }
     // A Pick is not a Rating.
     expect(jobs.find((job) => job.id === "left")!.rating).toBeNull();

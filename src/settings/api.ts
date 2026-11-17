@@ -9,7 +9,7 @@ import { localProviderId } from "../local/provider.ts";
 import { refreshModelInfo, refreshProviderModelInfo, type ModelInfoDeps } from "../model-info.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { fetchModelIds, testConnection } from "./connection.ts";
-import { jobImage, listJobHistory, pickFromPage, pickInput, rateJobFromPage, rateJobInput } from "./job-history.ts";
+import { jobHistoryPage, jobHistoryQuery, jobImage, pickFromPage, pickInput, rateJobFromPage, rateJobInput } from "./job-history.ts";
 import {
   addModel,
   addModelInput,
@@ -37,6 +37,8 @@ import {
 
 export interface RouteContext {
   params: Record<string, string>;
+  /** The URL's query. */
+  query: URLSearchParams;
   /** The parsed JSON body; `undefined` for GET. */
   body: unknown;
   dirs: Dirs;
@@ -186,7 +188,7 @@ const routes: Route[] = [
   {
     method: "GET",
     path: "/api/jobs",
-    handler: async ({ dirs }) => ({ body: { jobs: await listJobHistory(dirs) } }),
+    handler: async ({ dirs, query }) => ({ body: await jobHistoryPage(dirs, parse(jobHistoryQuery, Object.fromEntries(query))) }),
   },
   {
     method: "POST",
