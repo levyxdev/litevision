@@ -52,6 +52,14 @@ _Avoid_: Capabilities (they suggest limits litevision enforces), parameter schem
 One generation request sent to one Model, from submission until its results are saved locally. Every generation is a Job, even when the Provider answers immediately.
 _Avoid_: Task (APIMart's word for its own server-side job), request, run
 
+**Result**:
+One image or video file a Job saved. A Job may have several, numbered from 1.
+_Avoid_: Output, generated file
+
+**Reference**:
+An image given to a Job to generate from: a reference image, or a video's first or last frame. It belongs to whoever supplied it, never to the Job.
+_Avoid_: Input, input image
+
 **Job history**:
 litevision's record of the User's Jobs, with their Ratings and Picks. Deleting a Job removes it from the Job history for good.
 _Avoid_: History, log, records
