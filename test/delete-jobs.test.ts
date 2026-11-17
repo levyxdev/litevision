@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
 import { readHistory, readHistoryLines, recorded, textOf, tinyPng, type ToolResult } from "./helpers.ts";
@@ -59,7 +59,7 @@ describe("delete_jobs", () => {
 
     const report = ok(await deleteJobs({ job_ids: [gone.job_id] }));
 
-    expect(report).toMatchObject({ deleted_jobs: [gone.job_id], deleted_files: gone.files, skipped_files: [], running_jobs: [], not_found: [] });
+    expect(report).toMatchObject({ deleted_jobs: [gone.job_id], deleted_files: gone.files, already_gone: [], skipped_files: [], running_jobs: [], not_found: [] });
     expect(await exists(gone.files[0]!)).toBe(false);
     expect(await exists(kept.files[0]!)).toBe(true);
     expect(await readHistoryLines(harness)).toEqual(keptLines);
@@ -138,25 +138,42 @@ describe("delete_jobs", () => {
     expect((await readHistory(harness)).map((record) => record.id)).toEqual([running.job_id]);
   });
 
-  test("leaves a Result that changed since it was saved, and counts a missing one as gone", async () => {
+  test("leaves a Result that changed since it was saved, and one the User already deleted is simply gone, not skipped", async () => {
     harness = await startHarness(togetherSetup());
     const changed = await generate({ name: "changed" });
     const missing = await generate({ name: "missing" });
     await writeFile(changed.files[0]!, "edited by the User");
     await Bun.file(missing.files[0]!).delete();
 
-    const report = ok(await deleteJobs({ job_ids: [changed.job_id, missing.job_id] }));
+    const result = await deleteJobs({ job_ids: [changed.job_id, missing.job_id] });
+    const report = ok(result);
 
     expect(report.deleted_jobs.sort()).toEqual([changed.job_id, missing.job_id].sort());
     expect(report.deleted_files).toEqual([]);
-    expect(report.skipped_files).toEqual(
-      expect.arrayContaining([
-        { job_id: changed.job_id, file: changed.files[0], reason: "content-changed" },
-        { job_id: missing.job_id, file: missing.files[0], reason: "already-gone" },
-      ]),
-    );
+    expect(report.already_gone).toEqual([missing.files[0]]);
+    expect(report.skipped_files).toEqual([{ job_id: changed.job_id, file: changed.files[0], reason: "content-changed" }]);
     expect(await readFile(changed.files[0]!, "utf8")).toBe("edited by the User");
+    expect(textOf(result)).toContain("1 Result was already gone");
+    expect(textOf(result)).not.toContain(`Left ${missing.files[0]}`);
     expect(textOf(await deleteJobs({ all: true }))).toContain("Deleted 0 Jobs");
+  });
+
+  // Root may delete anything, so only another user can be refused.
+  test.skipIf(process.getuid?.() === 0)("a Result it cannot delete is left and reported, and the rest of the deletion goes on", async () => {
+    harness = await startHarness(togetherSetup());
+    const locked = await generate({ name: "locked", output_path: join(harness.cwd, "locked") });
+    const free = await generate({ name: "free" });
+    await chmod(dirname(locked.files[0]!), 0o500);
+    try {
+      const report = ok(await deleteJobs({ job_ids: [locked.job_id, free.job_id] }));
+
+      expect(report.deleted_jobs.sort()).toEqual([locked.job_id, free.job_id].sort());
+      expect(report.deleted_files).toEqual(free.files);
+      expect(report.skipped_files).toEqual([{ job_id: locked.job_id, file: locked.files[0], reason: "could-not-delete" }]);
+      expect(await exists(locked.files[0]!)).toBe(true);
+    } finally {
+      await chmod(dirname(locked.files[0]!), 0o700);
+    }
   });
 
   test("a Job recorded before hashes: deletes a Result still an image or video, leaves anything else", async () => {
@@ -273,5 +290,61 @@ describe("two sessions sharing a home", () => {
     const history = await readHistory(harness);
     expect(history.map((record) => record.id).sort()).toEqual(made.map((job) => job.job_id).sort());
     expect(history.every((record) => record.outcome === "completed")).toBe(true);
+  });
+});
+
+describe("a Job left running by a session that has ended", () => {
+  /** The pid of a process that has exited. */
+  async function deadPid(): Promise<number> {
+    const child = Bun.spawn(["true"]);
+    await child.exited;
+    return child.pid;
+  }
+
+  function runningRecord(id: string, owner?: { pid: number }) {
+    return {
+      type: "job",
+      id,
+      createdAt: "2026-11-01T10:00:00.000Z",
+      model: "sdxl",
+      provider: "together-ai",
+      protocol: "together",
+      modelId: "stabilityai/stable-diffusion-xl-base-1.0",
+      prompt: `prompt of ${id}`,
+      parameters: { n: 1, references: [], providerOptions: {} },
+      durationMs: 0,
+      files: [],
+      outcome: "running",
+      ...(owner === undefined ? {} : { owner }),
+    };
+  }
+
+  test("is interrupted and can be deleted; a Job a live session runs cannot", async () => {
+    harness = await startHarness(togetherSetup());
+    const lines = [runningRecord("orphan", { pid: await deadPid() }), runningRecord("before-owners"), runningRecord("live", { pid: process.pid })];
+    await mkdir(harness.dirs.home, { recursive: true });
+    await writeFile(join(harness.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+    const report = ok(await deleteJobs({ all: true }));
+
+    expect(report.deleted_jobs.sort()).toEqual(["before-owners", "orphan"]);
+    expect(report.running_jobs).toEqual(["live"]);
+  });
+
+  test("a running Job records the process that runs it", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    harness = await startHarness(
+      togetherSetup(async (request) => {
+        await released;
+        return recorded("together/images.json")(request);
+      }),
+    );
+    const running = ok(await call("generate_image", { prompt: "a slow fox", wait: false })) as { job_id: string };
+
+    expect((await readHistory(harness))[0]).toMatchObject({ id: running.job_id, outcome: "running", owner: { pid: process.pid } });
+    release();
+    ok(await call("get_job", { job_id: running.job_id }));
+    expect((await readHistory(harness))[0]).not.toHaveProperty("owner");
   });
 });

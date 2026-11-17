@@ -154,7 +154,8 @@ describe("generate_image", () => {
     };
     // Append-only: one record when the Job starts, one when it ends.
     expect(await readHistoryLines(harness)).toEqual([
-      { ...job, durationMs: 0, files: [], outcome: "running" },
+      // A running Job names the process running it.
+      { ...job, durationMs: 0, files: [], outcome: "running", owner: { pid: process.pid } },
       {
         ...job,
         durationMs: 2500,

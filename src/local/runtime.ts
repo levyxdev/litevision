@@ -11,7 +11,8 @@ import type { HttpTransport } from "../http.ts";
 import { providerError } from "../protocols/errors.ts";
 import type { Catalog } from "./catalog.ts";
 import { runtimePlatform } from "./hardware.ts";
-import { isAlive, readJson, readQueueState, whileIdle, writeQueueState, type QueueState } from "./queue.ts";
+import { isAlive, readJson } from "../processes.ts";
+import { readQueueState, whileIdle, writeQueueState, type QueueState } from "./queue.ts";
 
 /**
  * The one Runtime on the machine (ADR 0014). The first local Job starts the Runtime litevision installed, on

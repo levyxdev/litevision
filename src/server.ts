@@ -363,6 +363,7 @@ function deletionOutput(report: DeletionReport) {
   return {
     deleted_jobs: report.deletedJobs,
     deleted_files: report.deletedFiles,
+    already_gone: report.alreadyGone,
     skipped_files: report.skippedFiles.map(({ jobId, file, reason }) => ({ job_id: jobId, file, reason })),
     running_jobs: report.runningJobs,
     not_found: report.notFound,
@@ -377,13 +378,14 @@ function deletionOutput(report: DeletionReport) {
 
 const skipReasons: Record<SkipReason, string> = {
   "content-changed": "it is no longer what the Job saved",
-  "already-gone": "it was already gone",
+  "could-not-delete": "the system would not let litevision delete it",
 };
 
 /** A deletion report in words, one fact per line. */
 function deletionText(report: DeletionReport): string {
   const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
   const lines = [`Deleted ${count(report.deletedJobs.length, "Job")} and ${count(report.deletedFiles.length, "Result")}.`];
+  if (report.alreadyGone.length > 0) lines.push(`${count(report.alreadyGone.length, "Result")} ${report.alreadyGone.length === 1 ? "was" : "were"} already gone.`);
   for (const { file, reason } of report.skippedFiles) lines.push(`Left ${file}: ${skipReasons[reason]}.`);
   if (report.runningJobs.length > 0) lines.push(`Still running, so not deleted: ${report.runningJobs.join(", ")}. Cancel them first.`);
   if (report.notFound.length > 0) lines.push(`Not in the Job history: ${report.notFound.join(", ")}.`);
@@ -1147,7 +1149,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "delete_jobs",
     {
       description:
-        "Delete Jobs from the User's Job history for good: their records, Ratings and Picks, and the image and video files they saved. Reference images are never deleted, nor are folders named with `output_path`. Call it only when the User asks to delete Jobs or their results; there is no undo. Give exactly one of `job_ids`, `comparison_ids` or `all`. Running Jobs are left alone: cancel them first. What litevision learnt about each Model's `provider_options` is kept.",
+        "Delete Jobs from the User's Job history for good: their records, Ratings and Picks, and the image and video files they saved. Reference images are never deleted, nor are folders named with `output_path`. Call it only when the User asks to delete Jobs or their results; there is no undo. Give exactly one of `job_ids`, `comparison_ids` or `all`. A Job a litevision session is still running is left alone: cancel it first. A Job whose session ended before it finished is interrupted, and is deleted like any other. What litevision learnt about each Model's `provider_options` is kept.",
       inputSchema: {
         job_ids: z.array(z.string().min(1)).min(1).optional().describe("The Jobs to delete."),
         comparison_ids: z.array(z.string().min(1)).min(1).optional().describe("Comparisons to delete with all their Jobs."),
@@ -1156,10 +1158,11 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: {
         deleted_jobs: z.array(z.string()),
         deleted_files: z.array(z.string()),
+        already_gone: z.array(z.string()).describe("Result files that were no longer there, as when the User had deleted or moved them. Nothing to report as a problem."),
         skipped_files: z
           .array(z.object({ job_id: z.string(), file: z.string(), reason: z.enum(skipReasonNames) }))
-          .describe("Files left where they were: `content-changed` when the file is no longer what the Job saved, `already-gone` when nothing was there."),
-        running_jobs: z.array(z.string()).describe("Selected Jobs still running, left alone."),
+          .describe("Files left where they were: `content-changed` when the file is no longer what the Job saved, so the User may have edited it; `could-not-delete` when the system refused, e.g. for want of permission."),
+        running_jobs: z.array(z.string()).describe("Selected Jobs a litevision session is still running, left alone: cancel them first."),
         not_found: z.array(z.string()).describe("Job or Comparison ids the Job history does not have."),
         picks_removed: z.array(z.object({ comparison_id: z.string(), job_id: z.string(), result: z.number().optional() })),
         references_of_other_jobs: z

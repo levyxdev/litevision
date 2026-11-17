@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
+import { isAlive, readJson } from "../processes.ts";
 
 /**
  * The machine-wide queue of local Jobs (ADR 0014): every litevision process on the machine puts its local Jobs in
@@ -39,22 +40,6 @@ const folderOf = (dirs: Dirs) => join(dirs.home, "queue");
 const entryPath = (dirs: Dirs, jobId: string) => join(folderOf(dirs), `${jobId}.job`);
 const turnPath = (dirs: Dirs) => join(folderOf(dirs), "turn");
 const statePath = (dirs: Dirs) => join(folderOf(dirs), "state.json");
-
-/** Whether a process is running; EPERM means it is, under another user. */
-export function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM: the process exists but belongs to someone else.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/** A JSON file's contents, or undefined when it is missing or unreadable. */
-export async function readJson<T>(path: string): Promise<T | undefined> {
-  return readFile(path, "utf8").then((text) => JSON.parse(text) as T, () => undefined);
-}
 
 /** What the queue remembers; before any local Job, no Model and no end. */
 export async function readQueueState(dirs: Dirs): Promise<QueueState> {

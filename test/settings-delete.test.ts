@@ -45,7 +45,8 @@ async function start(): Promise<{ h: SettingsHarness; foxFile: string }> {
     jobRecord("left", 2, { comparison: "cmp" }),
     jobRecord("right", 3, { comparison: "cmp" }),
     { type: "pick", comparison: "cmp", jobId: "right", pickedAt: "2026-11-01T02:00:00.000Z" },
-    jobRecord("cat", 4, { outcome: "running" }),
+    // Run by this process, so a live session.
+    jobRecord("cat", 4, { outcome: "running", owner: { pid: process.pid } }),
   ];
   await mkdir(h.dirs.home, { recursive: true });
   await writeFile(join(h.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
@@ -62,6 +63,7 @@ describe("POST /api/jobs/delete with Job ids", () => {
     expect(response.json()).toEqual({
       deletedJobs: ["fox"],
       deletedFiles: [foxFile],
+      alreadyGone: [],
       skippedFiles: [],
       runningJobs: [],
       notFound: [],
@@ -140,5 +142,29 @@ describe("POST /api/jobs/delete with filters", () => {
     // With fox gone, the Comparison's Jobs and its Pick are left.
     await h.send("POST", "/api/jobs/delete", { body: { jobIds: ["fox"] } });
     expect((await h.send("GET", "/api/jobs")).json().deletable).toEqual({ jobs: 2, results: 0, picks: 1 });
+  });
+});
+
+describe("a Job left running by a session that has ended", () => {
+  test("is listed as interrupted, counts as deletable, and can be deleted", async () => {
+    const { h } = await start();
+    const child = Bun.spawn(["true"]);
+    await child.exited;
+    const orphan = jobRecord("orphan", 6, { outcome: "running", owner: { pid: child.pid } });
+    // Recorded before Jobs named their process.
+    const old = jobRecord("old", 7, { outcome: "running" });
+    await writeFile(join(h.dirs.home, "jobs.jsonl"), [orphan, old].map((line) => JSON.stringify(line)).join("\n") + "\n", { flag: "a" });
+
+    const listed = (await h.send("GET", "/api/jobs?outcome=running")).json();
+    expect(listed.jobs.map((job: { id: string; interrupted?: boolean }) => [job.id, job.interrupted ?? false])).toEqual([
+      ["old", true],
+      ["orphan", true],
+      ["cat", false],
+    ]);
+    expect(listed.deletable).toEqual({ jobs: 2, results: 0, picks: 0 });
+
+    const report = (await h.send("POST", "/api/jobs/delete", { body: { jobIds: ["orphan", "old", "cat"] } })).json();
+    expect(report.deletedJobs.sort()).toEqual(["old", "orphan"]);
+    expect(report.runningJobs).toEqual(["cat"]);
   });
 });

@@ -817,7 +817,7 @@ function jobCard(job) {
   const when = new Date(job.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   const outcome = job.outcome === "completed"
     ? (job.modality === "video" ? "Video" : job.files.length + " image(s)")
-    : job.outcome === "running" ? "Running…" : "Failed";
+    : job.interrupted ? "Interrupted" : job.outcome === "running" ? "Running…" : "Failed";
   const details = [];
   if (job.error) details.push(el("p", { className: "result failure", textContent: job.error }));
   if (job.shortfall) details.push(el("p", { className: "result unsupported", textContent: job.shortfall }));
@@ -826,7 +826,8 @@ function jobCard(job) {
     el("div", {},
       el("div", { className: "card-head" }, selectBox(job), el("h3", { textContent: job.model }),
         ...(isPicked(job) ? [el("span", { className: "chip accent", textContent: "Picked" })] : []),
-        el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome }),
+        el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.interrupted ? "failed" : job.outcome), textContent: outcome,
+          title: job.interrupted ? "The litevision session running this Job ended before it finished. Your Agent can pick it up again with get_job, or you can delete it." : "" }),
         deleteButton("Delete", [job], "Delete this Job")),
       el("p", { className: "job-meta", textContent: job.modelId + " on " + job.provider + " · " + when + " · " + formatDuration(job.durationMs) })),
     el("p", { className: "prompt", textContent: job.prompt }),
@@ -872,9 +873,14 @@ function count(n, noun) {
   return n + " " + noun + (n === 1 ? "" : "s");
 }
 
-/** What deleting these Jobs would remove, from what the page shows of them; running Jobs are never deleted. */
+/** Whether a Job can be deleted: anything but a Job a live litevision session is still running. */
+function canDelete(job) {
+  return !!job && (job.outcome !== "running" || !!job.interrupted);
+}
+
+/** What deleting these Jobs would remove, from what the page shows of them. */
 function deletionOf(jobs) {
-  const doomed = jobs.filter((job) => job.outcome !== "running");
+  const doomed = jobs.filter(canDelete);
   const ids = new Set(doomed.map((job) => job.id));
   const picked = new Set(doomed.filter((job) => job.comparison && job.comparison.pick && ids.has(job.comparison.pick.jobId)).map((job) => job.comparison.id));
   return { ids: [...ids], jobs: ids.size, results: doomed.reduce((sum, job) => sum + job.files.length, 0), picks: picked.size };
@@ -891,7 +897,7 @@ function deleteButton(label, jobs, title) {
   const deletion = deletionOf(jobs);
   if (deletion.ids.length === 0) {
     button.disabled = true;
-    button.title = "A running Job cannot be deleted: cancel it first.";
+    button.title = "A Job still running cannot be deleted: ask your Agent to cancel it, or wait for it to end.";
   }
   button.onclick = () => deleteJobs(button, { jobIds: deletion.ids }, deletionQuestion(deletion));
   return button;
@@ -909,7 +915,7 @@ async function deleteJobs(button, body, question) {
   });
 }
 
-const skipReasons = { "content-changed": "changed since the Job saved it", "already-gone": "already gone" };
+const skipReasons = { "content-changed": "changed since the Job saved it", "could-not-delete": "the system would not let litevision delete it" };
 
 /** The deletion report above the Job history, until the User closes it. */
 function showReport(report) {
@@ -917,6 +923,7 @@ function showReport(report) {
   const close = el("button", { type: "button", className: "small", textContent: "Close" });
   close.onclick = () => (box.hidden = true);
   const lines = [];
+  if (report.alreadyGone.length > 0) lines.push(count(report.alreadyGone.length, "Result") + (report.alreadyGone.length === 1 ? " was" : " were") + " already gone.");
   for (const skipped of report.skippedFiles) lines.push("Left " + skipped.file + ": " + skipReasons[skipped.reason] + ".");
   if (report.runningJobs.length > 0) lines.push(count(report.runningJobs.length, "Job") + " still running, so not deleted. Cancel " + (report.runningJobs.length === 1 ? "it" : "them") + " first.");
   if (report.notFound.length > 0) lines.push(count(report.notFound.length, "Job") + " had already been deleted.");
@@ -1015,10 +1022,8 @@ let lastTicked = null;
 let loadedJobs = new Map();
 let deletable = { jobs: 0, results: 0, picks: 0 };
 
-/** Only a Job that is not running can be selected: a running Job cannot be deleted. */
-function selectable(job) {
-  return !!job && job.outcome !== "running";
-}
+/** Only a Job that can be deleted can be selected. */
+const selectable = canDelete;
 
 const loadedSelectable = () => [...loadedJobs.values()].filter(selectable).map((job) => job.id);
 const isSelected = (id) => allMatching || selected.has(id);
@@ -1028,7 +1033,7 @@ function selectBox(job) {
   const box = el("input", { type: "checkbox", className: "select-job", checked: isSelected(job.id), disabled: !selectable(job) });
   box.dataset.id = job.id;
   box.setAttribute("aria-label", "Select this " + job.model + " Job");
-  if (!selectable(job)) box.title = "A running Job cannot be deleted: cancel it first.";
+  if (!selectable(job)) box.title = "A Job still running cannot be deleted: ask your Agent to cancel it, or wait for it to end.";
   box.onclick = (event) => {
     setSelected(event.shiftKey && lastTicked !== null ? idsBetween(lastTicked, job.id) : [job.id], box.checked);
     lastTicked = job.id;

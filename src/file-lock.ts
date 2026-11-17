@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { link, rm, writeFile } from "node:fs/promises";
-import { isAlive, readJson } from "./local/queue.ts";
+import { isAlive, readJson } from "./processes.ts";
 
 /**
  * A lock shared by every litevision process on the machine: a file at `path` naming the process that holds it, made by

@@ -1,7 +1,7 @@
 import { readFile, rmdir, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { Dirs } from "./dirs.ts";
-import { matchesFilter, removeJobs, type JobFilter, type JobRecord } from "./history.ts";
+import { isInterrupted, matchesFilter, removeJobs, type JobFilter, type JobRecord } from "./history.ts";
 import { fileTypeOf } from "./media.ts";
 import { contentHash } from "./source-jobs.ts";
 
@@ -14,8 +14,8 @@ import { contentHash } from "./source-jobs.ts";
 /** Which Jobs to delete: exactly one of these. A filter takes the Jobs matching it when the deletion runs. */
 export type JobSelection = { jobIds: string[] } | { comparisonIds: string[] } | { filter: JobFilter } | { all: true };
 
-/** Why a Result file was left where it was. */
-export const skipReasonNames = ["content-changed", "already-gone"] as const;
+/** Why a Result file was left where it was: no longer what the Job saved, or the system refused to remove it. */
+export const skipReasonNames = ["content-changed", "could-not-delete"] as const;
 export type SkipReason = (typeof skipReasonNames)[number];
 
 /** What a deletion did. */
@@ -24,9 +24,11 @@ export interface DeletionReport {
   deletedJobs: string[];
   /** The Result files deleted. */
   deletedFiles: string[];
-  /** The Result files not deleted: changed since the Job saved them, or no longer there. */
+  /** The Result files that were not there any more, as when the User had deleted or moved them: nothing to delete. */
+  alreadyGone: string[];
+  /** The Result files left where they were, and why. */
   skippedFiles: Array<{ jobId: string; file: string; reason: SkipReason }>;
-  /** Selected Jobs still running, which were left alone; cancel them first. */
+  /** Selected Jobs a live litevision session is still running, which were left alone; cancel them first. */
   runningJobs: string[];
   /** Job or Comparison ids the selection named that the Job history does not have. */
   notFound: string[];
@@ -36,23 +38,27 @@ export interface DeletionReport {
   referencesOfOtherJobs: Array<{ file: string; jobIds: string[] }>;
 }
 
-/** Deletes the selected Jobs; Jobs still running are left and reported. */
+/** Deletes the selected Jobs; Jobs a live session still runs are left and reported, interrupted ones deleted. */
 export async function deleteJobs(dirs: Dirs, selection: JobSelection): Promise<DeletionReport> {
   let running: string[] = [];
   let notFound: string[] = [];
   const removed = await removeJobs(dirs, (jobs) => {
     const chosen = selected(jobs, selection);
     notFound = chosen.notFound;
-    running = chosen.jobs.filter((job) => job.outcome === "running").map((job) => job.id);
-    return new Set(chosen.jobs.filter((job) => job.outcome !== "running").map((job) => job.id));
+    // An interrupted Job is running nowhere, so it goes like an ended one.
+    const live = (job: JobRecord) => job.outcome === "running" && !isInterrupted(job);
+    running = chosen.jobs.filter(live).map((job) => job.id);
+    return new Set(chosen.jobs.filter((job) => !live(job)).map((job) => job.id));
   });
 
   const deletedFiles: string[] = [];
+  const alreadyGone: string[] = [];
   const skippedFiles: DeletionReport["skippedFiles"] = [];
   for (const job of removed.jobs) {
     for (const [index, file] of job.files.entries()) {
       const outcome = await deleteResult(file, job.hashes?.[index]);
       if (outcome === "deleted") deletedFiles.push(file);
+      else if (outcome === "already-gone") alreadyGone.push(file);
       else skippedFiles.push({ jobId: job.id, file, reason: outcome });
     }
     if (job.parameters.outputPath === undefined) await removeIfEmptyDatedFolder(dirs, job.files);
@@ -73,6 +79,7 @@ export async function deleteJobs(dirs: Dirs, selection: JobSelection): Promise<D
   return {
     deletedJobs: removed.jobs.map((job) => job.id),
     deletedFiles,
+    alreadyGone,
     skippedFiles,
     runningJobs: running,
     notFound,
@@ -104,21 +111,32 @@ function selected(jobs: JobRecord[], selection: JobSelection): { jobs: JobRecord
 
 /**
  * Deletes one Result file if it is still what the Job saved: the same content, by the hash recorded with it, or for a
- * Job recorded before hashes, still an image or a video.
+ * Job recorded before hashes, still an image or a video. A file that is not there any more is already gone, as the
+ * deletion wants. The Job history is already rewritten, so a file the system refuses to read or remove is left and
+ * reported rather than stopping the deletion.
  */
-async function deleteResult(file: string, hash: string | undefined): Promise<"deleted" | SkipReason> {
+async function deleteResult(file: string, hash: string | undefined): Promise<"deleted" | "already-gone" | SkipReason> {
   let bytes: Buffer;
   try {
     bytes = await readFile(file);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return "already-gone";
-    throw error;
+    if (isMissing(error)) return "already-gone";
+    // A folder put where the Result was is not what the Job saved.
+    return (error as NodeJS.ErrnoException).code === "EISDIR" ? "content-changed" : "could-not-delete";
   }
   const unchanged = hash !== undefined ? contentHash(bytes) === hash : fileTypeOf(bytes) !== undefined;
   if (!unchanged) return "content-changed";
-  await unlink(file);
+  try {
+    await unlink(file);
+  } catch (error) {
+    return isMissing(error) ? "already-gone" : "could-not-delete";
+  }
   return "deleted";
+}
+
+function isMissing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /**

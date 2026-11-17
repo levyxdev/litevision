@@ -458,6 +458,8 @@ export class JobRunner {
       throw needsSettings(`Job "${record.id}" ran on Provider "${record.provider}", which is no longer configured, so it cannot be picked up again.`);
     }
     const credential = await credentialFor(this.deps.dirs, provider, adapter);
+    // This process runs it now: claimed first, so it is not taken for interrupted and deleted meanwhile.
+    await this.append(base, "running", { resume: handle });
     const target = { providerId: provider.id, baseUrl: provider.baseUrl ?? "", modelId: record.modelId, credential };
     if (video) {
       const resumeVideo = adapter.resumeVideo!;
@@ -593,6 +595,8 @@ export class JobRunner {
       durationMs: this.deps.now().getTime() - Date.parse(base.createdAt),
       files: [],
       outcome,
+      // A running Job names this process, so once it is gone the Job is known to be interrupted.
+      ...(outcome === "running" ? { owner: { pid: process.pid } } : {}),
       ...defined,
     };
     await appendHistory(this.deps.dirs, record);

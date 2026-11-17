@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
-import { jpegOfSize, mp4Of, pngOfSize, readHistory, recorded, textOf, tinyPng } from "./helpers.ts";
+import { jpegOfSize, mp4Of, pngOfSize, readHistory, readHistoryLines, recorded, textOf, tinyPng } from "./helpers.ts";
 import { fixture } from "./recorded-http.ts";
 import { startSettingsHarness, type SettingsHarness } from "./settings-harness.ts";
 
@@ -557,6 +557,10 @@ describe("generate_video with the together Protocol", () => {
     const finished = ok(await call("get_job", { job_id: started.job_id }));
     expect(finished).toMatchObject({ status: "completed", observed: [{ width: 1920, height: 1080, seconds: 5 }] });
     expect(finished.files[0]).toEndWith(".mp4");
+    // The session that picked it up claimed it first, so it is not taken for interrupted while it runs there.
+    const running = (await readHistoryLines(harness)).filter((line) => line.id === started.job_id && line.outcome === "running");
+    expect(running).toHaveLength(3);
+    expect(running.at(-1)).toMatchObject({ resume: { videoId }, owner: { pid: process.pid } });
   });
 
   test("with wait: false, the video Job returns running at once and get_job collects it", async () => {

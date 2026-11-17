@@ -9,6 +9,7 @@ import {
   ratingOf,
   ratingReasonMaxLength,
   readJob,
+  isInterrupted,
   matchesFilter,
   readRatedJobs,
   verdicts,
@@ -59,6 +60,8 @@ export interface ListedJob {
   prompt: string;
   durationMs: number;
   outcome: "running" | "completed" | "failed";
+  /** A running Job whose litevision session has ended: nothing runs it now, and it can be deleted. */
+  interrupted?: true;
   /** Image Jobs make images, video Jobs one video. */
   modality: Modality;
   /** `thumbnail` is the path the settings server serves the file at; the page adds its token to it. `rating` is this result's own. */
@@ -105,7 +108,7 @@ export interface JobHistoryPage {
   total: number;
   /** How many Jobs those entries hold. */
   totalJobs: number;
-  /** What deleting every matching Job would remove: the Jobs not running, their Results, and the Picks of them. */
+  /** What deleting every matching Job would remove: the Jobs no live session runs, their Results, and the Picks of them. */
   deletable: { jobs: number; results: number; picks: number };
   /** Where the next page starts; null on the last. */
   nextOffset: number | null;
@@ -120,7 +123,7 @@ export async function jobHistoryPage(dirs: Dirs, query: z.infer<typeof jobHistor
   const matching = listed.filter((job) => matchesFilter(job, filter));
   const entries = entriesOf(matching);
   const end = offset + jobHistoryPageSize;
-  const doomed = matching.filter((job) => job.outcome !== "running");
+  const doomed = matching.filter((job) => job.outcome !== "running" || job.interrupted);
   const doomedIds = new Set(doomed.map((job) => job.id));
   const picks = new Set(doomed.flatMap((job) => (job.comparison?.pick && doomedIds.has(job.comparison.pick.jobId) ? [job.comparison.id] : [])));
   return {
@@ -164,6 +167,7 @@ export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
       prompt: job.prompt,
       durationMs: job.durationMs,
       outcome: job.outcome,
+      ...(isInterrupted(job) ? { interrupted: true as const } : {}),
       modality: job.modality ?? "image",
       files: job.files.map((path, index) => ({
         path,

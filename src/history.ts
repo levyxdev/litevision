@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./config-store.ts";
 import type { Dirs } from "./dirs.ts";
 import { withFileLock } from "./file-lock.ts";
+import { isAlive } from "./processes.ts";
 import type { MediaFacts } from "./media.ts";
 import type { Requested } from "./protocols/parameter-guide.ts";
 import type { Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
@@ -67,6 +68,8 @@ export interface JobRecord {
   /** The content hash of each saved file, in the order of `files` (`sha256:` and the hex digest of its bytes); absent on Jobs recorded before. */
   hashes?: string[];
   outcome: "running" | "completed" | "failed";
+  /** While running: the litevision process running it. Absent on Jobs recorded before, and once the Job has ended. */
+  owner?: { pid: number };
   /** While running: what the Protocol needs to pick the Job back up after a restart; absent for synchronous Protocols. */
   resume?: ResumeHandle;
   /** What the Provider says a completed Job cost, in its own unit, when it says. */
@@ -409,6 +412,15 @@ function isPickRecord(value: unknown): value is PickRecord {
     typeof record.pickedAt === "string" &&
     (record.result === undefined || (Number.isInteger(record.result) && record.result >= 1))
   );
+}
+
+/**
+ * Whether a Job is still recorded as running though the litevision session running it has ended: its process is gone,
+ * or it was recorded before Jobs named their process. `get_job` may still pick it up again; until then nothing runs it,
+ * so it may be deleted.
+ */
+export function isInterrupted(job: Pick<JobRecord, "outcome" | "owner">): boolean {
+  return job.outcome === "running" && (job.owner === undefined || !isAlive(job.owner.pid));
 }
 
 /** Which Jobs to show or delete in the settings page: those matching every filter given. */
