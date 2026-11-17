@@ -9,7 +9,7 @@ import {
   ratingOf,
   ratingReasonMaxLength,
   readJob,
-  isInterrupted,
+  isDeletable,
   matchesFilter,
   readRatedJobs,
   verdicts,
@@ -167,7 +167,7 @@ export async function listJobHistory(dirs: Dirs): Promise<ListedJob[]> {
       prompt: job.prompt,
       durationMs: job.durationMs,
       outcome: job.outcome,
-      ...(isInterrupted(job) ? { interrupted: true as const } : {}),
+      ...(job.outcome === "running" && isDeletable(job) ? { interrupted: true as const } : {}),
       modality: job.modality ?? "image",
       files: job.files.map((path, index) => ({
         path,

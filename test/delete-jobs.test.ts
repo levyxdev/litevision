@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { startHarness, type Harness, type HarnessOptions, type Route } from "./harness.ts";
-import { readHistory, readHistoryLines, recorded, textOf, tinyPng, type ToolResult } from "./helpers.ts";
+import { deadPid, readHistory, readHistoryLines, recorded, textOf, tinyPng, type ToolResult } from "./helpers.ts";
+import { readdir } from "node:fs/promises";
 
 /** Deleting Jobs from the Job history, with their Results (#62, ADR 0015). */
 
@@ -294,13 +295,6 @@ describe("two sessions sharing a home", () => {
 });
 
 describe("a Job left running by a session that has ended", () => {
-  /** The pid of a process that has exited. */
-  async function deadPid(): Promise<number> {
-    const child = Bun.spawn(["true"]);
-    await child.exited;
-    return child.pid;
-  }
-
   function runningRecord(id: string, owner?: { pid: number }) {
     return {
       type: "job",
@@ -347,4 +341,58 @@ describe("a Job left running by a session that has ended", () => {
     ok(await call("get_job", { job_id: running.job_id }));
     expect((await readHistory(harness))[0]).not.toHaveProperty("owner");
   });
+
+  test("a Job deleted while something still ran it does not come back, nor do the Results it saves", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    harness = await startHarness(
+      togetherSetup(async (request) => {
+        await released;
+        return recorded("together/images.json")(request);
+      }),
+    );
+    const running = ok(await call("generate_image", { prompt: "a slow fox", wait: false })) as { job_id: string };
+    // As an older litevision, or a process whose pid was reused, would leave it: taken for interrupted.
+    const [record] = await readHistory(harness);
+    await writeFile(join(harness.dirs.home, "jobs.jsonl"), JSON.stringify({ ...record, owner: { pid: await deadPid() } }) + "\n", { flag: "a" });
+    expect(ok(await deleteJobs({ job_ids: [running.job_id] })).deleted_jobs).toEqual([running.job_id]);
+
+    release();
+    // Long enough for the Job to finish in the background, saving and recording what it brought back.
+    await Bun.sleep(300);
+    const result = await call("get_job", { job_id: running.job_id });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(`litevision has no Job "${running.job_id}"`);
+    expect(await Bun.file(join(harness.dirs.home, "jobs.jsonl")).text()).toBe("");
+    expect(await readdir(harness.dirs.output, { recursive: true }).then((names) => names.filter((name) => name.endsWith(".png")))).toEqual([]);
+  });
+
+  test("keeps the evidence of a Job whose evidence had failed to be written", async () => {
+    harness = await startHarness(togetherSetup());
+    await mkdir(join(harness.dirs.home, "evidence.jsonl"), { recursive: true });
+    const job = await generate({ provider_options: { steps: 4 } });
+    const { rm } = await import("node:fs/promises");
+    await rm(join(harness.dirs.home, "evidence.jsonl"), { recursive: true });
+
+    ok(await deleteJobs({ job_ids: [job.job_id] }));
+
+    const listed = ok(await call("list_models", { model: "sdxl" }));
+    expect(listed.models[0].option_statuses.accepted).toMatchObject([{ options: { steps: 4 }, job_id: job.job_id, job_deleted: true }]);
+  });
 });
+
+describe("a lock left behind", () => {
+  test("by a process long since gone, whose pid now names another, does not hold up Jobs", async () => {
+    harness = await startHarness(togetherSetup());
+    await mkdir(harness.dirs.home, { recursive: true });
+    const stale = { pid: process.pid, token: "left-behind", at: Date.now() - 10 * 60_000 };
+    await writeFile(join(harness.dirs.home, "jobs.lock"), JSON.stringify(stale));
+    await writeFile(join(harness.dirs.home, "evidence.lock"), JSON.stringify(stale));
+
+    const job = await generate();
+
+    expect((await readHistory(harness)).map((record) => record.id)).toEqual([job.job_id]);
+  }, 5_000);
+});
+

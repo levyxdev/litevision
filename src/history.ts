@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./config-store.ts";
 import type { Dirs } from "./dirs.ts";
 import { withFileLock } from "./file-lock.ts";
-import { isAlive } from "./processes.ts";
+import { isOwnProcessAlive } from "./processes.ts";
 import type { MediaFacts } from "./media.ts";
 import type { Requested } from "./protocols/parameter-guide.ts";
 import type { Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
@@ -177,6 +177,18 @@ export async function appendHistory(dirs: Dirs, record: JobRecord | RatingRecord
   // The folder also holds credentials.json.
   await mkdir(dirs.home, { recursive: true, mode: 0o700 });
   await withFileLock(lockPath(dirs), () => appendFile(historyPath(dirs), `${JSON.stringify(record)}\n`));
+}
+
+/**
+ * Appends a later record of a Job, unless the Job is no longer in the Job history: the User deleted it while it ran,
+ * which only happens when it was taken for interrupted. Says whether it was appended, so a deleted Job never comes back.
+ */
+export async function appendJobUpdate(dirs: Dirs, record: JobRecord): Promise<boolean> {
+  return withFileLock(lockPath(dirs), async () => {
+    if (!parseRecords(await readHistoryText(dirs)).jobs.some((job) => job.id === record.id)) return false;
+    await appendFile(historyPath(dirs), `${JSON.stringify(record)}\n`);
+    return true;
+  });
 }
 
 /** What {@link removeJobs} took out of the Job history, and what it left. */
@@ -420,7 +432,12 @@ function isPickRecord(value: unknown): value is PickRecord {
  * so it may be deleted.
  */
 export function isInterrupted(job: Pick<JobRecord, "outcome" | "owner">): boolean {
-  return job.outcome === "running" && (job.owner === undefined || !isAlive(job.owner.pid));
+  return job.outcome === "running" && (job.owner === undefined || !isOwnProcessAlive(job.owner.pid));
+}
+
+/** Whether a Job may be deleted: anything but a Job a live litevision process is still running. */
+export function isDeletable(job: Pick<JobRecord, "outcome" | "owner">): boolean {
+  return job.outcome !== "running" || isInterrupted(job);
 }
 
 /** Which Jobs to show or delete in the settings page: those matching every filter given. */

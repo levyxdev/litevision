@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readHistory, readHistoryLines, tinyPng } from "./helpers.ts";
+import { deadPid, readHistory, readHistoryLines, tinyPng } from "./helpers.ts";
 import { startSettingsHarness, type SettingsHarness } from "./settings-harness.ts";
 import { contentHash } from "../src/source-jobs.ts";
 
@@ -148,9 +148,7 @@ describe("POST /api/jobs/delete with filters", () => {
 describe("a Job left running by a session that has ended", () => {
   test("is listed as interrupted, counts as deletable, and can be deleted", async () => {
     const { h } = await start();
-    const child = Bun.spawn(["true"]);
-    await child.exited;
-    const orphan = jobRecord("orphan", 6, { outcome: "running", owner: { pid: child.pid } });
+    const orphan = jobRecord("orphan", 6, { outcome: "running", owner: { pid: await deadPid() } });
     // Recorded before Jobs named their process.
     const old = jobRecord("old", 7, { outcome: "running" });
     await writeFile(join(h.dirs.home, "jobs.jsonl"), [orphan, old].map((line) => JSON.stringify(line)).join("\n") + "\n", { flag: "a" });

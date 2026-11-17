@@ -1,7 +1,8 @@
 import { readFile, rmdir, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { Dirs } from "./dirs.ts";
-import { isInterrupted, matchesFilter, removeJobs, type JobFilter, type JobRecord } from "./history.ts";
+import { keepEvidence } from "./evidence.ts";
+import { isDeletable, matchesFilter, removeJobs, type JobFilter, type JobRecord } from "./history.ts";
 import { fileTypeOf } from "./media.ts";
 import { contentHash } from "./source-jobs.ts";
 
@@ -46,10 +47,11 @@ export async function deleteJobs(dirs: Dirs, selection: JobSelection): Promise<D
     const chosen = selected(jobs, selection);
     notFound = chosen.notFound;
     // An interrupted Job is running nowhere, so it goes like an ended one.
-    const live = (job: JobRecord) => job.outcome === "running" && !isInterrupted(job);
-    running = chosen.jobs.filter(live).map((job) => job.id);
-    return new Set(chosen.jobs.filter((job) => !live(job)).map((job) => job.id));
+    running = chosen.jobs.filter((job) => !isDeletable(job)).map((job) => job.id);
+    return new Set(chosen.jobs.filter(isDeletable).map((job) => job.id));
   });
+  // What litevision learnt from these Jobs outlives them (ADR 0015), even where their evidence failed to be written.
+  await keepEvidence(dirs, removed.jobs);
 
   const deletedFiles: string[] = [];
   const alreadyGone: string[] = [];

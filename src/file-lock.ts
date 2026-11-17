@@ -4,14 +4,22 @@ import { isAlive, readJson } from "./processes.ts";
 
 /**
  * A lock shared by every litevision process on the machine: a file at `path` naming the process that holds it, made by
- * linking a finished file, which is atomic, so two processes never both hold it. A lock left by a process that died is
- * removed by whoever finds it.
+ * linking a finished file, which is atomic, so two processes never both hold it. A lock left by a process that died, or
+ * held far longer than any work under it takes, is removed by whoever finds it.
  */
 
 interface Holder {
   pid: number;
   token: string;
+  /** When it was taken, in milliseconds since the epoch. */
+  at: number;
 }
+
+/**
+ * How long a lock may be held before it counts as left behind, whoever its pid names now: far longer than any work
+ * done under it, and it stops a pid reused by another process from holding up every litevision process for good.
+ */
+const staleMs = 60_000;
 
 /** How long to wait before asking again while another process holds the lock. */
 const retryMs = 5;
@@ -29,7 +37,7 @@ export async function withFileLock<T>(path: string, work: () => Promise<T>): Pro
 async function take(path: string): Promise<string> {
   const token = randomUUID();
   const draft = `${path}.${token}`;
-  await writeFile(draft, JSON.stringify({ pid: process.pid, token } satisfies Holder));
+  await writeFile(draft, JSON.stringify({ pid: process.pid, token, at: Date.now() } satisfies Holder));
   try {
     for (;;) {
       try {
@@ -39,7 +47,8 @@ async function take(path: string): Promise<string> {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
       const holder = await readJson<Holder>(path);
-      if (holder !== undefined && !isAlive(holder.pid)) await release(path, holder.token);
+      const left = holder !== undefined && (!isAlive(holder.pid) || !(Date.now() - holder.at < staleMs));
+      if (left) await release(path, holder.token);
       else await new Promise((resolve) => setTimeout(resolve, retryMs));
     }
   } finally {

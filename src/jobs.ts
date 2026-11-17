@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { ConfigError, loadConfig, needsSettings, type ResolvedModel } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 import { appendEvidence } from "./evidence.ts";
 import { fileStem, saveNamed, type FileToSave } from "./file-names.ts";
-import { appendHistory, readJob, readJobs, type JobRecord, type SourceJob } from "./history.ts";
+import { appendHistory, appendJobUpdate, readJob, readJobs, type JobRecord, type SourceJob } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { QueuePlace, withdraw } from "./local/queue.ts";
 import type { Runtime } from "./local/runtime.ts";
@@ -160,6 +160,16 @@ export interface CancelOutcome {
 }
 
 /** Raised inside a Job when litevision shuts down under it. Nothing more is recorded, so the Job can be resumed. */
+/**
+ * The User deleted the Job while something still ran it, as when it was taken for interrupted. To the Agent it is a Job
+ * litevision does not have.
+ */
+class JobDeleted extends ConfigError {
+  constructor(readonly id: string) {
+    super(`litevision has no Job "${id}": it was deleted while it ran, and so were the Results it brought back.`);
+  }
+}
+
 class JobAbandoned extends Error {
   constructor() {
     super("litevision shut down while the Job was running.");
@@ -214,7 +224,7 @@ export class JobRunner {
     });
     const target = await this.targetOf(spec);
     // Recorded before the Provider is called, so a Job lost with this process is never silently forgotten.
-    await this.append(base, "running");
+    await this.append(base, "running", {}, { first: true });
     const job = this.track(base, spec.credential, spec.adapter, target, async (target, context, control) => {
       const submitted = await spec.adapter.submit(request, target, this.deps.http, context);
       if (submitted.resumeHandle !== undefined) {
@@ -246,7 +256,7 @@ export class JobRunner {
       providerOptions: request.providerOptions,
     });
     const target = await this.targetOf(spec);
-    await this.append(base, "running");
+    await this.append(base, "running", {}, { first: true });
     const job = this.track(base, spec.credential, spec.adapter, target, async (target, context, control) => {
       const submitted = await submitVideo.call(spec.adapter, request, target, this.deps.http, context);
       await this.append(base, "running", { resume: submitted.resumeHandle });
@@ -516,7 +526,13 @@ export class JobRunner {
           : safe(
               `Got ${files.length} of ${n} images from ${providerLabel(base.provider)}.${reasons.length === 0 ? "" : ` ${reasons.join(" ")}`}`,
             );
-      await this.append(base, "completed", { files, hashes, shortfall, cost: result.cost, observed, mismatch });
+      try {
+        await this.append(base, "completed", { files, hashes, shortfall, cost: result.cost, observed, mismatch });
+      } catch (error) {
+        // The Job was deleted while it ran: its Results go with it.
+        if (error instanceof JobDeleted) await Promise.all(files.map((file) => rm(file, { force: true })));
+        throw error;
+      }
       return {
         id: base.id,
         files,
@@ -526,6 +542,7 @@ export class JobRunner {
         ...(base.parameters.requested === undefined ? {} : { requested: base.parameters.requested }),
       };
     } catch (error) {
+      if (error instanceof JobDeleted) throw error;
       if (error instanceof JobAbandoned || this.closed) throw new JobAbandoned();
       if (error instanceof JobCancelled || (error instanceof ProviderError && error.kind === "cancelled")) {
         const message = cancelledMessage(control.onRuntime, base.provider);
@@ -587,7 +604,11 @@ export class JobRunner {
     return saving;
   }
 
-  private async append(base: JobBase, outcome: JobRecord["outcome"], progress: JobProgress = {}): Promise<void> {
+  /**
+   * Records where a Job stands. Its first record starts it in the Job history; every later one is appended only while
+   * the Job is still there, and otherwise throws {@link JobDeleted}, so a Job the User deleted never comes back.
+   */
+  private async append(base: JobBase, outcome: JobRecord["outcome"], progress: JobProgress = {}, { first = false } = {}): Promise<void> {
     if (this.closed) throw new JobAbandoned();
     const defined = Object.fromEntries(Object.entries(progress).filter(([, value]) => value !== undefined));
     const record: JobRecord = {
@@ -599,9 +620,11 @@ export class JobRunner {
       ...(outcome === "running" ? { owner: { pid: process.pid } } : {}),
       ...defined,
     };
-    await appendHistory(this.deps.dirs, record);
-    // Evidence that fails to be written is written on the next read (ADR 0015); the Job itself went as recorded.
+    const kept = first ? (await appendHistory(this.deps.dirs, record), true) : await appendJobUpdate(this.deps.dirs, record);
+    // What the Job showed about its options counts even once the Job is deleted (ADR 0015). Evidence that fails to be
+    // written is written on the next read; the Job itself went as recorded.
     await appendEvidence(this.deps.dirs, record).catch(() => undefined);
+    if (!kept) throw new JobDeleted(base.id);
   }
 }
 

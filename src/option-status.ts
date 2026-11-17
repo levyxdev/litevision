@@ -82,7 +82,7 @@ function unitsOf(options: Record<string, unknown>, fields: RequestFields): Unit[
 
 /**
  * Every Option Status of a Model, newest evidence first. `evidence` is in the order the Jobs ended (as
- * {@link readEvidence} gives it), so a Job's evidence counts from when it arrived. `fields` are the request
+ * {@link readEvidence} gives it), so a Job's evidence counts from when it ended. `fields` are the request
  * fields its result check reads (from {@link fieldsToRead}), which say which options a check covered and which it
  * reads together.
  *
@@ -173,7 +173,8 @@ export type StatusedModel = ModelKey & { modality?: Modality };
  * marked when the Job it came from has been deleted since.
  */
 export async function optionStatusReader(dirs: Dirs): Promise<(model: StatusedModel) => OptionStatus[]> {
-  const [evidence, jobs] = await Promise.all([readEvidence(dirs), readJobs(dirs)]);
+  const jobs = await readJobs(dirs);
+  const evidence = await readEvidence(dirs, jobs);
   const kept = new Set(jobs.map((job) => job.id));
   return (model) => modelOptionStatuses(evidence, model).map((status) => (kept.has(status.jobId) ? status : { ...status, jobDeleted: true }));
 }

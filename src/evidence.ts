@@ -83,13 +83,24 @@ export async function appendEvidence(dirs: Dirs, job: JobRecord): Promise<void> 
  * written when it ended. A Job recorded twice counts once, as its latest line says. Lines that cannot be read are
  * skipped.
  */
-export async function readEvidence(dirs: Dirs): Promise<Evidence[]> {
+export async function readEvidence(dirs: Dirs, jobs?: JobRecord[]): Promise<Evidence[]> {
   // Before anything is configured there is no evidence, nor a folder to keep the lock in.
   if (!(await exists(dirs.home))) return [];
-  const evidence = await withFileLock(lockPath(dirs), async () => {
+  const evidence = await keepEvidence(dirs, jobs ?? (await readJobs(dirs)));
+  const byJob = new Map(evidence.map((line) => [line.jobId, line]));
+  // Stable, so Jobs that ended together keep the order they were written in.
+  return [...byJob.values()].sort((a, b) => endOf(a) - endOf(b));
+}
+
+/**
+ * Writes the evidence of those of `jobs` that have ended and have none yet, and returns all the evidence written so
+ * far, as it is in the file. Deleting Jobs calls it first, so their evidence is never lost with them.
+ */
+export async function keepEvidence(dirs: Dirs, jobs: JobRecord[]): Promise<Evidence[]> {
+  return withFileLock(lockPath(dirs), async () => {
     const written = parseEvidence(await readEvidenceText(dirs));
     const known = new Set(written.map((line) => line.jobId));
-    const missing = (await readJobs(dirs)).flatMap((job) => {
+    const missing = jobs.flatMap((job) => {
       const lacking = known.has(job.id) ? undefined : evidenceOf(job);
       return lacking === undefined ? [] : [lacking];
     });
@@ -99,9 +110,6 @@ export async function readEvidence(dirs: Dirs): Promise<Evidence[]> {
     }
     return [...written, ...missing];
   });
-  const byJob = new Map(evidence.map((line) => [line.jobId, line]));
-  // Stable, so Jobs that ended together keep the order they were written in.
-  return [...byJob.values()].sort((a, b) => endOf(a) - endOf(b));
 }
 
 /** When a Job ended; evidence written before it said so counts from when the Job started. */
