@@ -83,7 +83,7 @@ describe("Job history", () => {
 
   test("is empty before any Job has run", async () => {
     harness = await startSettingsHarness();
-    expect((await harness.send("GET", "/api/jobs")).json()).toEqual({ jobs: [], total: 0, totalJobs: 0, nextOffset: null, aliases: [] });
+    expect((await harness.send("GET", "/api/jobs")).json()).toEqual({ jobs: [], total: 0, totalJobs: 0, deletable: { jobs: 0, results: 0, picks: 0 }, nextOffset: null, aliases: [] });
   });
 
   test("the page has a Job history area", async () => {

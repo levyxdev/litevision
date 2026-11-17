@@ -92,6 +92,8 @@ export function renderPage(nonce: string): string {
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
   button.danger { border-color: transparent; background: transparent; color: var(--danger); }
+  button.destructive { background: var(--danger); border-color: var(--danger); color: #fff; }
+  button.destructive:hover:not(:disabled) { background: var(--danger); filter: brightness(1.08); }
   button.small { height: 28px; padding: 0 10px; font-size: 13px; }
   button:disabled { opacity: 0.5; cursor: default; }
 
@@ -140,7 +142,23 @@ export function renderPage(nonce: string): string {
   .report .report-head { display: flex; align-items: center; gap: 8px; font-weight: 500; }
   .report .report-head > span { flex: 1; }
   .report p { overflow-wrap: anywhere; color: var(--muted); }
+  input[type="checkbox"] { width: 16px; height: 16px; padding: 0; margin: 0; flex: none; accent-color: var(--accent); cursor: pointer; }
+  input[type="checkbox"]:disabled { cursor: default; opacity: 0.4; }
+  input[type="checkbox"]:focus { box-shadow: 0 0 0 3px var(--focus); }
+  .select-all { display: flex; align-items: center; gap: 8px; margin: 0 6px 0 2px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .banner { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 14px; margin-bottom: 12px;
+    border-radius: 10px; background: var(--hover); font-size: 13px; }
+  .banner[hidden], .selection-bar[hidden] { display: none; }
+  button.link { height: auto; padding: 0; border: 0; background: none; color: var(--accent); }
+  button.link:hover:not(:disabled) { background: none; text-decoration: underline; }
+  .selection-bar { position: fixed; left: 50%; bottom: 16px; z-index: 2; transform: translateX(-50%); width: min(680px, calc(100% - 32px));
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 6px 24px rgb(0 0 0 / 0.18); }
+  .selection-bar .summary { flex: 1 1 180px; font-weight: 500; }
+  body.selecting main { padding-bottom: 150px; }
+  body.selecting #status { bottom: 90px; }
   .comparison-head { display: flex; align-items: flex-start; gap: 10px; }
+  .comparison-head > input[type="checkbox"], .card-head > input[type="checkbox"] { margin-top: 2px; align-self: flex-start; }
   .comparison-head > div { flex: 1; min-width: 0; }
 
   #status { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
@@ -211,6 +229,7 @@ export function renderPage(nonce: string): string {
       <p>Newest first. Rate a Job, or one of its results, to keep your verdict on it; rating it again replaces the earlier Rating. In a Comparison, pick the result you prefer; picking again replaces the earlier Pick.</p></div>
     </div>
     <div class="filters" role="group" aria-label="Filter the Job history">
+      <label class="select-all"><input type="checkbox" id="select-all" aria-label="Select all loaded Jobs"> All</label>
       <select id="filter-model" aria-label="Model"><option value="">All Models</option></select>
       <select id="filter-outcome" aria-label="Status">
         <option value="">Any status</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="running">Running</option>
@@ -218,11 +237,17 @@ export function renderPage(nonce: string): string {
       <select id="filter-modality" aria-label="Media type"><option value="">Images and videos</option><option value="image">Images</option><option value="video">Videos</option></select>
       <span id="job-count" class="count" aria-live="polite"></span>
     </div>
+    <div id="select-banner" class="banner" hidden></div>
     <div id="job-report" class="report" role="status" hidden></div>
     <div id="job-list"><p class="muted">Loading…</p></div>
     <div class="more"><button id="show-more" type="button" hidden>Show more</button></div>
   </section>
 </main>
+<div id="selection-bar" class="selection-bar" role="region" aria-label="Selected Jobs" hidden>
+  <span id="selection-summary" class="summary" aria-live="polite"></span>
+  <button id="delete-selected" type="button" class="destructive">Delete</button>
+  <button id="clear-selection" type="button">Clear selection</button>
+</div>
 <div id="status" role="status" aria-live="polite"></div>
 
 <script nonce="${nonce}">
@@ -799,7 +824,7 @@ function jobCard(job) {
   if (job.mismatch) details.push(el("p", { className: "result unsupported", textContent: job.mismatch }));
   return el("div", { className: "card" },
     el("div", {},
-      el("div", { className: "card-head" }, el("h3", { textContent: job.model }),
+      el("div", { className: "card-head" }, selectBox(job), el("h3", { textContent: job.model }),
         ...(isPicked(job) ? [el("span", { className: "chip accent", textContent: "Picked" })] : []),
         el("span", { className: "chip " + (job.outcome === "completed" ? "ok" : job.outcome), textContent: outcome }),
         deleteButton("Delete", [job], "Delete this Job")),
@@ -820,6 +845,7 @@ function comparisonCard(jobs) {
     : "Picked: " + (pick.result === undefined ? "" : "result " + pick.result + " of ") + (picked ? picked.model + "'s Job" : "Job " + pick.jobId) + ".";
   return el("div", { className: "comparison" },
     el("div", { className: "comparison-head" },
+      comparisonBox(jobs),
       el("div", {},
         el("h3", { textContent: "Comparison · " + (jobs.length === jobs[0].comparison.size ? jobs.length + " Jobs" : jobs.length + " of its " + jobs[0].comparison.size + " Jobs match the filters") }),
         el("p", { textContent: status + " A Pick says which you prefer; it is not a Rating." })),
@@ -851,12 +877,12 @@ function deletionOf(jobs) {
   const doomed = jobs.filter((job) => job.outcome !== "running");
   const ids = new Set(doomed.map((job) => job.id));
   const picked = new Set(doomed.filter((job) => job.comparison && job.comparison.pick && ids.has(job.comparison.pick.jobId)).map((job) => job.comparison.id));
-  return { ids: [...ids], results: doomed.reduce((sum, job) => sum + job.files.length, 0), picks: picked.size };
+  return { ids: [...ids], jobs: ids.size, results: doomed.reduce((sum, job) => sum + job.files.length, 0), picks: picked.size };
 }
 
 /** "Delete 2 Jobs, 3 Results and 1 Pick for good?" */
-function deletionQuestion({ ids, results, picks }) {
-  const parts = [count(ids.length, "Job"), count(results, "Result")];
+function deletionQuestion({ jobs, results, picks }) {
+  const parts = [count(jobs, "Job"), count(results, "Result")];
   if (picks > 0) parts.push(count(picks, "Pick"));
   return "Delete " + parts.slice(0, -1).join(", ") + " and " + parts.at(-1) + " for good?\\n\\nThis cannot be undone. Result files you changed since they were saved are left, and your reference images are never deleted.";
 }
@@ -879,6 +905,8 @@ async function deleteJobs(button, body, question) {
   await act(button, async () => {
     const report = await api("POST", "/api/jobs/delete", body);
     showReport(report);
+    // Every Job matching the filters is gone; a Job deleted alone leaves the rest of the selection.
+    if (body.filter) clearSelection();
     await loadJobs(true);
   });
 }
@@ -892,7 +920,7 @@ function showReport(report) {
   close.onclick = () => (box.hidden = true);
   const lines = [];
   for (const skipped of report.skippedFiles) lines.push("Left " + skipped.file + ": " + skipReasons[skipped.reason] + ".");
-  if (report.runningJobs.length > 0) lines.push(count(report.runningJobs.length, "Job") + " still running, so not deleted. Cancel them first.");
+  if (report.runningJobs.length > 0) lines.push(count(report.runningJobs.length, "Job") + " still running, so not deleted. Cancel " + (report.runningJobs.length === 1 ? "it" : "them") + " first.");
   if (report.notFound.length > 0) lines.push(count(report.notFound.length, "Job") + " had already been deleted.");
   for (const pick of report.picksRemoved) lines.push("A Comparison lost its Pick with the Job it picked.");
   for (const used of report.referencesOfOtherJobs) lines.push(used.file + " was a reference image of " + count(used.jobIds.length, "remaining Job") + ".");
@@ -933,6 +961,7 @@ async function loadJobs(keep) {
     loaded = page.nextOffset === null ? page.total : page.nextOffset;
   }
   showAliases(page.aliases);
+  loadedJobs = new Map(jobs.map((job) => [job.id, job]));
   const filtered = Object.keys(jobFilter()).length > 0;
   list.replaceChildren(...(jobs.length === 0
     ? [emptyState(filtered ? "No Jobs match these filters." : "No Jobs yet. Images your Agent generates will appear here.")]
@@ -943,6 +972,7 @@ async function loadJobs(keep) {
 async function showMore(button) {
   await act(button, async () => {
     const page = await api("GET", jobsPath(nextOffset));
+    for (const job of page.jobs) loadedJobs.set(job.id, job);
     document.getElementById("job-list").append(...jobEntries(page.jobs));
     showLoaded(page.nextOffset === null ? page.total : page.nextOffset, page);
   });
@@ -951,6 +981,10 @@ async function showMore(button) {
 function showLoaded(loaded, page) {
   loadedEntries = loaded;
   nextOffset = page.nextOffset;
+  deletable = page.deletable;
+  // Jobs deleted, or running again, drop out of the selection.
+  for (const id of selected) if (!selectable(loadedJobs.get(id))) selected.delete(id);
+  showSelection();
   document.getElementById("show-more").hidden = nextOffset === null;
   document.getElementById("job-count").textContent = page.total === 0 ? ""
     : loaded < page.total ? "Showing " + loaded + " of " + page.total + " entries" : page.total + (page.total === 1 ? " entry" : " entries");
@@ -965,9 +999,132 @@ function showAliases(aliases) {
 }
 
 for (const name of ["model", "outcome", "modality"]) {
-  document.getElementById("filter-" + name).onchange = () => loadJobs().catch((error) => showStatus(error.message, true));
+  document.getElementById("filter-" + name).onchange = () => {
+    clearSelection();
+    loadJobs().catch((error) => showStatus(error.message, true));
+  };
 }
 document.getElementById("show-more").onclick = (event) => showMore(event.currentTarget);
+
+// The Job history's selection: the Job ids ticked, or every Job matching the filters, loaded or not.
+const selected = new Set();
+let allMatching = false;
+// The Job ticked or unticked last, where a shift-click range starts.
+let lastTicked = null;
+// The loaded Jobs by id, and what deleting every Job matching the filters would remove.
+let loadedJobs = new Map();
+let deletable = { jobs: 0, results: 0, picks: 0 };
+
+/** Only a Job that is not running can be selected: a running Job cannot be deleted. */
+function selectable(job) {
+  return !!job && job.outcome !== "running";
+}
+
+const loadedSelectable = () => [...loadedJobs.values()].filter(selectable).map((job) => job.id);
+const isSelected = (id) => allMatching || selected.has(id);
+
+/** A Job's checkbox; shift-click selects or clears every Job between it and the Job clicked before. */
+function selectBox(job) {
+  const box = el("input", { type: "checkbox", className: "select-job", checked: isSelected(job.id), disabled: !selectable(job) });
+  box.dataset.id = job.id;
+  box.setAttribute("aria-label", "Select this " + job.model + " Job");
+  if (!selectable(job)) box.title = "A running Job cannot be deleted: cancel it first.";
+  box.onclick = (event) => {
+    setSelected(event.shiftKey && lastTicked !== null ? idsBetween(lastTicked, job.id) : [job.id], box.checked);
+    lastTicked = job.id;
+  };
+  return box;
+}
+
+/** A Comparison's checkbox: ticks or clears all of its Jobs shown, which can then be cleared one by one. */
+function comparisonBox(jobs) {
+  const ids = jobs.filter(selectable).map((job) => job.id);
+  const box = el("input", { type: "checkbox", className: "select-comparison", disabled: ids.length === 0 });
+  box.dataset.ids = ids.join(" ");
+  box.setAttribute("aria-label", "Select this Comparison's Jobs");
+  box.onclick = () => setSelected(ids, box.checked);
+  return box;
+}
+
+/** The selectable Job ids from one Job's checkbox to another's, both included, in the order the page shows them. */
+function idsBetween(from, to) {
+  const ids = [...document.querySelectorAll("input.select-job:not(:disabled)")].map((box) => box.dataset.id);
+  const [start, end] = [ids.indexOf(from), ids.indexOf(to)].sort((a, b) => a - b);
+  return start === -1 ? [to] : ids.slice(start, end + 1);
+}
+
+function setSelected(ids, on) {
+  // Changing one Job while every matching Job is selected leaves just the loaded ones selected, less or more that one.
+  if (allMatching) {
+    allMatching = false;
+    for (const id of loadedSelectable()) selected.add(id);
+  }
+  for (const id of ids) on ? selected.add(id) : selected.delete(id);
+  showSelection();
+}
+
+function clearSelection() {
+  selected.clear();
+  allMatching = false;
+  lastTicked = null;
+  showSelection();
+}
+
+/** What the selection would delete: counted on the page for ticked Jobs, by the server for every matching Job. */
+function selection() {
+  return allMatching ? deletable : deletionOf([...selected].map((id) => loadedJobs.get(id)).filter(Boolean));
+}
+
+/** Brings every checkbox, the banner and the selection bar in line with the selection. */
+function showSelection() {
+  for (const box of document.querySelectorAll("input.select-job")) box.checked = !box.disabled && isSelected(box.dataset.id);
+  for (const box of document.querySelectorAll("input.select-comparison")) {
+    const ids = box.dataset.ids ? box.dataset.ids.split(" ") : [];
+    const ticked = ids.filter(isSelected).length;
+    box.checked = ids.length > 0 && ticked === ids.length;
+    box.indeterminate = ticked > 0 && ticked < ids.length;
+  }
+  const loaded = loadedSelectable();
+  const ticked = loaded.filter(isSelected).length;
+  const all = document.getElementById("select-all");
+  all.disabled = loaded.length === 0;
+  all.checked = loaded.length > 0 && ticked === loaded.length;
+  all.indeterminate = ticked > 0 && ticked < loaded.length;
+
+  const banner = document.getElementById("select-banner");
+  if (allMatching) {
+    const clear = el("button", { type: "button", className: "link", textContent: "Clear selection" });
+    clear.onclick = clearSelection;
+    banner.replaceChildren(el("span", { textContent: "All " + count(deletable.jobs, "Job") + " matching the filters are selected." }), clear);
+  } else if (loaded.length > 0 && ticked === loaded.length && deletable.jobs > loaded.length) {
+    const more = el("button", { type: "button", className: "link", textContent: "Select all " + deletable.jobs + " matching" });
+    more.onclick = () => {
+      allMatching = true;
+      showSelection();
+    };
+    banner.replaceChildren(el("span", { textContent: "All " + count(loaded.length, "loaded Job") + " are selected." }), more);
+  }
+  banner.hidden = !(allMatching || (loaded.length > 0 && ticked === loaded.length && deletable.jobs > loaded.length));
+
+  const chosen = selection();
+  document.getElementById("selection-summary").textContent = count(chosen.jobs, "Job") + " · " + count(chosen.results, "Result") + " selected";
+  document.getElementById("selection-bar").hidden = chosen.jobs === 0;
+  document.body.classList.toggle("selecting", chosen.jobs > 0);
+}
+
+document.getElementById("select-all").onclick = (event) => {
+  if (event.currentTarget.checked) {
+    allMatching = false;
+    for (const id of loadedSelectable()) selected.add(id);
+    showSelection();
+  } else clearSelection();
+};
+document.getElementById("clear-selection").onclick = clearSelection;
+document.getElementById("delete-selected").onclick = (event) => {
+  const chosen = selection();
+  if (chosen.jobs === 0) return;
+  deleteJobs(event.currentTarget, allMatching ? { filter: jobFilter() } : { jobIds: chosen.ids }, deletionQuestion(chosen));
+};
 
 const tabs = ["providers", "models", "history"];
 /** Shows the tab the URL fragment names, or the first. */

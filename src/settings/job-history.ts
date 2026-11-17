@@ -9,8 +9,10 @@ import {
   ratingOf,
   ratingReasonMaxLength,
   readJob,
+  matchesFilter,
   readRatedJobs,
   verdicts,
+  type JobFilter,
   type PickRecord,
   type RatingRecord,
 } from "../history.ts";
@@ -81,14 +83,13 @@ export const jobHistoryPageSize = 20;
 
 const outcomes = ["completed", "failed", "running"] as const;
 
-/** Which Jobs the Job history tab shows: those matching every filter given. */
+/** Which Jobs the Job history tab shows, or deletes: those matching every filter given. */
 export const jobFilterInput = z.object({
   /** The Alias the Job recorded, whether or not a Model has it now. */
   model: z.string().min(1).optional(),
   outcome: z.enum(outcomes, { message: "Choose completed, failed or running." }).optional(),
   modality: z.enum(modalities, { message: "Choose image or video." }).optional(),
-});
-export type JobFilter = z.infer<typeof jobFilterInput>;
+}) satisfies z.ZodType<JobFilter>;
 
 export const jobHistoryQuery = jobFilterInput.extend({
   /** How many entries to skip: 0, or the `nextOffset` of the page before. */
@@ -103,6 +104,8 @@ export interface JobHistoryPage {
   total: number;
   /** How many Jobs those entries hold. */
   totalJobs: number;
+  /** What deleting every matching Job would remove: the Jobs not running, their Results, and the Picks of them. */
+  deletable: { jobs: number; results: number; picks: number };
   /** Where the next page starts; null on the last. */
   nextOffset: number | null;
   /** Every Alias a Job in the history recorded, for the Model filter; renamed and removed Models' included. */
@@ -113,24 +116,20 @@ export interface JobHistoryPage {
 export async function jobHistoryPage(dirs: Dirs, query: z.infer<typeof jobHistoryQuery>): Promise<JobHistoryPage> {
   const { offset, ...filter } = query;
   const listed = await listJobHistory(dirs);
-  const entries = entriesOf(listed.filter((job) => matches(job, filter)));
+  const matching = listed.filter((job) => matchesFilter(job, filter));
+  const entries = entriesOf(matching);
   const end = offset + jobHistoryPageSize;
+  const doomed = matching.filter((job) => job.outcome !== "running");
+  const doomedIds = new Set(doomed.map((job) => job.id));
+  const picks = new Set(doomed.flatMap((job) => (job.comparison?.pick && doomedIds.has(job.comparison.pick.jobId) ? [job.comparison.id] : [])));
   return {
     jobs: entries.slice(offset, end).flat(),
     total: entries.length,
-    totalJobs: entries.reduce((count, entry) => count + entry.length, 0),
+    totalJobs: matching.length,
+    deletable: { jobs: doomed.length, results: doomed.reduce((count, job) => count + job.files.length, 0), picks: picks.size },
     nextOffset: end < entries.length ? end : null,
     aliases: [...new Set(listed.map((job) => job.model))].sort(),
   };
-}
-
-/** Whether a Job matches every filter given. */
-function matches(job: ListedJob, filter: JobFilter): boolean {
-  return (
-    (filter.model === undefined || job.model === filter.model) &&
-    (filter.outcome === undefined || job.outcome === filter.outcome) &&
-    (filter.modality === undefined || job.modality === filter.modality)
-  );
 }
 
 /** The listed Jobs as entries: one Job, or a Comparison's Jobs, which {@link listJobHistory} keeps next to each other. */

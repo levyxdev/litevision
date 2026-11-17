@@ -411,6 +411,23 @@ function isPickRecord(value: unknown): value is PickRecord {
   );
 }
 
+/** Which Jobs to show or delete in the settings page: those matching every filter given. */
+export interface JobFilter {
+  /** The Alias the Job recorded, whether or not a Model has it now. */
+  model?: string;
+  outcome?: JobRecord["outcome"];
+  modality?: Modality;
+}
+
+/** Whether a Job matches every filter given; a Job recorded before videos existed is an image Job. */
+export function matchesFilter(job: Pick<JobRecord, "model" | "outcome" | "modality">, filter: JobFilter): boolean {
+  return (
+    (filter.model === undefined || job.model === filter.model) &&
+    (filter.outcome === undefined || job.outcome === filter.outcome) &&
+    (filter.modality === undefined || (job.modality ?? "image") === filter.modality)
+  );
+}
+
 /** Which upstream model a Job ran on; an Alias may be renamed, so it is not part of this. */
 export interface ModelKey {
   provider: string;

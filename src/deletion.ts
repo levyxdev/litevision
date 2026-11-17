@@ -1,7 +1,7 @@
 import { readFile, rmdir, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { Dirs } from "./dirs.ts";
-import { removeJobs, type JobRecord } from "./history.ts";
+import { matchesFilter, removeJobs, type JobFilter, type JobRecord } from "./history.ts";
 import { fileTypeOf } from "./media.ts";
 import { contentHash } from "./source-jobs.ts";
 
@@ -11,8 +11,8 @@ import { contentHash } from "./source-jobs.ts";
  * Both the `delete_jobs` tool and the settings page delete through here.
  */
 
-/** Which Jobs to delete: exactly one of these. */
-export type JobSelection = { jobIds: string[] } | { comparisonIds: string[] } | { all: true };
+/** Which Jobs to delete: exactly one of these. A filter takes the Jobs matching it when the deletion runs. */
+export type JobSelection = { jobIds: string[] } | { comparisonIds: string[] } | { filter: JobFilter } | { all: true };
 
 /** Why a Result file was left where it was. */
 export type SkipReason = "content-changed" | "already-gone";
@@ -86,6 +86,7 @@ export async function deleteJobs(dirs: Dirs, selection: JobSelection): Promise<D
 /** The Jobs a selection names, and the ids it names that the Job history does not have. */
 function selected(jobs: JobRecord[], selection: JobSelection): { jobs: JobRecord[]; notFound: string[] } {
   if ("all" in selection) return { jobs, notFound: [] };
+  if ("filter" in selection) return { jobs: jobs.filter((job) => matchesFilter(job, selection.filter)), notFound: [] };
   if ("jobIds" in selection) {
     const ids = new Set(selection.jobIds);
     const known = new Set(jobs.map((job) => job.id));

@@ -105,3 +105,40 @@ describe("POST /api/jobs/delete with Job ids", () => {
     expect((await readHistory(h)).map((job) => job.id)).toContain("fox");
   });
 });
+
+describe("POST /api/jobs/delete with filters", () => {
+  test("deletes exactly the Jobs matching them now, leaving running ones and reporting them", async () => {
+    const { h } = await start();
+    const other = jobRecord("dalle", 5, { model: "dalle-old", modelId: "dall-e-3" });
+    await writeFile(join(h.dirs.home, "jobs.jsonl"), JSON.stringify(other) + "\n", { flag: "a" });
+
+    const report = (await h.send("POST", "/api/jobs/delete", { body: { filter: { model: "gpt-image" } } })).json();
+
+    expect(report.deletedJobs.sort()).toEqual(["fox", "left", "right"]);
+    expect(report.runningJobs).toEqual(["cat"]);
+    expect((await readHistory(h)).map((job) => job.id)).toEqual(["cat", "dalle"]);
+  });
+
+  test("combines filters, and with none deletes every Job not running", async () => {
+    const { h } = await start();
+    expect((await h.send("POST", "/api/jobs/delete", { body: { filter: { outcome: "completed", modality: "video" } } })).json().deletedJobs).toEqual([]);
+    expect((await h.send("POST", "/api/jobs/delete", { body: { filter: {} } })).json().deletedJobs.sort()).toEqual(["fox", "left", "right"]);
+    expect((await readHistory(h)).map((job) => job.id)).toEqual(["cat"]);
+  });
+
+  test("refuses Job ids and filters together, and a filter value it does not know", async () => {
+    const { h } = await start();
+    expect((await h.send("POST", "/api/jobs/delete", { body: { jobIds: ["fox"], filter: {} } })).status).toBe(400);
+    expect((await h.send("POST", "/api/jobs/delete", { body: { filter: { outcome: "great" } } })).status).toBe(400);
+    expect((await readHistory(h)).map((job) => job.id)).toEqual(["fox", "left", "right", "cat"]);
+  });
+
+  test("the Job history page says how many Jobs, Results and Picks deleting everything matching would remove", async () => {
+    const { h } = await start();
+    expect((await h.send("GET", "/api/jobs")).json().deletable).toEqual({ jobs: 3, results: 1, picks: 1 });
+    expect((await h.send("GET", "/api/jobs?outcome=running")).json().deletable).toEqual({ jobs: 0, results: 0, picks: 0 });
+    // With fox gone, the Comparison's Jobs and its Pick are left.
+    await h.send("POST", "/api/jobs/delete", { body: { jobIds: ["fox"] } });
+    expect((await h.send("GET", "/api/jobs")).json().deletable).toEqual({ jobs: 2, results: 0, picks: 1 });
+  });
+});

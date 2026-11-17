@@ -10,7 +10,7 @@ import { localProviderId } from "../local/provider.ts";
 import { refreshModelInfo, refreshProviderModelInfo, type ModelInfoDeps } from "../model-info.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { fetchModelIds, testConnection } from "./connection.ts";
-import { jobHistoryPage, jobHistoryQuery, jobImage, pickFromPage, pickInput, rateJobFromPage, rateJobInput } from "./job-history.ts";
+import { jobFilterInput, jobHistoryPage, jobHistoryQuery, jobImage, pickFromPage, pickInput, rateJobFromPage, rateJobInput } from "./job-history.ts";
 import {
   addModel,
   addModelInput,
@@ -195,7 +195,10 @@ const routes: Route[] = [
     // Deletes for good, as delete_jobs does; the page asks the User first.
     method: "POST",
     path: "/api/jobs/delete",
-    handler: async ({ dirs, body }) => ({ body: await deleteJobs(dirs, { jobIds: parse(deleteJobsInput, body).jobIds }) }),
+    handler: async ({ dirs, body }) => {
+      const { jobIds, filter } = parse(deleteJobsInput, body);
+      return { body: await deleteJobs(dirs, jobIds !== undefined ? { jobIds } : { filter: filter! }) };
+    },
   },
   {
     method: "POST",
@@ -224,9 +227,13 @@ function infoDeps(dirs: Dirs, http: HttpTransport, now: () => Date): ModelInfoDe
   return { dirs, http, now };
 }
 
-const deleteJobsInput = z.object({
-  jobIds: z.array(z.string().min(1), { message: "Choose the Jobs to delete." }).min(1, "Choose the Jobs to delete."),
-});
+/** The Jobs to delete: by id, or every Job matching filters at the moment of deleting. */
+const deleteJobsInput = z
+  .object({
+    jobIds: z.array(z.string().min(1), { message: "Choose the Jobs to delete." }).min(1, "Choose the Jobs to delete.").optional(),
+    filter: jobFilterInput.optional(),
+  })
+  .refine((input) => (input.jobIds === undefined) !== (input.filter === undefined), "Choose the Jobs to delete, or filters, but not both.");
 
 const protocolInput = z.object({ protocol: z.string().trim().min(1, "Choose a Protocol.") });
 
