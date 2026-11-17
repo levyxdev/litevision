@@ -3,6 +3,7 @@ import { startSettingsServer, type SettingsServer, type SettingsServerOptions } 
 
 /** The settings page's tabs, each opened by its URL fragment. */
 export const settingsTabs = ["providers", "models", "history"] as const;
+/** One of the settings page's tabs. */
 export type SettingsTab = (typeof settingsTabs)[number];
 
 export interface SettingsOpener {

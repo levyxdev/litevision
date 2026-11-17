@@ -234,7 +234,7 @@ export function renderPage(nonce: string): string {
       <select id="filter-outcome" aria-label="Status">
         <option value="">Any status</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="running">Running</option>
       </select>
-      <select id="filter-modality" aria-label="Media type"><option value="">Images and videos</option><option value="image">Images</option><option value="video">Videos</option></select>
+      <select id="filter-modality" aria-label="Images or videos"><option value="">Images and videos</option><option value="image">Images</option><option value="video">Videos</option></select>
       <span id="job-count" class="count" aria-live="polite"></span>
     </div>
     <div id="select-banner" class="banner" hidden></div>
@@ -882,9 +882,7 @@ function deletionOf(jobs) {
 
 /** "Delete 2 Jobs, 3 Results and 1 Pick for good?" */
 function deletionQuestion({ jobs, results, picks }) {
-  const parts = [count(jobs, "Job"), count(results, "Result")];
-  if (picks > 0) parts.push(count(picks, "Pick"));
-  return "Delete " + parts.slice(0, -1).join(", ") + " and " + parts.at(-1) + " for good?\\n\\nThis cannot be undone. Result files you changed since they were saved are left, and your reference images are never deleted.";
+  return "Delete " + count(jobs, "Job") + ", " + count(results, "Result") + " and " + count(picks, "Pick") + " for good?\\n\\nThis cannot be undone. Result files you changed since they were saved are left, and your reference images are never deleted.";
 }
 
 /** A button that deletes these Jobs once the User confirms; disabled when none of them can be deleted. */
@@ -925,7 +923,7 @@ function showReport(report) {
   for (const pick of report.picksRemoved) lines.push("A Comparison lost its Pick with the Job it picked.");
   for (const used of report.referencesOfOtherJobs) lines.push(used.file + " was a reference image of " + count(used.jobIds.length, "remaining Job") + ".");
   box.replaceChildren(
-    el("div", { className: "report-head" }, el("span", { textContent: "Deleted " + count(report.deletedJobs.length, "Job") + " and " + count(report.deletedFiles.length, "file") + "." }), close),
+    el("div", { className: "report-head" }, el("span", { textContent: "Deleted " + count(report.deletedJobs.length, "Job") + " and " + count(report.deletedFiles.length, "Result") + "." }), close),
     ...lines.map((line) => el("p", { textContent: line })));
   box.hidden = false;
 }
@@ -972,8 +970,10 @@ async function loadJobs(keep) {
 async function showMore(button) {
   await act(button, async () => {
     const page = await api("GET", jobsPath(nextOffset));
-    for (const job of page.jobs) loadedJobs.set(job.id, job);
-    document.getElementById("job-list").append(...jobEntries(page.jobs));
+    // A Job another session recorded meanwhile shifts the pages, bringing back one already shown.
+    const fresh = page.jobs.filter((job) => !loadedJobs.has(job.id));
+    for (const job of fresh) loadedJobs.set(job.id, job);
+    document.getElementById("job-list").append(...jobEntries(fresh));
     showLoaded(page.nextOffset === null ? page.total : page.nextOffset, page);
   });
 }

@@ -15,7 +15,8 @@ import { contentHash } from "./source-jobs.ts";
 export type JobSelection = { jobIds: string[] } | { comparisonIds: string[] } | { filter: JobFilter } | { all: true };
 
 /** Why a Result file was left where it was. */
-export type SkipReason = "content-changed" | "already-gone";
+export const skipReasonNames = ["content-changed", "already-gone"] as const;
+export type SkipReason = (typeof skipReasonNames)[number];
 
 /** What a deletion did. */
 export interface DeletionReport {
@@ -58,13 +59,14 @@ export async function deleteJobs(dirs: Dirs, selection: JobSelection): Promise<D
   }
 
   const deleted = new Set(deletedFiles);
-  const users = new Map<string, string[]>();
+  /** Each deleted Result file, with the remaining Jobs whose Source Job it was. */
+  const usedAsReference = new Map<string, string[]>();
   for (const job of removed.remaining) {
     for (const source of job.sourceJobs ?? []) {
       if (!deleted.has(source.file)) continue;
-      const ids = users.get(source.file) ?? [];
+      const ids = usedAsReference.get(source.file) ?? [];
       if (!ids.includes(job.id)) ids.push(job.id);
-      users.set(source.file, ids);
+      usedAsReference.set(source.file, ids);
     }
   }
 
@@ -79,7 +81,7 @@ export async function deleteJobs(dirs: Dirs, selection: JobSelection): Promise<D
       jobId: pick.jobId,
       ...(pick.result === undefined ? {} : { result: pick.result }),
     })),
-    referencesOfOtherJobs: [...users].map(([file, jobIds]) => ({ file, jobIds })),
+    referencesOfOtherJobs: [...usedAsReference].map(([file, jobIds]) => ({ file, jobIds })),
   };
 }
 

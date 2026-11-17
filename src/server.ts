@@ -14,7 +14,7 @@ import {
   type Model,
   type ResolvedModel,
 } from "./config.ts";
-import { deleteJobs, type DeletionReport, type SkipReason } from "./deletion.ts";
+import { deleteJobs, skipReasonNames, type DeletionReport, type SkipReason } from "./deletion.ts";
 import type { Dirs } from "./dirs.ts";
 import { fileStem } from "./file-names.ts";
 import {
@@ -383,7 +383,7 @@ const skipReasons: Record<SkipReason, string> = {
 /** A deletion report in words, one fact per line. */
 function deletionText(report: DeletionReport): string {
   const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-  const lines = [`Deleted ${count(report.deletedJobs.length, "Job")} and ${count(report.deletedFiles.length, "file")}.`];
+  const lines = [`Deleted ${count(report.deletedJobs.length, "Job")} and ${count(report.deletedFiles.length, "Result")}.`];
   for (const { file, reason } of report.skippedFiles) lines.push(`Left ${file}: ${skipReasons[reason]}.`);
   if (report.runningJobs.length > 0) lines.push(`Still running, so not deleted: ${report.runningJobs.join(", ")}. Cancel them first.`);
   if (report.notFound.length > 0) lines.push(`Not in the Job history: ${report.notFound.join(", ")}.`);
@@ -1151,13 +1151,13 @@ export function createServer(deps: ServerDeps): McpServer {
       inputSchema: {
         job_ids: z.array(z.string().min(1)).min(1).optional().describe("The Jobs to delete."),
         comparison_ids: z.array(z.string().min(1)).min(1).optional().describe("Comparisons to delete with all their Jobs."),
-        all: z.literal(true).optional().describe("Delete every Job in the history."),
+        all: z.literal(true).optional().describe("Delete every Job in the Job history."),
       },
       outputSchema: {
         deleted_jobs: z.array(z.string()),
         deleted_files: z.array(z.string()),
         skipped_files: z
-          .array(z.object({ job_id: z.string(), file: z.string(), reason: z.enum(["content-changed", "already-gone"]) }))
+          .array(z.object({ job_id: z.string(), file: z.string(), reason: z.enum(skipReasonNames) }))
           .describe("Files left where they were: `content-changed` when the file is no longer what the Job saved, `already-gone` when nothing was there."),
         running_jobs: z.array(z.string()).describe("Selected Jobs still running, left alone."),
         not_found: z.array(z.string()).describe("Job or Comparison ids the Job history does not have."),

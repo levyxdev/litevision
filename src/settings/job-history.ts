@@ -91,6 +91,7 @@ export const jobFilterInput = z.object({
   modality: z.enum(modalities, { message: "Choose image or video." }).optional(),
 }) satisfies z.ZodType<JobFilter>;
 
+/** What the Job history tab asks for: its filters, and where the page it wants starts. */
 export const jobHistoryQuery = jobFilterInput.extend({
   /** How many entries to skip: 0, or the `nextOffset` of the page before. */
   offset: z.coerce.number({ message: "Give the offset as a whole number." }).int("Give the offset as a whole number.").nonnegative("Give the offset as a whole number.").default(0),
