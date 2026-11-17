@@ -1,6 +1,8 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileAtomic } from "./config-store.ts";
 import type { Dirs } from "./dirs.ts";
+import { withFileLock } from "./file-lock.ts";
 import type { MediaFacts } from "./media.ts";
 import type { Requested } from "./protocols/parameter-guide.ts";
 import type { Modality, ProviderErrorKind, ResumeHandle } from "./protocols/protocol.ts";
@@ -10,7 +12,8 @@ import type { Modality, ProviderErrorKind, ResumeHandle } from "./protocols/prot
  * (running when it starts, running again once an asynchronous Provider accepts it, then completed or failed); the
  * latest one for an id is what it is now. Ratings are lines of their own: the latest for a Job, or for one result of it,
  * is its Rating now. So are Picks: the latest for a Comparison is its Pick now (ADR 0009).
- * Every read of the history goes through this module.
+ * Every read of the history goes through this module. Deleting Jobs rewrites it; every append and every rewrite holds
+ * one machine-wide lock, so a record another litevision process appends meanwhile is never lost.
  */
 
 /** The `generate_image` or `generate_video` parameters of a Job, as recorded in the Job history. */
@@ -165,11 +168,50 @@ export class PickError extends Error {
 }
 
 const historyPath = (dirs: Dirs) => join(dirs.home, "jobs.jsonl");
+const lockPath = (dirs: Dirs) => join(dirs.home, "jobs.lock");
 
 export async function appendHistory(dirs: Dirs, record: JobRecord | RatingRecord | PickRecord): Promise<void> {
   // The folder also holds credentials.json.
   await mkdir(dirs.home, { recursive: true, mode: 0o700 });
-  await appendFile(historyPath(dirs), `${JSON.stringify(record)}\n`);
+  await withFileLock(lockPath(dirs), () => appendFile(historyPath(dirs), `${JSON.stringify(record)}\n`));
+}
+
+/** What {@link removeJobs} took out of the Job history, and what it left. */
+export interface Removed {
+  /** The removed Jobs as their latest records said they were. */
+  jobs: JobRecord[];
+  /** The current Picks that were of a removed Job; their Comparisons have no Pick now. */
+  picks: PickRecord[];
+  /** Every Job left, as {@link readJobs} gives them. */
+  remaining: JobRecord[];
+}
+
+/**
+ * Removes Jobs from the Job history for good: every record of them, their Ratings and any Pick of them. `choose` is
+ * given the Jobs as they are now and returns the ids to remove; it runs while the history is locked, so what it chooses
+ * from cannot change before the history is rewritten. A Comparison whose current Pick is of a removed Job loses that
+ * Pick, and no earlier Pick takes its place. Lines that cannot be read are kept as they are.
+ */
+export async function removeJobs(dirs: Dirs, choose: (jobs: JobRecord[]) => Set<string>): Promise<Removed> {
+  return withFileLock(lockPath(dirs), async () => {
+    const text = await readHistoryText(dirs);
+    const { jobs, picks } = parseRecords(text);
+    const ids = choose(jobs);
+    if (ids.size === 0) return { jobs: [], picks: [], remaining: jobs };
+    const lostPicks = [...picks.values()].filter((pick) => ids.has(pick.jobId));
+    const unpicked = new Set(lostPicks.map((pick) => pick.comparison));
+    const kept = text.split("\n").filter((line) => {
+      if (line.trim() === "") return false;
+      const record = parseLine(line);
+      if (isJobRecord(record)) return !ids.has(record.id);
+      if (isRatingRecord(record)) return !ids.has(record.jobId);
+      if (isPickRecord(record)) return !ids.has(record.jobId) && !unpicked.has(record.comparison);
+      return true;
+    });
+    const { mode } = await stat(historyPath(dirs));
+    await writeFileAtomic(historyPath(dirs), kept.map((line) => `${line}\n`).join(""), mode & 0o777);
+    return { jobs: jobs.filter((job) => ids.has(job.id)), picks: lostPicks, remaining: jobs.filter((job) => !ids.has(job.id)) };
+  });
 }
 
 /** Every Job as its latest record says it is now, oldest first. Lines that cannot be read are skipped. */
@@ -282,27 +324,42 @@ function whyNotChosen(
  * One pass over `jobs.jsonl`: the latest record of each Job; per Job its latest Rating of the whole Job and of each
  * result, keyed by result number (0 for the whole Job) in the order they were recorded; and each Comparison's latest Pick.
  */
-async function readRecords(
-  dirs: Dirs,
-): Promise<{ jobs: JobRecord[]; ratings: Map<string, Map<number, RatingRecord>>; picks: Map<string, PickRecord> }> {
-  let text: string;
+async function readRecords(dirs: Dirs): Promise<HistoryRecords> {
+  return parseRecords(await readHistoryText(dirs));
+}
+
+/** The whole of `jobs.jsonl`; empty before the first Job. */
+async function readHistoryText(dirs: Dirs): Promise<string> {
   try {
-    text = await readFile(historyPath(dirs), "utf8");
+    return await readFile(historyPath(dirs), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { jobs: [], ratings: new Map(), picks: new Map() };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
     throw error;
   }
+}
+
+interface HistoryRecords {
+  jobs: JobRecord[];
+  ratings: Map<string, Map<number, RatingRecord>>;
+  picks: Map<string, PickRecord>;
+}
+
+/** One line of `jobs.jsonl` parsed; undefined when it is not JSON. */
+function parseLine(line: string): unknown {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseRecords(text: string): HistoryRecords {
   const jobs = new Map<string, JobRecord>();
   const ratings = new Map<string, Map<number, RatingRecord>>();
   const picks = new Map<string, PickRecord>();
   for (const line of text.split("\n")) {
     if (line.trim() === "") continue;
-    let record: unknown;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    const record = parseLine(line);
     if (isRatingRecord(record)) {
       const ofJob = ratings.get(record.jobId) ?? new Map<number, RatingRecord>();
       ratings.set(record.jobId, ofJob);

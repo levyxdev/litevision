@@ -14,8 +14,8 @@ import {
   type Model,
   type ResolvedModel,
 } from "./config.ts";
+import { deleteJobs, type DeletionReport, type SkipReason } from "./deletion.ts";
 import type { Dirs } from "./dirs.ts";
-import { readEvidence, type Evidence } from "./evidence.ts";
 import { fileStem } from "./file-names.ts";
 import {
   PickError,
@@ -29,7 +29,6 @@ import {
   recentPicks,
   recentRatings,
   verdicts,
-  type ModelKey,
   type PickRecord,
   type PickWithJob,
   type RatedJob,
@@ -43,7 +42,7 @@ import { RuntimeManager, type Runtime } from "./local/runtime.ts";
 import type { MediaFacts } from "./media.ts";
 import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
-import { byStatus, modelOptionStatuses, optionStatusNames, type OptionStatus, type OptionStatusName } from "./option-status.ts";
+import { byStatus, optionStatusNames, optionStatusReader, type OptionStatus, type OptionStatusName, type StatusedModel } from "./option-status.ts";
 import { showSourceJobs, type ShownSourceJob } from "./source-jobs.ts";
 import { mergeOptions } from "./standing-options.ts";
 import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
@@ -89,7 +88,8 @@ export const instructions = `litevision generates images and videos through Mode
 - \`generate_comparison\` costs as much as all its Jobs. Start a Comparison only when the User asks for one or agrees to it.
 - When the User says what they think of a result, call \`rate_job\` with their verdict and a one-line reason in their words; when it is about one result of a Job with several, pass \`result\`. Never invent a verdict, and never rate a result yourself.
 - When the User chooses among a Comparison's results, call \`pick_result\`, only when the User actually chooses. A Pick is not a Rating: if they also give a verdict, call \`rate_job\` too.
-- Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.`;
+- Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.
+- Call \`delete_jobs\` only when the User asks to delete Jobs or their results: it deletes them for good, with their files. Tell the User what its report says was skipped and why.`;
 
 /** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
 const recentRatingsShown = 5;
@@ -104,6 +104,7 @@ const optionStatusSchema = z.object({
     .record(z.string(), z.unknown())
     .describe("The `provider_options` keys and the values sent; several keys when a check reads them together, such as width and height."),
   job_id: z.string().describe("The Job the latest evidence comes from."),
+  job_deleted: z.literal(true).optional().describe("True when the User has deleted that Job since; the evidence still stands."),
   date: z.string().describe("When that Job started. Read the docs first when it is old: Providers change their rules."),
   reason: z.string().optional().describe("Ignored: how the result differed from the request. Rejected: what the Provider said."),
 });
@@ -117,6 +118,7 @@ const sourceJobsSchema = z
       model: z.string().optional().describe("Alias of the Model that ran the Source Job."),
       file: z.string().describe("Where the Source Job saved that result."),
       deleted: z.boolean().describe("True when the User has deleted or moved that file since. Not an error: the Source Job still stands."),
+      job_deleted: z.literal(true).optional().describe("True when the User has deleted the Source Job itself from the Job history."),
       reference: z.string().describe("This Job's reference image or video frame that had the result's content."),
     }),
   )
@@ -225,7 +227,7 @@ async function listedModel(
   isDefault: boolean,
   detailed: boolean,
   ratedJobs: RatedJob[],
-  evidence: Evidence[],
+  statusesOf: (model: StatusedModel) => OptionStatus[],
 ) {
   const base = {
     alias: model.alias,
@@ -270,7 +272,7 @@ async function listedModel(
     };
   }
 
-  const statuses = modelOptionStatuses(evidence, model);
+  const statuses = statusesOf(model);
   const output: z.infer<typeof listedModelSchema> = {
     ...base,
     docs_url: described.docsUrl,
@@ -341,6 +343,7 @@ function sourceJobsField(sources: ShownSourceJob[]) {
       ...(source.model === undefined ? {} : { model: source.model }),
       file: source.file,
       deleted: source.deleted,
+      ...(source.jobDeleted ? { job_deleted: true as const } : {}),
       reference: source.reference,
     })),
   };
@@ -350,9 +353,43 @@ function sourceJobsField(sources: ShownSourceJob[]) {
 function sourceJobsText(sources: ShownSourceJob[]): string {
   const described = sources.map(
     (source) =>
-      `Job ${source.jobId}, result ${source.result}${source.model === undefined ? "" : ` on ${source.model}`} (${source.file}${source.deleted ? ", deleted" : ""})`,
+      `Job ${source.jobId}, result ${source.result}${source.model === undefined ? "" : ` on ${source.model}`} (${source.file}${source.deleted ? ", deleted" : ""}${source.jobDeleted ? ", Job deleted" : ""})`,
   );
   return described.length === 0 ? "" : `Source Jobs: ${described.join("; ")}`;
+}
+
+/** A deletion report as `delete_jobs` gives it. */
+function deletionOutput(report: DeletionReport) {
+  return {
+    deleted_jobs: report.deletedJobs,
+    deleted_files: report.deletedFiles,
+    skipped_files: report.skippedFiles.map(({ jobId, file, reason }) => ({ job_id: jobId, file, reason })),
+    running_jobs: report.runningJobs,
+    not_found: report.notFound,
+    picks_removed: report.picksRemoved.map(({ comparison, jobId, result }) => ({
+      comparison_id: comparison,
+      job_id: jobId,
+      ...(result === undefined ? {} : { result }),
+    })),
+    references_of_other_jobs: report.referencesOfOtherJobs.map(({ file, jobIds }) => ({ file, job_ids: jobIds })),
+  };
+}
+
+const skipReasons: Record<SkipReason, string> = {
+  "content-changed": "it is no longer what the Job saved",
+  "already-gone": "it was already gone",
+};
+
+/** A deletion report in words, one fact per line. */
+function deletionText(report: DeletionReport): string {
+  const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const lines = [`Deleted ${count(report.deletedJobs.length, "Job")} and ${count(report.deletedFiles.length, "file")}.`];
+  for (const { file, reason } of report.skippedFiles) lines.push(`Left ${file}: ${skipReasons[reason]}.`);
+  if (report.runningJobs.length > 0) lines.push(`Still running, so not deleted: ${report.runningJobs.join(", ")}. Cancel them first.`);
+  if (report.notFound.length > 0) lines.push(`Not in the Job history: ${report.notFound.join(", ")}.`);
+  for (const pick of report.picksRemoved) lines.push(`Comparison ${pick.comparison} lost its Pick, Job ${pick.jobId}.`);
+  for (const { file, jobIds } of report.referencesOfOtherJobs) lines.push(`${file} was a reference of Job ${jobIds.join(", ")}, which remain.`);
+  return lines.join("\n");
 }
 
 /** A Rating as `rate_job` and `list_models` report it. */
@@ -437,6 +474,7 @@ function optionStatusesOutput(statuses: OptionStatus[]) {
       grouped[name].map((status) => ({
         options: status.options,
         job_id: status.jobId,
+        ...(status.jobDeleted ? { job_deleted: true as const } : {}),
         date: status.date,
         ...(status.reason === undefined ? {} : { reason: status.reason }),
       })),
@@ -451,7 +489,7 @@ function optionStatusesText(statuses: OptionStatus[]): string {
   const lines = optionStatusNames.flatMap((name) =>
     grouped[name].map(
       (status) =>
-        `- ${statusLabels[name]}${statusGlosses[name] ?? ""}: ${JSON.stringify(status.options)}, Job ${status.jobId} on ${status.date.slice(0, 10)}${status.reason === undefined ? "" : `: ${status.reason}`}`,
+        `- ${statusLabels[name]}${statusGlosses[name] ?? ""}: ${JSON.stringify(status.options)}, Job ${status.jobId}${status.jobDeleted ? " (deleted)" : ""} on ${status.date.slice(0, 10)}${status.reason === undefined ? "" : `: ${status.reason}`}`,
     ),
   );
   return ["Option Statuses, from the latest evidence for each value:", ...lines].join("\n");
@@ -468,8 +506,8 @@ function optionStatusesBrief(statuses: OptionStatus[]): string {
 }
 
 /** What the evidence of ended Jobs says about a Model's `provider_options` (ADR 0011, ADR 0015). */
-async function modelStatuses(deps: Pick<ModelInfoDeps, "dirs">, model: ModelKey & { modality?: Modality }): Promise<OptionStatus[]> {
-  return modelOptionStatuses(await readEvidence(deps.dirs), model);
+async function modelStatuses(deps: Pick<ModelInfoDeps, "dirs">, model: StatusedModel): Promise<OptionStatus[]> {
+  return (await optionStatusReader(deps.dirs))(model);
 }
 
 /**
@@ -1106,6 +1144,43 @@ export function createServer(deps: ServerDeps): McpServer {
   );
 
   server.registerTool(
+    "delete_jobs",
+    {
+      description:
+        "Delete Jobs from the User's Job history for good: their records, Ratings and Picks, and the image and video files they saved. Reference images are never deleted, nor are folders named with `output_path`. Call it only when the User asks to delete Jobs or their results; there is no undo. Give exactly one of `job_ids`, `comparison_ids` or `all`. Running Jobs are left alone: cancel them first. What litevision learnt about each Model's `provider_options` is kept.",
+      inputSchema: {
+        job_ids: z.array(z.string().min(1)).min(1).optional().describe("The Jobs to delete."),
+        comparison_ids: z.array(z.string().min(1)).min(1).optional().describe("Comparisons to delete with all their Jobs."),
+        all: z.literal(true).optional().describe("Delete every Job in the history."),
+      },
+      outputSchema: {
+        deleted_jobs: z.array(z.string()),
+        deleted_files: z.array(z.string()),
+        skipped_files: z
+          .array(z.object({ job_id: z.string(), file: z.string(), reason: z.enum(["content-changed", "already-gone"]) }))
+          .describe("Files left where they were: `content-changed` when the file is no longer what the Job saved, `already-gone` when nothing was there."),
+        running_jobs: z.array(z.string()).describe("Selected Jobs still running, left alone."),
+        not_found: z.array(z.string()).describe("Job or Comparison ids the Job history does not have."),
+        picks_removed: z.array(z.object({ comparison_id: z.string(), job_id: z.string(), result: z.number().optional() })),
+        references_of_other_jobs: z
+          .array(z.object({ file: z.string(), job_ids: z.array(z.string()) }))
+          .describe("Deleted files that remaining Jobs had used as a reference image or video frame."),
+      },
+    },
+    async ({ job_ids, comparison_ids, all }) => {
+      const given = [job_ids, comparison_ids, all].filter((selector) => selector !== undefined).length;
+      if (given !== 1) {
+        return toolError(`Give exactly one of \`job_ids\`, \`comparison_ids\` or \`all: true\`; ${given === 0 ? "none was" : `${given} were`} given. Nothing was deleted.`);
+      }
+      const report = await deleteJobs(
+        deps.dirs,
+        job_ids !== undefined ? { jobIds: job_ids } : comparison_ids !== undefined ? { comparisonIds: comparison_ids } : { all: true },
+      );
+      return { content: [{ type: "text", text: deletionText(report) }], structuredContent: deletionOutput(report) };
+    },
+  );
+
+  server.registerTool(
     "rate_job",
     {
       description:
@@ -1211,7 +1286,7 @@ export function createServer(deps: ServerDeps): McpServer {
           }
         }
         const ratedJobs = await readRatedJobs(deps.dirs);
-        const evidence = await readEvidence(deps.dirs);
+        const statusesOf = await optionStatusReader(deps.dirs);
         const entries = await Promise.all(
           models.map((model) =>
             listedModel(
@@ -1221,7 +1296,7 @@ export function createServer(deps: ServerDeps): McpServer {
               model.alias === (model.modality === "video" ? defaultVideoModel : defaultModel),
               alias !== undefined,
               ratedJobs,
-              evidence,
+              statusesOf,
             ),
           ),
         );

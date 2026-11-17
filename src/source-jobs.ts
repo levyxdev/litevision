@@ -45,14 +45,24 @@ export interface ShownSourceJob extends SourceJob {
   model?: string;
   /** True when the Source Job's file is no longer where it was saved. */
   deleted: boolean;
+  /** True when the User has deleted the Source Job itself from the Job history; the Job's record of it is unchanged. */
+  jobDeleted?: true;
 }
 
-/** A Job's Source Jobs, with each one's Model and whether its file has been deleted since. */
+/**
+ * A Job's Source Jobs, with each one's Model and whether its file, or the Source Job itself, has been deleted since.
+ * `jobsById` is the whole Job history: a Source Job missing from it was deleted.
+ */
 export async function showSourceJobs(job: JobRecord, jobsById: Map<string, JobRecord>): Promise<ShownSourceJob[]> {
   return Promise.all(
     (job.sourceJobs ?? []).map(async (source) => {
-      const model = jobsById.get(source.jobId)?.model;
-      return { ...source, ...(model === undefined ? {} : { model }), deleted: await isGone(source.file) };
+      const known = jobsById.get(source.jobId);
+      return {
+        ...source,
+        ...(known === undefined ? {} : { model: known.model }),
+        deleted: await isGone(source.file),
+        ...(known === undefined ? { jobDeleted: true as const } : {}),
+      };
     }),
   );
 }

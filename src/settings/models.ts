@@ -2,8 +2,7 @@ import { z } from "zod";
 import { defaultKey, modelNotesMaxLength, modelSchema, type NotesHistory } from "../config.ts";
 import { isPlainObject, readConfigObject, updateConfig, type ConfigObject } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
-import { readEvidence } from "../evidence.ts";
-import { byStatus, modelOptionStatuses, type OptionStatus, type OptionStatusName } from "../option-status.ts";
+import { byStatus, optionStatusReader, type OptionStatus, type OptionStatusName } from "../option-status.ts";
 import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
 import { standingOptionsProblem } from "../standing-options.ts";
@@ -66,13 +65,13 @@ export async function listModels(
 
 /**
  * Each Model's Option Statuses (ADR 0011), by Alias, grouped by status. Read-only: they are facts litevision learns
- * from the Job history, and a value the User always wants belongs in Standing Options.
+ * from the evidence of ended Jobs (ADR 0015), and a value the User always wants belongs in Standing Options.
  */
 export async function listOptionStatuses(dirs: Dirs): Promise<{ models: Record<string, Record<OptionStatusName, OptionStatus[]>> }> {
   const models = modelsOf(await readConfigObject(dirs));
-  const evidence = await readEvidence(dirs);
+  const statusesOf = await optionStatusReader(dirs);
   return {
-    models: Object.fromEntries(models.map((model) => [model.alias, byStatus(modelOptionStatuses(evidence, { ...model, modality: modalityOf(model) }))])),
+    models: Object.fromEntries(models.map((model) => [model.alias, byStatus(statusesOf({ ...model, modality: modalityOf(model) }))])),
   };
 }
 

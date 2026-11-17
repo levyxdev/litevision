@@ -1,5 +1,6 @@
-import type { Evidence } from "./evidence.ts";
-import { ranOn, type ModelKey } from "./history.ts";
+import type { Dirs } from "./dirs.ts";
+import { readEvidence, type Evidence } from "./evidence.ts";
+import { ranOn, readJobs, type ModelKey } from "./history.ts";
 import { namesOption, providerSaid } from "./protocols/errors.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
 import { checkedOptionKeys, fieldsChecked, fieldsToRead, optionKeyOf, valueAt, type RequestFields } from "./protocols/parameter-guide.ts";
@@ -27,6 +28,8 @@ export interface OptionStatus {
   status: OptionStatusName;
   /** The Job the evidence comes from. */
   jobId: string;
+  /** True when the User has deleted that Job since; the evidence stands (ADR 0015). */
+  jobDeleted?: true;
   /** When that Job started, as an ISO date-time. */
   date: string;
   /** Ignored: how the result differed from the request. Rejected: what the Provider said. */
@@ -156,10 +159,23 @@ export function optionStatuses(evidence: Evidence[], model: ModelKey, fields: Re
  * A Model's Option Statuses, with the fields its result check reads taken from its Protocol and Parameter Guide; a
  * Protocol litevision does not know checks nothing, so its options are only ever Accepted or Rejected.
  */
-export function modelOptionStatuses(evidence: Evidence[], model: ModelKey & { modality?: Modality }): OptionStatus[] {
+export function modelOptionStatuses(evidence: Evidence[], model: StatusedModel): OptionStatus[] {
   const adapter = adapterForProtocol(model.protocol);
   const fields = adapter === undefined ? { shape: [] } : fieldsToRead(adapter, model.modelId, model.modality ?? "image");
   return optionStatuses(evidence, model, fields);
+}
+
+/** A Model as Option Statuses are looked up for: which upstream model, and what it makes. */
+export type StatusedModel = ModelKey & { modality?: Modality };
+
+/**
+ * Reads the evidence and the Job history once, for looking up the Option Statuses of any number of Models. Each is
+ * marked when the Job it came from has been deleted since.
+ */
+export async function optionStatusReader(dirs: Dirs): Promise<(model: StatusedModel) => OptionStatus[]> {
+  const [evidence, jobs] = await Promise.all([readEvidence(dirs), readJobs(dirs)]);
+  const kept = new Set(jobs.map((job) => job.id));
+  return (model) => modelOptionStatuses(evidence, model).map((status) => (kept.has(status.jobId) ? status : { ...status, jobDeleted: true }));
 }
 
 /** Option Statuses grouped by status, each group newest first. */

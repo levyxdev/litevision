@@ -467,7 +467,7 @@ function optionStatusesView(statuses) {
       return el("li", {},
         el("span", { className: "chip " + entry.status, textContent: statusLabels[entry.status] }),
         el("span", { className: "key", textContent: JSON.stringify(entry.options) }),
-        el("span", { className: "muted", textContent: "Job " + entry.jobId.slice(0, 8) + ", " + when + (entry.reason ? ": " + entry.reason : "") }));
+        el("span", { className: "muted", textContent: (entry.jobDeleted ? "Deleted Job" : "Job " + entry.jobId.slice(0, 8)) + ", " + when + (entry.reason ? ": " + entry.reason : "") }));
     }));
   return el("div", { className: "wide option-statuses" },
     el("label", { textContent: "Option Statuses" }),

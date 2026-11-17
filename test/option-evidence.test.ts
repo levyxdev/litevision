@@ -38,6 +38,12 @@ async function generate(args: Record<string, unknown> = {}): Promise<string> {
 
 const evidenceLines = () => readEvidenceLines(harness!);
 
+type Statuses = Record<string, Array<{ options: unknown; job_id: string }>>;
+
+/** The same Option Statuses, each marked as from a deleted Job, as they read once the Job history is gone. */
+const fromDeletedJobs = (statuses: Statuses): Statuses =>
+  Object.fromEntries(Object.entries(statuses).map(([name, list]) => [name, list.map((status) => ({ ...status, job_deleted: true }))]));
+
 async function statuses(of: Harness = harness!): Promise<Record<string, Array<{ options: unknown; job_id: string }>>> {
   const listed = await of.client.callTool({ name: "list_models", arguments: { model: "gpt-image" } });
   return (listed.structuredContent as { models: Array<{ option_statuses: Record<string, Array<{ options: unknown; job_id: string }>> }> }).models[0]!
@@ -45,7 +51,7 @@ async function statuses(of: Harness = harness!): Promise<Record<string, Array<{ 
 }
 
 describe("Option Status evidence", () => {
-  test("outlasts the Job history: with jobs.jsonl gone, the Option Statuses stay as they were", async () => {
+  test("outlasts the Job history: with jobs.jsonl gone, the Option Statuses stay, from deleted Jobs", async () => {
     harness = await startHarness(openaiSetup());
     const jobId = await generate({ provider_options: { quality: "high" } });
     const before = await statuses();
@@ -53,7 +59,7 @@ describe("Option Status evidence", () => {
 
     await rm(join(harness.dirs.home, "jobs.jsonl"));
 
-    expect(await statuses()).toEqual(before);
+    expect(await statuses()).toEqual(fromDeletedJobs(before));
   });
 
   test("a Job that completes appends one line, with no prompt, path, Rating or Pick", async () => {
@@ -202,6 +208,6 @@ describe("the first run after upgrading", () => {
     expect((await evidenceLines()).map((line) => line.jobId)).toEqual(["high", "wide", "ultra"]);
 
     await rm(join(harness.dirs.home, "jobs.jsonl"));
-    expect(await statuses()).toEqual(fromFirst);
+    expect(await statuses()).toEqual(fromDeletedJobs(fromFirst));
   });
 });
