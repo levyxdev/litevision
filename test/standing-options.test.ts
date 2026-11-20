@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { startHarness, type Harness } from "./harness.ts";
 import { mp4Of, readHistory, recorded, textOf } from "./helpers.ts";
@@ -123,5 +125,66 @@ describe("Standing Options (ADR 0010)", () => {
     expect(textOf(result)).toContain("`model`");
     expect(textOf(result)).toContain("Standing Options");
     expect(h.requests).toHaveLength(0);
+  });
+});
+
+describe("update_standing_options", () => {
+  const update = (args: Record<string, unknown>) => harness!.client.callTool({ name: "update_standing_options", arguments: args });
+  const stored = async (alias: string) =>
+    (JSON.parse(await readFile(join(harness!.dirs.home, "config.json"), "utf8")).models as Array<{ alias: string; standingOptions?: unknown }>).find(
+      (model) => model.alias === alias,
+    )!;
+
+  test("replaces a Model's Standing Options whole and returns the previous ones; later Jobs send the new ones", async () => {
+    const h = await start();
+    const result = await update({ model: "flux2", standing_options: { steps: 40 } });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({ model: "flux2", standing_options: { steps: 40 }, previous_standing_options: standing, changed: true });
+    expect(textOf(result)).toContain(JSON.stringify(standing));
+    expect((await stored("flux2")).standingOptions).toEqual({ steps: 40 });
+    expect((await stored("sdxl")).standingOptions).toBeUndefined();
+
+    await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox" } });
+    const [body] = await sentBodies(h);
+    expect(body).toMatchObject({ steps: 40 });
+    expect(body).not.toHaveProperty("guidance");
+  });
+
+  test("sets them on a Model that had none, and {} clears them", async () => {
+    await start();
+    const set = await update({ model: "sdxl", standing_options: { steps: 30 } });
+    expect(set.structuredContent).toMatchObject({ previous_standing_options: {}, changed: true });
+    expect((await stored("sdxl")).standingOptions).toEqual({ steps: 30 });
+
+    const cleared = await update({ model: "sdxl", standing_options: {} });
+    expect(cleared.isError).toBeFalsy();
+    expect(await stored("sdxl")).not.toHaveProperty("standingOptions");
+  });
+
+  test("the same options again change nothing", async () => {
+    await start();
+    const result = await update({ model: "flux2", standing_options: standing });
+    expect(result.structuredContent).toMatchObject({ changed: false });
+  });
+
+  test("rejects a field the Model's Protocol fills itself, naming it, and changes nothing", async () => {
+    await start();
+    const result = await update({ model: "flux2", standing_options: { prompt: "x", steps: 40 } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("prompt");
+    expect((await stored("flux2")).standingOptions).toEqual(standing);
+  });
+
+  test("an unknown Alias is an error that lists the known ones", async () => {
+    await start();
+    const result = await update({ model: "missing", standing_options: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("flux2, sdxl, wan");
+  });
+
+  test("the server instructions require showing old and new Standing Options and getting the User's agreement first", async () => {
+    const h = await start();
+    expect(h.client.getInstructions()).toMatch(/update_standing_options.*old and new Standing Options.*agree/);
   });
 });

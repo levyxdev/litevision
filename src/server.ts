@@ -44,7 +44,7 @@ import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
 import { byStatus, optionStatusNames, optionStatusReader, type OptionStatus, type OptionStatusName, type StatusedModel } from "./option-status.ts";
 import { showSourceJobs, type ShownSourceJob } from "./source-jobs.ts";
-import { mergeOptions } from "./standing-options.ts";
+import { mergeOptions, updateStandingOptionsAsAgent } from "./standing-options.ts";
 import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
 import { adapterFor, adapterForProtocol, credentialFor } from "./protocols/index.ts";
 import { guideOutput, guideSummary, guideText, type ParameterGuide, type Requested } from "./protocols/parameter-guide.ts";
@@ -89,6 +89,7 @@ export const instructions = `litevision generates images and videos through Mode
 - When the User says what they think of a result, call \`rate_job\` with their verdict and a one-line reason in their words; when it is about one result of a Job with several, pass \`result\`. Never invent a verdict, and never rate a result yourself.
 - When the User chooses among a Comparison's results, call \`pick_result\`, only when the User actually chooses. A Pick is not a Rating: if they also give a verdict, call \`rate_job\` too.
 - Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.
+- Before calling \`update_standing_options\`, show the User the old and new Standing Options and get their agreement; never change them without it.
 - Call \`delete_jobs\` only when the User asks to delete Jobs or their results: it deletes them for good, with their files. Tell the User what its report says was skipped and why.`;
 
 /** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
@@ -138,7 +139,7 @@ const listedModelSchema = z.object({
   standing_options: z
     .record(z.string(), z.unknown())
     .describe(
-      "Standing Options the User set: request fields every Job on this Model sends. Your `provider_options` are merged over them: your values win, objects merge key by key, and `null` removes a key for that Job.",
+      "Standing Options the User set or agreed to: request fields every Job on this Model sends. Your `provider_options` are merged over them: your values win, objects merge key by key, and `null` removes a key for that Job.",
     ),
   docs_url: z.string().nullable().describe("Where to read which `provider_options` this Model accepts."),
   parameters: z
@@ -1349,6 +1350,41 @@ export function createServer(deps: ServerDeps): McpServer {
           ? `Replaced the Model Notes of ${model}. The User can undo this in the settings page.`
           : `The Model Notes of ${model} already were this text; nothing changed.`;
         const text = `${summary}\nBefore: ${change.previous || "(none)"}\nNow: ${change.notes || "(none)"}`;
+        return { content: [{ type: "text", text }], structuredContent: output };
+      } catch (error) {
+        if (error instanceof ConfigError) return toolError(error.message);
+        throw error;
+      }
+    },
+  );
+
+  server.registerTool(
+    "update_standing_options",
+    {
+      description:
+        "Replace a Model's Standing Options, whole: the request fields every Job on it sends, under each Job's `provider_options`. Call it only after showing the User the old and new Standing Options and getting their agreement. Write the Model's own fields from its Parameter Guide; fields litevision fills itself are refused. The User can change them again in the settings page.",
+      inputSchema: {
+        model: z.string().min(1).describe("Alias of the Model."),
+        standing_options: z
+          .record(z.string(), z.unknown())
+          .describe('The complete new Standing Options the User agreed to, such as { "quality": "high" }. {} clears them.'),
+      },
+      outputSchema: {
+        model: z.string(),
+        standing_options: z.record(z.string(), z.unknown()).describe("The Standing Options now."),
+        previous_standing_options: z.record(z.string(), z.unknown()).describe("The Standing Options before this call."),
+        changed: z.boolean().describe("False when they already were these options, so nothing changed."),
+      },
+    },
+    async ({ model, standing_options }) => {
+      try {
+        const change = await updateStandingOptionsAsAgent(deps.dirs, model, standing_options);
+        const output = { model, standing_options: change.standingOptions, previous_standing_options: change.previous, changed: change.changed };
+        const summary = change.changed
+          ? `Replaced the Standing Options of ${model}. The User can change them again in the settings page.`
+          : `The Standing Options of ${model} already were these; nothing changed.`;
+        const shown = (options: Record<string, unknown>) => (Object.keys(options).length === 0 ? "(none)" : JSON.stringify(options));
+        const text = `${summary}\nBefore: ${shown(change.previous)}\nNow: ${shown(change.standingOptions)}`;
         return { content: [{ type: "text", text }], structuredContent: output };
       } catch (error) {
         if (error instanceof ConfigError) return toolError(error.message);

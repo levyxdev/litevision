@@ -89,7 +89,7 @@ What one ended Job showed about its Model's `provider_options`: the values sent,
 _Avoid_: Facts, log, history
 
 **Standing Options**:
-The `provider_options` the User has set for a Model, sent with every Job of that Model. Whatever the Agent passes for a Job overrides them. Set only by the User, unlike an Option Status, which litevision learns from past Jobs.
+The `provider_options` the User has set for a Model, sent with every Job of that Model. Whatever the Agent passes for a Job overrides them. The User sets them, or the Agent with the User's agreement, unlike an Option Status, which litevision learns from past Jobs.
 _Avoid_: Default options, presets
 
 **Model Notes**:

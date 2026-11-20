@@ -57,7 +57,7 @@ The page listens on `127.0.0.1` only, behind a one-time token, and shuts down af
    | `sdcpp` | Local Models, which only `litevision local install` adds (see below), with no API key or base URL. The model id is a recipe in the Runtime's model folder that names the weight files. |
 
 3. **Pick a default image Model** (and a default video Model) and, optionally, write Model Notes ("photoreal, cheap, bad at Chinese text") so the Agent knows when to choose each one.
-4. **Optionally, set Standing Options** on a Model: a JSON object of the Provider's own request fields, such as `{ "quality": "high" }`, that every Job on it sends. The Agent's `provider_options` override them for one Job.
+4. **Optionally, set Standing Options** on a Model: a JSON object of the Provider's own request fields, such as `{ "quality": "high" }`, that every Job on it sends, or let the Agent set them once you agree. The Agent's `provider_options` override them for one Job.
 
 ### Local Models
 
@@ -90,6 +90,7 @@ The page also shows the Job history, with the images and videos and any Ratings 
 | `pick_result` | Records your Pick when you choose among a Comparison's results; choosing again replaces it. A Pick says which you prefer, not that it is good, so it changes no Option Status. You can also pick in the settings page's Job history, which shows a Comparison's Jobs together. |
 | `rate_job` | Records your verdict on a Job or on one of its results (good or bad, plus a reason) when you state one. A Rating judges the result, never the options that produced it, so it changes no Option Status. |
 | `update_model_notes` | Replaces a Model's Notes, only with text you agreed to. You can undo it in the settings page. |
+| `update_standing_options` | Replaces a Model's Standing Options, only with ones you agreed to. You can change them again in the settings page. |
 | `delete_jobs` | Deletes Jobs for good, when you ask: their records, Ratings, Picks and saved files, by Job, by Comparison or all at once. Your reference images are never deleted, a file you changed since is left, and a Job still running is left alone until it ends or is cancelled; one whose session ended before it finished can be deleted. What litevision learnt about each Model's options is kept. You can also delete in the settings page's Job history. |
 | `open_settings` | Opens the settings page, on its Providers, Models or Job history tab when the Agent names one. |
 

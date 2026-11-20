@@ -1,11 +1,15 @@
-import { isPlainObject } from "./config-store.ts";
+import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
+import { ConfigError, modelSchema, needsSettings } from "./config.ts";
+import { isPlainObject, updateConfig } from "./config-store.ts";
+import type { Dirs } from "./dirs.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
 import { reservedConflicts } from "./protocols/requests.ts";
 import type { Modality } from "./protocols/protocol.ts";
 
 /**
- * Standing Options (ADR 0010): `provider_options` the User set once on a Model, sent with every Job on it. The Agent's
- * own `provider_options` are merged over them for one Job.
+ * Standing Options (ADR 0010): `provider_options` set once on a Model, by the User or by the Agent with the User's
+ * agreement, sent with every Job on it. The Agent's own `provider_options` are merged over them for one Job.
  */
 
 /**
@@ -37,4 +41,37 @@ export function standingOptionsProblem(value: unknown, protocol: string, modalit
   const conflicts = reservedConflicts(value, reservedFields(protocol, modality));
   if (conflicts.length === 0) return undefined;
   return `Standing Options may not set ${conflicts.join(", ")}: litevision fills ${conflicts.length === 1 ? "that field" : "those fields"} itself for Protocol "${protocol}".`;
+}
+
+export interface AgentStandingChange {
+  standingOptions: Record<string, unknown>;
+  previous: Record<string, unknown>;
+  /** False when they already were these options, so nothing was written. */
+  changed: boolean;
+}
+
+/** `update_standing_options`: replaces one Model's Standing Options in `config.json` with ones the User agreed to; `{}` clears them. */
+export function updateStandingOptionsAsAgent(dirs: Dirs, alias: string, value: Record<string, unknown>): Promise<AgentStandingChange> {
+  return updateConfig(dirs, (config) => {
+    const models = config.models ?? [];
+    const parsed = z.array(modelSchema).safeParse(models);
+    if (!parsed.success) throw needsSettings(`The Models in config.json are invalid: ${z.prettifyError(parsed.error)}`);
+    const stored = models as Array<z.input<typeof modelSchema>>;
+    if (stored.length === 0) throw needsSettings("litevision has no Model configured yet.");
+
+    const model = stored.find((candidate) => candidate.alias === alias);
+    if (model === undefined) {
+      throw new ConfigError(`Unknown Model Alias "${alias}". Known Aliases: ${stored.map((candidate) => candidate.alias).join(", ")}.`);
+    }
+    const previous = model.standingOptions ?? {};
+    if (isDeepStrictEqual(previous, value)) return { standingOptions: value, previous, changed: false };
+    if (Object.keys(value).length === 0) {
+      delete model.standingOptions;
+    } else {
+      const problem = standingOptionsProblem(value, model.protocol, model.modality ?? "image");
+      if (problem !== undefined) throw new ConfigError(problem);
+      model.standingOptions = value;
+    }
+    return { standingOptions: value, previous, changed: true };
+  });
 }
