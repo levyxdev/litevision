@@ -1,6 +1,6 @@
 ---
 name: litevision
-description: Writing prompts for litevision's generate_image, generate_video and generate_comparison, checking each result, when to propose a Comparison or new Model Notes, and setting up a local Model on the User's machine.
+description: Writing prompts for litevision's generate_image, generate_video and generate_comparison, when to look at a result, when to propose a Comparison or new Model Notes, and setting up a local Model on the User's machine.
 ---
 
 # litevision
@@ -33,9 +33,9 @@ Tool calls often run one after another, even when sent together, so each waited-
 
 Pass `name` when the request says what a result is for or who it shows, in the User's own words and language: `name: "张三"` for Zhang San's ID photo saves `张三.png`. litevision adds `-1`, `-2` for several results and the next free number when the name is taken. Without it, files are named after the time the Job started. In a Comparison, give each variant its own `name` when the variants are for different things.
 
-## Check every result
+## When to look at a result
 
-Before reporting a result, open each file and check it against the request: subject, counts, positions, each quoted text letter by letter, what had to stay unchanged. Tell the User plainly what is wrong, then let them decide what comes next: generate again when they ask, and leave the verdict to them.
+Report the file paths and anything litevision says did not match; describe only what you have seen. Look at a result when the User asks (for one result, or for every result until they say stop), or when your next step depends on what it shows, such as editing it as a Reference or generating until the text reads right. Then compare it with the request: subject, counts, positions, each quoted text letter by letter, what had to stay unchanged. Tell the User plainly what is wrong, then let them decide what comes next: generate again when they ask, and leave the verdict to them.
 
 ## Propose a Comparison
 

@@ -26,7 +26,7 @@ Any other MCP client: run `npx -y litevision` as a stdio server, for example:
 
 ### The litevision Skill
 
-The server tells your Agent the rules it must keep. How to get good results (writing prompts, checking each result against your request, when to suggest a Comparison or new Model Notes) is in the litevision Skill, [`skills/litevision/SKILL.md`](skills/litevision/SKILL.md), drafted from the Model makers' own prompting guides. Install it with [`skills`](https://github.com/vercel-labs/skills):
+The server tells your Agent the rules it must keep. How to get good results (writing prompts, when to look at a result, when to suggest a Comparison or new Model Notes) is in the litevision Skill, [`skills/litevision/SKILL.md`](skills/litevision/SKILL.md), drafted from the Model makers' own prompting guides. Install it with [`skills`](https://github.com/vercel-labs/skills):
 
 ```bash
 npx skills add levyxdev/litevision
