@@ -150,6 +150,7 @@ describe("generate_image", () => {
         requested: { shape: null, resolution: null, size: null, format: null },
         references: [],
         providerOptions: {},
+        jobOptions: {},
       },
     };
     // Append-only: one record when the Job starts, one when it ends.

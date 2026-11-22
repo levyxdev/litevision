@@ -34,6 +34,7 @@ import {
   type RatedJob,
   type RatingRecord,
   type RatingWithJob,
+  type JobRecord,
 } from "./history.ts";
 import type { HttpTransport } from "./http.ts";
 import { JobFailedError, JobRunner, type JobState, type StartOptions } from "./jobs.ts";
@@ -44,7 +45,7 @@ import { modelInfo, videoModelInfo, type ModelInfoDeps } from "./model-info.ts";
 import { updateNotesAsAgent } from "./model-notes.ts";
 import { byStatus, optionStatusNames, optionStatusReader, type OptionStatus, type OptionStatusName, type StatusedModel } from "./option-status.ts";
 import { showSourceJobs, type ShownSourceJob } from "./source-jobs.ts";
-import { mergeOptions, updateStandingOptionsAsAgent } from "./standing-options.ts";
+import { mergeOptions, optionSources, updateStandingOptionsAsAgent, type OptionSources } from "./standing-options.ts";
 import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/requests.ts";
 import { adapterFor, adapterForProtocol, credentialFor } from "./protocols/index.ts";
 import { guideOutput, guideSummary, guideText, type ParameterGuide, type Requested } from "./protocols/parameter-guide.ts";
@@ -83,8 +84,9 @@ export const instructions = `litevision generates images and videos through Mode
 - Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
 - Use the Model the User names. When they name none, omit \`model\` for the default, unless the request needs something the default lacks; then choose with \`list_models\`.
 - litevision passes \`provider_options\` to the Provider as they are and translates nothing: write each Model's own fields, such as the size, resolution or length, from its Parameter Guide (\`list_models\` with \`model\`). Without them the Provider's defaults apply. Each value's Option Status (\`list_models\`) says what the latest evidence shows: reuse Honoured values; Accepted means the Provider did not reject it but its effect is unknown; never resend a Rejected or Ignored value unchanged, but read the Parameter Guide and docs first, as for anything with no Option Status.
+- Before writing \`provider_options\`, read the Model's Standing Options (\`list_models\`): every Job sends them already, so add only what they lack, and override one only when the User asks.
 - If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
-- Tell the User where the files are, and pass on whatever a result says did not match the request or came back short.
+- Tell the User where the files are, and pass on whatever a result says did not match the request, came back short or overrode a Standing Option.
 - \`generate_comparison\` costs as much as all its Jobs. Start a Comparison only when the User asks for one or agrees to it.
 - When the User says what they think of a result, call \`rate_job\` with their verdict and a one-line reason in their words; when it is about one result of a Job with several, pass \`result\`. Never invent a verdict, and never rate a result yourself.
 - When the User chooses among a Comparison's results, call \`pick_result\`, only when the User actually chooses. A Pick is not a Rating: if they also give a verdict, call \`rate_job\` too.
@@ -617,9 +619,64 @@ function requestedText({ shape, resolution, size: pixels, format, seconds }: Req
   return [asked, unchecked].filter(Boolean).join(" ");
 }
 
+/** What the request asks for and where its options came from, as the result of the call that started a Job says it. */
+function requestAndOptionsText(requested: Requested, sources: OptionSources): string {
+  return [requestedText(requested), optionsText(sources)].filter(Boolean).join(" ");
+}
+
 function mismatchText(mismatch: string | undefined, docsUrl: string): string {
   if (mismatch === undefined) return "";
   return ` The result does not match the request: ${mismatch}. A provider_option may not have taken effect, so the options the check read are now Ignored; check ${docsUrl} before trying again.`;
+}
+
+const optionsSentSchema = z
+  .object({
+    standing: z.record(z.string(), z.unknown()).describe("From the Model's Standing Options."),
+    job: z.record(z.string(), z.unknown()).describe("From this Job's own `provider_options`."),
+  })
+  .describe("The `provider_options` sent to the Provider, by where each came from; merged, they are exactly what was sent.");
+
+const overridesSchema = z
+  .array(
+    z.object({
+      option: z.string().describe("The option's path, e.g. quality or output.quality."),
+      standing: z.unknown().describe("Its Standing Option value."),
+      job: z.unknown().describe("What this Job sent instead; null when it dropped it."),
+    }),
+  )
+  .optional()
+  .describe("Present when this Job replaced or dropped a Standing Option: the User set those for every Job, so tell them.");
+
+/** The `options_sent` and `overrides` fields of a Job's output. */
+function optionsOutput(sources: OptionSources) {
+  return {
+    options_sent: { standing: sources.standing, job: sources.job },
+    ...(sources.overrides.length === 0 ? {} : { overrides: sources.overrides }),
+  };
+}
+
+/** What a Job sent, by source, and any Standing Option it overrode, e.g. "This Job overrode Standing Options: steps 28 → 40." */
+function optionsText({ standing, job, overrides }: OptionSources): string {
+  const parts = [
+    Object.keys(standing).length === 0 ? null : `${JSON.stringify(standing)} from Standing Options`,
+    Object.keys(job).length === 0 ? null : `${JSON.stringify(job)} from this Job`,
+  ].filter((part) => part !== null);
+  const sent = parts.length === 0 ? "" : `Sent ${parts.join(" and ")}.`;
+  if (overrides.length === 0) return sent;
+  const changed = overrides.map(({ option, standing, job }) => `${option} ${JSON.stringify(standing)} → ${job === null ? "dropped" : JSON.stringify(job)}`);
+  return `${sent} This Job overrode Standing Options: ${changed.join(", ")}.`.trimStart();
+}
+
+/** The options a Job on `model` sends, given the Agent's own, and where each came from. */
+function jobOptions(model: Model, agent: Record<string, unknown>) {
+  const standing = model.standingOptions ?? {};
+  return { sent: mergeOptions(standing, agent), sources: optionSources(standing, agent), made: { standing, job: agent } };
+}
+
+/** Where an ended or running Job's options came from, from its Job history record; undefined for Jobs recorded before. */
+function recordedSources(record: JobRecord | undefined): OptionSources | undefined {
+  const parameters = record?.parameters;
+  return parameters?.jobOptions === undefined ? undefined : optionSources(parameters.standingOptions ?? {}, parameters.jobOptions);
 }
 
 const jobStatusSchema = z
@@ -674,8 +731,8 @@ function toolError(text: string) {
  * A generation tool's error. When the Provider rejected the request or failed it for a reason it did not classify,
  * the error carries the Model's docs link and Option Statuses, so the Agent need not look them up (ADR 0011).
  */
-async function failure(error: unknown, hint: Hint | undefined) {
-  const reason = await failureReason(error, hint);
+async function failure(error: unknown, hint: Hint | undefined, sources?: OptionSources) {
+  const reason = await failureReason(error, hint, sources);
   if (!(error instanceof JobFailedError)) return toolError(reason);
   return toolError(error.kind === "cancelled" ? `Job ${error.jobId}: ${reason}` : `Job ${error.jobId} failed: ${reason}`);
 }
@@ -683,12 +740,13 @@ async function failure(error: unknown, hint: Hint | undefined) {
 /** What to add to a failed Job's error, given how it failed. */
 type Hint = (kind: ProviderErrorKind) => Promise<string>;
 
-/** Why a Job failed or could not start, safe to show the Agent; any other error is rethrown. */
-async function failureReason(error: unknown, hint: Hint | undefined): Promise<string> {
+/** Why a Job failed or could not start, safe to show the Agent, with the options it sent; any other error is rethrown. */
+async function failureReason(error: unknown, hint: Hint | undefined, sources?: OptionSources): Promise<string> {
   if (error instanceof ConfigError) return error.message;
   if (error instanceof JobFailedError) {
     const helpful = hint !== undefined && (error.kind === "unsupported" || error.kind === "rejected_option" || error.kind === "other");
-    return `${error.message}${helpful ? await hint(error.kind) : ""}`;
+    const sent = sources === undefined || error.kind === "cancelled" ? "" : ` ${optionsText(sources)}`.trimEnd();
+    return `${error.message}${sent}${helpful ? await hint(error.kind) : ""}`;
   }
   throw error;
 }
@@ -701,6 +759,8 @@ interface PreparedJob {
   report(job: JobState): { output: Record<string, unknown>; text: string };
   /** The Model's docs link, Option Statuses and Parameter Guide, for a failed Job's error (ADR 0010, ADR 0011). */
   hint: Hint;
+  /** Where the options the Job sends come from. */
+  sources: OptionSources;
 }
 
 interface ImageArgs {
@@ -734,6 +794,8 @@ const imageJobShape = {
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
   mismatch: mismatchSchema,
+  options_sent: optionsSentSchema,
+  overrides: overridesSchema,
 };
 
 const videoJobShape = {
@@ -748,6 +810,8 @@ const videoJobShape = {
   requested_format: requestedFormatSchema,
   observed: observedSchema,
   mismatch: mismatchSchema,
+  options_sent: optionsSentSchema,
+  overrides: overridesSchema,
 };
 
 const failedJobSchema = z.object({
@@ -756,6 +820,8 @@ const failedJobSchema = z.object({
   model: z.string().describe("Alias of the Model the Job ran on."),
   files: z.array(z.string()).describe("Always empty."),
   error: z.string().describe("Why the Job failed."),
+  options_sent: optionsSentSchema,
+  overrides: overridesSchema,
 });
 
 /** The `name` parameter of the tools that start Jobs. */
@@ -819,12 +885,14 @@ export function createServer(deps: ServerDeps): McpServer {
     const adapter = adapterFor(model);
     const credential = await credentialFor(deps.dirs, resolved.provider, adapter);
     const info = await modelInfo(infoDeps, resolved);
+    const options = jobOptions(model, args.provider_options);
+    const { sources } = options;
     const normalised = await normaliseImageRequest(
       {
         prompt: args.prompt,
         n: args.n,
         references: args.references,
-        providerOptions: mergeOptions(model.standingOptions ?? {}, args.provider_options),
+        providerOptions: options.sent,
       },
       model,
       adapter,
@@ -834,12 +902,13 @@ export function createServer(deps: ServerDeps): McpServer {
     const name = checkedName(args.name);
     return {
       model,
+      sources,
       start: ({ comparison, wait } = {}) =>
-        jobs.start({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
+        jobs.start({ ...resolved, adapter, credential, normalised, outputDir, options: options.made, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
-        const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
-        const asked = requestedText(normalised.requested);
+        const output = { ...jobOutput(job), ...requestedOutput(normalised.requested), ...optionsOutput(sources) };
+        const asked = requestAndOptionsText(normalised.requested, sources);
         const text =
           job.status === "running"
             ? `${jobText(job)} ${asked}`
@@ -855,13 +924,15 @@ export function createServer(deps: ServerDeps): McpServer {
     const adapter = adapterFor(model);
     const info = videoModelInfo(resolved);
     const credential = await credentialFor(deps.dirs, resolved.provider, adapter);
+    const options = jobOptions(model, args.provider_options);
+    const { sources } = options;
     const normalised = await normaliseVideoRequest(
       {
         prompt: args.prompt,
         ...(args.first_frame === undefined ? {} : { firstFrame: args.first_frame }),
         ...(args.last_frame === undefined ? {} : { lastFrame: args.last_frame }),
         references: args.references,
-        providerOptions: mergeOptions(model.standingOptions ?? {}, args.provider_options),
+        providerOptions: options.sent,
       },
       model,
       adapter,
@@ -871,12 +942,13 @@ export function createServer(deps: ServerDeps): McpServer {
     const name = checkedName(args.name);
     return {
       model,
+      sources,
       start: ({ comparison, wait } = {}) =>
-        jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
+        jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, options: options.made, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
       report: (job) => {
-        const output = { ...jobOutput(job), ...requestedOutput(normalised.requested) };
-        const asked = requestedText(normalised.requested);
+        const output = { ...jobOutput(job), ...requestedOutput(normalised.requested), ...optionsOutput(sources) };
+        const asked = requestAndOptionsText(normalised.requested, sources);
         const text =
           job.status === "running"
             ? `${jobText(job)} ${asked}`
@@ -894,7 +966,7 @@ export function createServer(deps: ServerDeps): McpServer {
       const { output, text } = prepared.report(await prepared.start({ wait }));
       return { content: [{ type: "text" as const, text }], structuredContent: output };
     } catch (error) {
-      return failure(error, prepared?.hint);
+      return failure(error, prepared?.hint, prepared?.sources);
     }
   };
 
@@ -926,7 +998,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .record(z.string(), z.unknown())
           .default({})
           .describe(
-            "The Model's own request fields, passed through untouched, e.g. { \"size\": \"2048x1152\", \"quality\": \"high\" } for OpenAI: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt, reference image fields and response format are litevision's.",
+            "The Model's own request fields, passed through untouched, e.g. { \"size\": \"2048x1152\" } for OpenAI: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt, reference image fields and response format are litevision's.",
           ),
         wait: waitSchema,
       }),
@@ -1048,12 +1120,12 @@ export function createServer(deps: ServerDeps): McpServer {
           const job = prepared[index]!;
           if (outcome.status === "fulfilled") return job.report(outcome.value);
           // Whatever stopped this Job, the others' results still go back to the Agent.
-          const reason = await failureReason(outcome.reason, job.hint).catch(
+          const reason = await failureReason(outcome.reason, job.hint, job.sources).catch(
             () => `litevision could not run this Job: ${(outcome.reason as Error).message}`,
           );
           const jobId = outcome.reason instanceof JobFailedError ? outcome.reason.jobId : null;
           return {
-            output: { job_id: jobId, status: "failed" as const, model: job.model.alias, files: [], error: reason },
+            output: { job_id: jobId, status: "failed" as const, model: job.model.alias, files: [], error: reason, ...optionsOutput(job.sources) },
             text: `Job${jobId === null ? "" : ` ${jobId}`} on ${job.model.alias} failed: ${reason}`,
           };
         }),
@@ -1091,6 +1163,8 @@ export function createServer(deps: ServerDeps): McpServer {
         observed: observedSchema,
         mismatch: mismatchSchema,
         source_jobs: sourceJobsSchema,
+        options_sent: optionsSentSchema.optional(),
+        overrides: overridesSchema,
       },
     },
     async ({ job_id }) => {
@@ -1099,22 +1173,29 @@ export function createServer(deps: ServerDeps): McpServer {
         const history = await readJobs(deps.dirs);
         const record = history.find((candidate) => candidate.id === job_id);
         const sources = record === undefined ? [] : await showSourceJobs(record, new Map(history.map((known) => [known.id, known])));
+        const options = recordedSources(record);
+        const optionsSaid = options === undefined ? "" : ` ${optionsText(options)}`.trimEnd();
         const docsUrl =
           job.status === "completed" && job.mismatch !== undefined
             ? ((await jobDocs(infoDeps, job_id))?.known.docsUrl ?? "the Model's docs link in `list_models`")
             : "";
         const text =
           job.status === "running"
-            ? `${jobText(job)}${sources.length === 0 ? "" : ` ${sourceJobsText(sources)}.`}`
-            : `Job ${job.id} completed: saved ${job.files.length} file(s) from ${job.model}.${observedText(job.observed)}${mismatchText(job.mismatch, docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}${sources.length === 0 ? "" : ` ${sourceJobsText(sources)}.`}\n${job.files.join("\n")}`;
-        const output = { ...jobOutput(job), ...sourceJobsField(sources) };
+            ? `${jobText(job)}${optionsSaid}${sources.length === 0 ? "" : ` ${sourceJobsText(sources)}.`}`
+            : `Job ${job.id} completed: saved ${job.files.length} file(s) from ${job.model}.${optionsSaid}${observedText(job.observed)}${mismatchText(job.mismatch, docsUrl)}${job.shortfall === undefined ? "" : ` ${job.shortfall}`}${sources.length === 0 ? "" : ` ${sourceJobsText(sources)}.`}\n${job.files.join("\n")}`;
+        const output = { ...jobOutput(job), ...sourceJobsField(sources), ...(options === undefined ? {} : optionsOutput(options)) };
         return { content: [{ type: "text", text }], structuredContent: output };
       } catch (error) {
         // A video often outlasts `generate_video`'s wait, so its rejection may first reach the Agent here.
-        return failure(error, async (kind) => {
-          const docs = await jobDocs(infoDeps, job_id);
-          return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.statuses, kind);
-        });
+        const record = await readJob(deps.dirs, job_id).catch(() => undefined);
+        return failure(
+          error,
+          async (kind) => {
+            const docs = await jobDocs(infoDeps, job_id);
+            return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.statuses, kind);
+          },
+          recordedSources(record),
+        );
       }
     },
   );
@@ -1366,7 +1447,7 @@ export function createServer(deps: ServerDeps): McpServer {
         model: z.string().min(1).describe("Alias of the Model."),
         standing_options: z
           .record(z.string(), z.unknown())
-          .describe('The complete new Standing Options the User agreed to, such as { "quality": "high" }. {} clears them.'),
+          .describe('The complete new Standing Options the User agreed to, such as { "size": "1024x1024" }. {} clears them.'),
       },
       outputSchema: {
         model: z.string(),

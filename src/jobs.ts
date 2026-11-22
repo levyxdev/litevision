@@ -67,6 +67,8 @@ interface SpecBase extends ResolvedModel {
   name?: string;
   /** The Comparison this Job belongs to (ADR 0009), when it is one of several started together. */
   comparison?: string;
+  /** What the merged `providerOptions` were made of: the Model's Standing Options and the Agent's own options. */
+  options: { standing: Record<string, unknown>; job: Record<string, unknown> };
 }
 
 export interface JobSpec extends SpecBase {
@@ -88,6 +90,11 @@ export interface CompletedJob {
   mismatch?: string;
   /** What the final request asked for, as litevision read it (ADR 0010); omitted on Jobs recorded before. */
   requested?: Requested;
+}
+
+/** How a Job's options were made, as the Job history records them; empty Standing Options are left out. */
+function optionParameters({ options }: SpecBase): Pick<JobBase["parameters"], "standingOptions" | "jobOptions"> {
+  return { ...(Object.keys(options.standing).length === 0 ? {} : { standingOptions: options.standing }), jobOptions: options.job };
 }
 
 /** Where a Job stands once the wait limit has passed or it has finished. A failed Job is thrown as {@link JobFailedError}. */
@@ -221,6 +228,7 @@ export class JobRunner {
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
       ...(spec.name === undefined ? {} : { name: spec.name }),
       providerOptions: request.providerOptions,
+      ...optionParameters(spec),
     });
     const target = await this.targetOf(spec);
     // Recorded before the Provider is called, so a Job lost with this process is never silently forgotten.
@@ -254,6 +262,7 @@ export class JobRunner {
       ...(spec.outputDir === undefined ? {} : { outputPath: spec.outputDir }),
       ...(spec.name === undefined ? {} : { name: spec.name }),
       providerOptions: request.providerOptions,
+      ...optionParameters(spec),
     });
     const target = await this.targetOf(spec);
     await this.append(base, "running", {}, { first: true });

@@ -25,6 +25,50 @@ export function mergeOptions(standing: Record<string, unknown>, agent: Record<st
   return merged;
 }
 
+/** One Standing Option a Job's own options replaced, or dropped with `null`; `option` is its path, e.g. `output.quality`. */
+export interface Override {
+  option: string;
+  standing: unknown;
+  /** `null` when the Job dropped it. */
+  job: unknown;
+}
+
+/**
+ * What a Job sent, by where it came from: `standing` and `job` merge into exactly the options sent, and `overrides`
+ * names each Standing Option the Job's own options replaced or dropped.
+ */
+export interface OptionSources {
+  standing: Record<string, unknown>;
+  job: Record<string, unknown>;
+  overrides: Override[];
+}
+
+/** Splits what a Job sends by source. A value the Job sets the same as its Standing Option is the Job's, and no override. */
+export function optionSources(standing: Record<string, unknown>, job: Record<string, unknown>): OptionSources {
+  const sources: OptionSources = { standing: {}, job: mergeOptions({}, job), overrides: [] };
+  collectStanding(standing, job, "", sources.standing, sources.overrides);
+  return sources;
+}
+
+/** Copies into `kept` the Standing Options the Job left alone, and records the ones it replaced or dropped. */
+function collectStanding(standing: Record<string, unknown>, job: Record<string, unknown>, path: string, kept: Record<string, unknown>, overrides: Override[]): void {
+  for (const [key, value] of Object.entries(standing)) {
+    const option = `${path}${key}`;
+    if (!Object.hasOwn(job, key)) {
+      kept[key] = value;
+      continue;
+    }
+    const jobValue = job[key];
+    if (isPlainObject(value) && isPlainObject(jobValue)) {
+      const inner: Record<string, unknown> = {};
+      collectStanding(value, jobValue, `${option}.`, inner, overrides);
+      if (Object.keys(inner).length > 0) kept[key] = inner;
+    } else if (!isDeepStrictEqual(value, jobValue)) {
+      overrides.push({ option, standing: value, job: jobValue });
+    }
+  }
+}
+
 /** The request fields a Protocol fills itself for a Modality, which neither Standing Options nor `provider_options` may set. */
 export function reservedFields(protocol: string, modality: Modality): readonly string[] {
   const adapter = adapterForProtocol(protocol);
@@ -35,7 +79,7 @@ export function reservedFields(protocol: string, modality: Modality): readonly s
 /** Why a value cannot be a Model's Standing Options, in words the User can act on; undefined when it can. */
 export function standingOptionsProblem(value: unknown, protocol: string, modality: Modality): string | undefined {
   if (!isPlainObject(value)) {
-    return 'Standing Options must be a JSON object of request fields, such as { "quality": "high" }.';
+    return 'Standing Options must be a JSON object of request fields, such as { "size": "1024x1024" }.';
   }
   const conflicts = reservedConflicts(value, reservedFields(protocol, modality));
   if (conflicts.length === 0) return undefined;

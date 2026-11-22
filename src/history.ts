@@ -42,7 +42,12 @@ export interface JobParameters {
   outputPath?: string;
   /** What the Agent named the saved files, as it gave it; absent when it gave no name, and on Jobs recorded before. */
   name?: string;
+  /** The options sent: `jobOptions` merged over `standingOptions`. */
   providerOptions: Record<string, unknown>;
+  /** The Model's Standing Options when the Job started; absent when it had none. */
+  standingOptions?: Record<string, unknown>;
+  /** The Agent's own `provider_options` for this Job, as given; absent on Jobs recorded before. */
+  jobOptions?: Record<string, unknown>;
 }
 
 /** One Job line of `jobs.jsonl`. */

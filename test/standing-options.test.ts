@@ -16,7 +16,7 @@ const standing = { steps: 28, guidance: 3.5, output: { format: "png", quality: 9
 const firstChange = new Date("2026-11-21T10:00:00.000Z");
 const secondChange = new Date("2026-11-21T11:30:00.000Z");
 
-async function start(now = () => firstChange) {
+async function start(now = () => firstChange, images = recorded("together/images.json")) {
   harness = await startHarness({
     now,
     config: {
@@ -38,7 +38,7 @@ async function start(now = () => firstChange) {
     },
     credentials: { "together-ai": { apiKey: "together-test-0000secret0000" } },
     routes: {
-      [imagesUrl]: recorded("together/images.json"),
+      [imagesUrl]: images,
       [videosUrl]: recorded("together/video-submitted.json"),
       [`GET ${root}/v2/videos/${videoId}`]: recorded("together/video-completed.json"),
       "GET https://api.together.ai/shrt/example0000": () => new Response(mp4Of(1920, 1080, 5), { headers: { "content-type": "video/mp4" } }),
@@ -120,6 +120,106 @@ describe("Standing Options (ADR 0010)", () => {
     expect(models.find((model) => model.alias === "flux2")!.standing_options).toEqual(standing);
     expect(models.find((model) => model.alias === "sdxl")!.standing_options).toEqual({});
     expect(textOf(result)).toContain(`Standing Options: ${JSON.stringify(standing)}`);
+  });
+
+  test("a generate_image result shows which options came from the Standing Options and which from the Job, and each one the Job overrode", async () => {
+    const h = await start();
+    const result = await h.client.callTool({
+      name: "generate_image",
+      arguments: { prompt: "a red fox", provider_options: { steps: 40, output: { quality: 70 }, seed: null, negative_prompt: "blur" } },
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      options_sent: {
+        standing: { guidance: 3.5, output: { format: "png" } },
+        job: { steps: 40, output: { quality: 70 }, negative_prompt: "blur" },
+      },
+      overrides: [
+        { option: "steps", standing: 28, job: 40 },
+        { option: "output.quality", standing: 90, job: 70 },
+        { option: "seed", standing: 7, job: null },
+      ],
+    });
+    expect(textOf(result)).toContain("This Job overrode Standing Options: steps 28 → 40, output.quality 90 → 70, seed 7 → dropped.");
+  });
+
+  test("a Job that drops every key of a Standing object shows the empty object it sent", async () => {
+    const h = await start();
+    const result = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { output: { format: null, quality: null } } } });
+
+    const [body] = await sentBodies(h);
+    expect(body.output).toEqual({});
+    expect(result.structuredContent).toMatchObject({
+      options_sent: { standing: { steps: 28, guidance: 3.5, seed: 7 }, job: { output: {} } },
+      overrides: [
+        { option: "output.format", standing: "png", job: null },
+        { option: "output.quality", standing: 90, job: null },
+      ],
+    });
+  });
+
+  test("a failed Job's error says which options it sent and which Standing Options it overrode", async () => {
+    const h = await start(undefined, recorded("together/invalid-reference-image.json", 400));
+    const result = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { steps: 40 } } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Sent {"guidance":3.5');
+    expect(textOf(result)).toContain("This Job overrode Standing Options: steps 28 → 40.");
+  });
+
+  test("a Job that overrides nothing says nothing about overrides", async () => {
+    const h = await start();
+    const result = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { negative_prompt: "blur", steps: 28 } } });
+
+    expect(result.structuredContent).toMatchObject({
+      options_sent: { standing: { guidance: 3.5, output: { format: "png", quality: 90 }, seed: 7 }, job: { negative_prompt: "blur", steps: 28 } },
+    });
+    expect(result.structuredContent).not.toHaveProperty("overrides");
+    expect(textOf(result)).not.toContain("overrode");
+  });
+
+  test("get_job shows the same, from the Job history, even after the Standing Options change", async () => {
+    const h = await start();
+    const started = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { steps: 40 }, wait: false } });
+    const { job_id } = started.structuredContent as { job_id: string };
+    expect(started.structuredContent).toMatchObject({ status: "running", overrides: [{ option: "steps", standing: 28, job: 40 }] });
+    await h.client.callTool({ name: "update_standing_options", arguments: { model: "flux2", standing_options: { steps: 40 } } });
+
+    const result = await h.client.callTool({ name: "get_job", arguments: { job_id } });
+    expect(result.structuredContent).toMatchObject({
+      status: "completed",
+      options_sent: { standing: { guidance: 3.5, output: { format: "png", quality: 90 }, seed: 7 }, job: { steps: 40 } },
+      overrides: [{ option: "steps", standing: 28, job: 40 }],
+    });
+    expect(textOf(result)).toContain("This Job overrode Standing Options: steps 28 → 40.");
+  });
+
+  test("a generate_video result and each generate_comparison variant show their options the same way", async () => {
+    const h = await start();
+    const video = await h.client.callTool({ name: "generate_video", arguments: { prompt: "a fox runs", provider_options: { negative_prompt: null } } });
+    expect(video.structuredContent).toMatchObject({
+      options_sent: { standing: { generate_audio: true }, job: {} },
+      overrides: [{ option: "negative_prompt", standing: "blur", job: null }],
+    });
+
+    const comparison = await h.client.callTool({
+      name: "generate_comparison",
+      arguments: { variants: [{ prompt: "a fox", model: "flux2" }, { prompt: "a fox", model: "sdxl", provider_options: { steps: 30 } }] },
+    });
+    const [flux, sdxl] = (comparison.structuredContent as { jobs: unknown[] }).jobs;
+    expect(flux).toMatchObject({ options_sent: { standing, job: {} } });
+    expect(sdxl).toMatchObject({ options_sent: { standing: {}, job: { steps: 30 } } });
+  });
+
+  test("no tool description models a price option such as quality: high", async () => {
+    const h = await start();
+    const { tools } = await h.client.listTools();
+    expect(JSON.stringify(tools)).not.toMatch(/\\"quality\\": \\"high\\"/);
+  });
+
+  test("the server instructions point the Agent at the Standing Options before it writes provider_options", async () => {
+    const h = await start();
+    expect(h.client.getInstructions()).toMatch(/Before writing `provider_options`, read the Model's Standing Options \(`list_models`\)/);
   });
 
   test("a reserved field in the merged options is rejected with the field named", async () => {
