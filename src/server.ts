@@ -8,7 +8,7 @@ import {
   loadConfig,
   modelNotesMaxLength,
   needsSettings,
-  notesAuthors,
+  changeAuthors,
   resolveModel,
   type Config,
   type Model,
@@ -88,8 +88,7 @@ export const instructions = `litevision generates images and videos through Mode
 - \`generate_comparison\` costs as much as all its Jobs. Start a Comparison only when the User asks for one or agrees to it.
 - When the User says what they think of a result, call \`rate_job\` with their verdict and a one-line reason in their words; when it is about one result of a Job with several, pass \`result\`. Never invent a verdict, and never rate a result yourself.
 - When the User chooses among a Comparison's results, call \`pick_result\`, only when the User actually chooses. A Pick is not a Rating: if they also give a verdict, call \`rate_job\` too.
-- Before calling \`update_model_notes\`, show the User the old and new Model Notes and get their agreement; never change them without it.
-- Before calling \`update_standing_options\`, show the User the old and new Standing Options and get their agreement; never change them without it.
+- Before calling \`update_model_notes\` or \`update_standing_options\`, show the User the old and new Model Notes or Standing Options and get their agreement; never change them without it.
 - Call \`delete_jobs\` only when the User asks to delete Jobs or their results: it deletes them for good, with their files. Tell the User what its report says was skipped and why.`;
 
 /** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
@@ -1331,7 +1330,7 @@ export function createServer(deps: ServerDeps): McpServer {
         notes: z.string().describe("The Model Notes now."),
         previous_notes: z.string().describe("The Model Notes before this call."),
         changed: z.boolean().describe("False when the text was already the Model Notes, so nothing was recorded."),
-        changed_by: z.enum(notesAuthors).nullable().describe("Who made the last change."),
+        changed_by: z.enum(changeAuthors).nullable().describe("Who made the last change."),
         changed_at: z.string().nullable().describe("When the last change was made, ISO 8601."),
       },
     },
@@ -1362,7 +1361,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "update_standing_options",
     {
       description:
-        "Replace a Model's Standing Options, whole: the request fields every Job on it sends, under each Job's `provider_options`. Call it only after showing the User the old and new Standing Options and getting their agreement. Write the Model's own fields from its Parameter Guide; fields litevision fills itself are refused. The User can change them again in the settings page.",
+        "Replace a Model's Standing Options, whole: the request fields every Job on it sends, under each Job's `provider_options`. Call it only after showing the User the old and new Standing Options and getting their agreement. Write the Model's own fields from its Parameter Guide; fields litevision fills itself are refused. The previous version is kept, and the User can undo the change in the settings page.",
       inputSchema: {
         model: z.string().min(1).describe("Alias of the Model."),
         standing_options: z
@@ -1373,15 +1372,24 @@ export function createServer(deps: ServerDeps): McpServer {
         model: z.string(),
         standing_options: z.record(z.string(), z.unknown()).describe("The Standing Options now."),
         previous_standing_options: z.record(z.string(), z.unknown()).describe("The Standing Options before this call."),
-        changed: z.boolean().describe("False when they already were these options, so nothing changed."),
+        changed: z.boolean().describe("False when they already were these options, so nothing was recorded."),
+        changed_by: z.enum(changeAuthors).nullable().describe("Who made the last change."),
+        changed_at: z.string().nullable().describe("When the last change was made, ISO 8601."),
       },
     },
     async ({ model, standing_options }) => {
       try {
-        const change = await updateStandingOptionsAsAgent(deps.dirs, model, standing_options);
-        const output = { model, standing_options: change.standingOptions, previous_standing_options: change.previous, changed: change.changed };
+        const change = await updateStandingOptionsAsAgent(deps.dirs, model, standing_options, now());
+        const output = {
+          model,
+          standing_options: change.standingOptions,
+          previous_standing_options: change.previous,
+          changed: change.changed,
+          changed_by: change.history?.changedBy ?? null,
+          changed_at: change.history?.changedAt ?? null,
+        };
         const summary = change.changed
-          ? `Replaced the Standing Options of ${model}. The User can change them again in the settings page.`
+          ? `Replaced the Standing Options of ${model}. The User can undo this in the settings page.`
           : `The Standing Options of ${model} already were these; nothing changed.`;
         const shown = (options: Record<string, unknown>) => (Object.keys(options).length === 0 ? "(none)" : JSON.stringify(options));
         const text = `${summary}\nBefore: ${shown(change.previous)}\nNow: ${shown(change.standingOptions)}`;

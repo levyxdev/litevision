@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { defaultKey, modelNotesMaxLength, modelSchema, type NotesHistory } from "../config.ts";
+import { defaultKey, modelNotesMaxLength, modelSchema, type NotesHistory, type StandingOptionsHistory } from "../config.ts";
 import { isPlainObject, readConfigObject, updateConfig, type ConfigObject } from "../config-store.ts";
 import type { Dirs } from "../dirs.ts";
 import { byStatus, optionStatusReader, type OptionStatus, type OptionStatusName } from "../option-status.ts";
 import { notesTooLong, replaceNotes, undoNotes } from "../model-notes.ts";
 import { supportedProtocols } from "../protocols/index.ts";
-import { standingOptionsProblem } from "../standing-options.ts";
+import { replaceStandingOptions, standingOptionsProblem, undoStandingOptions } from "../standing-options.ts";
 import { modalities, type Modality } from "../protocols/protocol.ts";
 import { addedOnlyByInstall, isLocalModel } from "../local/provider.ts";
 import { SettingsError, shortName } from "./providers.ts";
@@ -22,6 +22,8 @@ export interface ModelView {
   notesHistory?: NotesHistory;
   /** Standing Options (ADR 0010); absent when none are set. */
   standingOptions?: Record<string, unknown>;
+  /** Who changed the Standing Options last and when, and the previous version to undo to. Absent until they first change. */
+  standingOptionsHistory?: StandingOptionsHistory;
   /** True for the default Model of its Modality. */
   default: boolean;
   /** True for a local Model, whose Provider, model id and Protocol only `local install` sets. */
@@ -99,7 +101,11 @@ export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>,
       stored.notes = input.notes;
       stored.notesHistory = { changedBy: "User", changedAt: at.toISOString() };
     }
-    if (input.standingOptions !== undefined) setStandingOptions(stored, input.standingOptions);
+    if (input.standingOptions !== undefined) {
+      setStandingOptions(stored, input.standingOptions, at);
+      // Like Model Notes, the first Standing Options have no previous version to undo to.
+      if (stored.standingOptionsHistory) delete stored.standingOptionsHistory.previous;
+    }
     config.models = [...models, stored];
   });
   return getModel(dirs, input.alias);
@@ -107,7 +113,7 @@ export async function addModel(dirs: Dirs, input: z.infer<typeof addModelInput>,
 
 /**
  * Changes any of a Model's fields. Renaming a default Model keeps it the default; changing its Modality does not.
- * Changed Model Notes are recorded as the User's, keeping the previous version.
+ * Changed Model Notes and Standing Options are recorded as the User's, keeping the previous version.
  */
 export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typeof updateModelInput>, at: Date): Promise<ModelView> {
   await updateConfig(dirs, (config) => {
@@ -133,7 +139,7 @@ export async function updateModel(dirs: Dirs, wanted: string, input: z.infer<typ
     if (input.modelId !== undefined) model.modelId = input.modelId;
     if (input.protocol !== undefined) model.protocol = input.protocol;
     if (input.notes !== undefined) replaceNotes(model, input.notes, "User", at);
-    if (input.standingOptions !== undefined) setStandingOptions(model, input.standingOptions);
+    if (input.standingOptions !== undefined) setStandingOptions(model, input.standingOptions, at);
   });
   return getModel(dirs, input.alias ?? wanted);
 }
@@ -144,6 +150,21 @@ export async function undoModelNotes(dirs: Dirs, wanted: string, at: Date): Prom
     const model = modelsOf(config).find((candidate) => candidate.alias === wanted);
     if (model === undefined) throw notFound(wanted);
     if (!undoNotes(model, at)) throw new SettingsError(409, `The Model Notes of "${wanted}" have no previous version to undo to.`);
+  });
+  return getModel(dirs, wanted);
+}
+
+/** Swaps a Model's Standing Options with their previous version, as a change by the User; a second undo redoes. */
+export async function undoModelStandingOptions(dirs: Dirs, wanted: string, at: Date): Promise<ModelView> {
+  await updateConfig(dirs, (config) => {
+    const model = modelsOf(config).find((candidate) => candidate.alias === wanted);
+    if (model === undefined) throw notFound(wanted);
+    const previous = model.standingOptionsHistory?.previous;
+    if (previous === undefined) throw new SettingsError(409, `The Standing Options of "${wanted}" have no previous version to undo to.`);
+    // The Protocol may have changed since, so the previous version is checked again.
+    const problem = standingOptionsProblem(previous, model.protocol, modalityOf(model));
+    if (problem !== undefined) throw new SettingsError(409, `Cannot undo: ${problem}`);
+    undoStandingOptions(model, at);
   });
   return getModel(dirs, wanted);
 }
@@ -178,15 +199,12 @@ export async function setDefaultModel(dirs: Dirs, modality: Modality, wanted: st
   return { alias: wanted };
 }
 
-/** Stores a Model's Standing Options, or with `null` or `{}` removes them; rejects what could never apply. */
-function setStandingOptions(model: StoredModel, value: unknown): void {
-  if (value === null || (isPlainObject(value) && Object.keys(value).length === 0)) {
-    delete model.standingOptions;
-    return;
-  }
-  const problem = standingOptionsProblem(value, model.protocol, modalityOf(model));
+/** Replaces a Model's Standing Options as the User's change, or with `null` or `{}` removes them; rejects what could never apply. */
+function setStandingOptions(model: StoredModel, value: unknown, at: Date): void {
+  const next = value === null ? {} : value;
+  const problem = standingOptionsProblem(next, model.protocol, modalityOf(model));
   if (problem !== undefined) throw new SettingsError(400, problem);
-  model.standingOptions = value as Record<string, unknown>;
+  replaceStandingOptions(model, next as Record<string, unknown>, "User", at);
 }
 
 function requireFreeAlias(models: StoredModel[], wanted: string): void {
@@ -226,6 +244,7 @@ function view(model: StoredModel, defaults: { defaultImageModel: string | null; 
     notes: model.notes ?? "",
     ...(model.notesHistory && { notesHistory: model.notesHistory }),
     ...(model.standingOptions && { standingOptions: model.standingOptions }),
+    ...(model.standingOptionsHistory && { standingOptionsHistory: model.standingOptionsHistory }),
     default: model.alias === (modality === "video" ? defaults.defaultVideoModel : defaults.defaultImageModel),
     ...(isLocalModel(model) && { local: true as const }),
   };

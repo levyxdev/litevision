@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
-import { ConfigError, modelSchema, needsSettings } from "./config.ts";
-import { isPlainObject, updateConfig } from "./config-store.ts";
+import { ConfigError, type ChangeAuthor, type StandingOptionsHistory } from "./config.ts";
+import { isPlainObject, updateModelAsAgent } from "./config-store.ts";
 import type { Dirs } from "./dirs.ts";
 import { adapterForProtocol } from "./protocols/index.ts";
 import { reservedConflicts } from "./protocols/requests.ts";
@@ -43,35 +42,56 @@ export function standingOptionsProblem(value: unknown, protocol: string, modalit
   return `Standing Options may not set ${conflicts.join(", ")}: litevision fills ${conflicts.length === 1 ? "that field" : "those fields"} itself for Protocol "${protocol}".`;
 }
 
+/** The part of a stored Model that holds its Standing Options. */
+export interface StandingOptionsHolder {
+  standingOptions?: Record<string, unknown>;
+  standingOptionsHistory?: StandingOptionsHistory;
+}
+
+/**
+ * Replaces a Model's Standing Options whole, keeping what they were as the one previous version; `{}` removes them.
+ * Returns false, and records nothing, when they are unchanged. Check the value with {@link standingOptionsProblem} first.
+ */
+export function replaceStandingOptions(model: StandingOptionsHolder, value: Record<string, unknown>, changedBy: ChangeAuthor, at: Date): boolean {
+  const current = model.standingOptions ?? {};
+  if (isDeepStrictEqual(value, current)) return false;
+  setStandingOptions(model, value);
+  model.standingOptionsHistory = { changedBy, changedAt: at.toISOString(), previous: current };
+  return true;
+}
+
+/** Swaps the current and previous Standing Options, as a change by the User; a second undo redoes. False when there is nothing to undo to. */
+export function undoStandingOptions(model: StandingOptionsHolder, at: Date): boolean {
+  const previous = model.standingOptionsHistory?.previous;
+  if (previous === undefined) return false;
+  const current = model.standingOptions ?? {};
+  setStandingOptions(model, previous);
+  model.standingOptionsHistory = { changedBy: "User", changedAt: at.toISOString(), previous: current };
+  return true;
+}
+
+/** Empty Standing Options are removed rather than stored. */
+function setStandingOptions(model: StandingOptionsHolder, value: Record<string, unknown>): void {
+  if (Object.keys(value).length === 0) delete model.standingOptions;
+  else model.standingOptions = value;
+}
+
 export interface AgentStandingChange {
   standingOptions: Record<string, unknown>;
   previous: Record<string, unknown>;
-  /** False when they already were these options, so nothing was written. */
+  /** False when they already were these options, so nothing was recorded. */
   changed: boolean;
+  /** The last change, which is this one when `changed`. */
+  history?: StandingOptionsHistory;
 }
 
-/** `update_standing_options`: replaces one Model's Standing Options in `config.json` with ones the User agreed to; `{}` clears them. */
-export function updateStandingOptionsAsAgent(dirs: Dirs, alias: string, value: Record<string, unknown>): Promise<AgentStandingChange> {
-  return updateConfig(dirs, (config) => {
-    const models = config.models ?? [];
-    const parsed = z.array(modelSchema).safeParse(models);
-    if (!parsed.success) throw needsSettings(`The Models in config.json are invalid: ${z.prettifyError(parsed.error)}`);
-    const stored = models as Array<z.input<typeof modelSchema>>;
-    if (stored.length === 0) throw needsSettings("litevision has no Model configured yet.");
-
-    const model = stored.find((candidate) => candidate.alias === alias);
-    if (model === undefined) {
-      throw new ConfigError(`Unknown Model Alias "${alias}". Known Aliases: ${stored.map((candidate) => candidate.alias).join(", ")}.`);
-    }
+/** `update_standing_options`: replaces one Model's Standing Options in `config.json` as a change by the Agent. */
+export function updateStandingOptionsAsAgent(dirs: Dirs, alias: string, value: Record<string, unknown>, at: Date): Promise<AgentStandingChange> {
+  return updateModelAsAgent(dirs, alias, (model) => {
+    const problem = standingOptionsProblem(value, model.protocol, model.modality ?? "image");
+    if (problem !== undefined) throw new ConfigError(problem);
     const previous = model.standingOptions ?? {};
-    if (isDeepStrictEqual(previous, value)) return { standingOptions: value, previous, changed: false };
-    if (Object.keys(value).length === 0) {
-      delete model.standingOptions;
-    } else {
-      const problem = standingOptionsProblem(value, model.protocol, model.modality ?? "image");
-      if (problem !== undefined) throw new ConfigError(problem);
-      model.standingOptions = value;
-    }
-    return { standingOptions: value, previous, changed: true };
+    const changed = replaceStandingOptions(model, value, "Agent", at);
+    return { standingOptions: value, previous, changed, history: model.standingOptionsHistory };
   });
 }

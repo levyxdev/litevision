@@ -456,19 +456,21 @@ function notesField(value) {
   return { textarea, wrapper };
 }
 
-/** "Last changed by the Agent, 30 Oct 2026, 10:00", plus an undo button when there is a previous version. */
-function notesHistoryRow(model, path) {
-  const history = model.notesHistory;
+/**
+ * "Last changed by your Agent, 30 Oct 2026, 10:00", plus an undo button when there is a previous version.
+ * \`what\` names the field, \`undoPath\` is its undo endpoint, and \`shown\` writes a previous version for the button's title.
+ */
+function historyRow(history, what, undoPath, shown) {
   if (!history) return [];
   const who = history.changedBy === "Agent" ? "your Agent" : "you";
   const when = new Date(history.changedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   const parts = [el("span", { textContent: "Last changed by " + who + ", " + when + "." })];
   if (history.previous !== undefined) {
-    const undo = el("button", { type: "button", className: "small", textContent: "Undo", title: "Back to: " + (history.previous || "(no Model Notes)") });
+    const undo = el("button", { type: "button", className: "small", textContent: "Undo", title: "Back to: " + (shown(history.previous) || "(no " + what + ")") });
     undo.onclick = () => act(undo, async () => {
-      await api("POST", path + "/notes/undo");
+      await api("POST", undoPath);
       await loadModels();
-    }, "Model Notes restored. Undo again to redo.");
+    }, what + " restored. Undo again to redo.");
     parts.push(undo);
   }
   return [el("div", { className: "note" }, ...parts)];
@@ -557,7 +559,9 @@ function modelCard(model) {
     }, "Model removed.");
   };
 
-  notes.wrapper.append(...notesHistoryRow(model, path));
+  notes.wrapper.append(...historyRow(model.notesHistory, "Model Notes", path + "/notes/undo", (notes) => notes));
+  standing.wrapper.append(...historyRow(model.standingOptionsHistory, "Standing Options", path + "/standing-options/undo",
+    (options) => (Object.keys(options).length === 0 ? "" : JSON.stringify(options))));
 
   const statuses = optionStatuses[model.alias] || {};
   const flagged = (statuses.ignored || []).length + (statuses.rejected || []).length;

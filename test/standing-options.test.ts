@@ -13,8 +13,12 @@ const videoId = "01a1a5f7-aab2-741e-af5a-38d3d6b4e040";
 
 const standing = { steps: 28, guidance: 3.5, output: { format: "png", quality: 90 }, seed: 7 };
 
-async function start() {
+const firstChange = new Date("2026-11-21T10:00:00.000Z");
+const secondChange = new Date("2026-11-21T11:30:00.000Z");
+
+async function start(now = () => firstChange) {
   harness = await startHarness({
+    now,
     config: {
       providers: [{ id: "together-ai", baseUrl: `${root}/v1` }],
       models: [
@@ -135,14 +139,24 @@ describe("update_standing_options", () => {
       (model) => model.alias === alias,
     )!;
 
-  test("replaces a Model's Standing Options whole and returns the previous ones; later Jobs send the new ones", async () => {
+  test("replaces a Model's Standing Options whole, keeps the previous version and records the Agent and when; later Jobs send the new ones", async () => {
     const h = await start();
     const result = await update({ model: "flux2", standing_options: { steps: 40 } });
 
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toEqual({ model: "flux2", standing_options: { steps: 40 }, previous_standing_options: standing, changed: true });
+    expect(result.structuredContent).toEqual({
+      model: "flux2",
+      standing_options: { steps: 40 },
+      previous_standing_options: standing,
+      changed: true,
+      changed_by: "Agent",
+      changed_at: firstChange.toISOString(),
+    });
     expect(textOf(result)).toContain(JSON.stringify(standing));
-    expect((await stored("flux2")).standingOptions).toEqual({ steps: 40 });
+    expect(await stored("flux2")).toMatchObject({
+      standingOptions: { steps: 40 },
+      standingOptionsHistory: { changedBy: "Agent", changedAt: firstChange.toISOString(), previous: standing },
+    });
     expect((await stored("sdxl")).standingOptions).toBeUndefined();
 
     await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox" } });
@@ -162,10 +176,45 @@ describe("update_standing_options", () => {
     expect(await stored("sdxl")).not.toHaveProperty("standingOptions");
   });
 
-  test("the same options again change nothing", async () => {
+  test("the same options again record no change", async () => {
     await start();
     const result = await update({ model: "flux2", standing_options: standing });
-    expect(result.structuredContent).toMatchObject({ changed: false });
+    expect(result.structuredContent).toMatchObject({ changed: false, changed_by: null });
+    expect(await stored("flux2")).not.toHaveProperty("standingOptionsHistory");
+  });
+
+  test("a video Model's own reserved fields are refused", async () => {
+    await start();
+    const result = await update({ model: "wan", standing_options: { media: { frame_images: [] } } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("`media`");
+  });
+
+  test("with no Model configured, tells the Agent to call open_settings", async () => {
+    harness = await startHarness();
+    const result = await update({ model: "flux2", standing_options: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Call `open_settings`");
+  });
+
+  test("the User sees the Agent's change in the settings page and can undo it", async () => {
+    let now = firstChange;
+    const h = await start(() => now);
+    await update({ model: "flux2", standing_options: { steps: 40 } });
+
+    await h.client.callTool({ name: "open_settings", arguments: {} });
+    const page = new URL(h.openedUrls[0]!);
+    const headers = { origin: page.origin, "x-litevision-token": page.searchParams.get("token")! };
+    const models = (await (await fetch(new URL("/api/models", page.origin), { headers })).json()) as { models: Array<{ standingOptionsHistory: unknown }> };
+    expect(models.models[0]!.standingOptionsHistory).toMatchObject({ changedBy: "Agent", previous: standing });
+
+    now = secondChange;
+    const undone = await fetch(new URL("/api/models/flux2/standing-options/undo", page.origin), { method: "POST", headers });
+    expect(undone.status).toBe(200);
+    expect(await stored("flux2")).toMatchObject({
+      standingOptions: standing,
+      standingOptionsHistory: { changedBy: "User", changedAt: secondChange.toISOString(), previous: { steps: 40 } },
+    });
   });
 
   test("rejects a field the Model's Protocol fills itself, naming it, and changes nothing", async () => {
@@ -185,6 +234,6 @@ describe("update_standing_options", () => {
 
   test("the server instructions require showing old and new Standing Options and getting the User's agreement first", async () => {
     const h = await start();
-    expect(h.client.getInstructions()).toMatch(/update_standing_options.*old and new Standing Options.*agree/);
+    expect(h.client.getInstructions()).toMatch(/update_standing_options.*old and new .*Standing Options.*agree/);
   });
 });

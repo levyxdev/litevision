@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { ConfigError, credentialsSchema } from "./config.ts";
+import { z } from "zod";
+import { ConfigError, credentialsSchema, modelSchema, needsSettings } from "./config.ts";
 import type { Dirs } from "./dirs.ts";
 
 /** `config.json` as stored: every field is kept, including ones this version of litevision does not know. */
@@ -41,6 +42,25 @@ export function updateConfig<T>(dirs: Dirs, change: (config: ConfigObject) => T)
     const result = change(config);
     await writeFileAtomic(configPath(dirs), `${JSON.stringify(config, null, 2)}\n`);
     return result;
+  });
+}
+
+/** A Model as stored in `config.json`, before defaults apply. */
+export type StoredModel = z.input<typeof modelSchema>;
+
+/** Changes one Model in `config.json` for the Agent, with errors the Agent can relay when there is no such Model. */
+export function updateModelAsAgent<T>(dirs: Dirs, alias: string, change: (model: StoredModel) => T): Promise<T> {
+  return updateConfig(dirs, (config) => {
+    const models = config.models ?? [];
+    const parsed = z.array(modelSchema).safeParse(models);
+    if (!parsed.success) throw needsSettings(`The Models in config.json are invalid: ${z.prettifyError(parsed.error)}`);
+    const stored = models as StoredModel[];
+    if (stored.length === 0) throw needsSettings("litevision has no Model configured yet.");
+    const model = stored.find((candidate) => candidate.alias === alias);
+    if (model === undefined) {
+      throw new ConfigError(`Unknown Model Alias "${alias}". Known Aliases: ${stored.map((candidate) => candidate.alias).join(", ")}.`);
+    }
+    return change(model);
   });
 }
 

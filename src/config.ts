@@ -13,20 +13,26 @@ export const providerSchema = z.object({
 /** Model Notes stay short so `list_models` costs the Agent little context. */
 export const modelNotesMaxLength = 300;
 
-/** Who changed Model Notes: the User (in the settings page) or the Agent (with `update_model_notes`). */
-export const notesAuthors = ["User", "Agent"] as const;
-export type NotesAuthor = (typeof notesAuthors)[number];
+/** Who last changed a Model's Notes or Standing Options: the User (in the settings page) or the Agent (with its update tool). */
+export const changeAuthors = ["User", "Agent"] as const;
+export type ChangeAuthor = (typeof changeAuthors)[number];
 
-/** The last change to a Model's Notes, and the one previous version it replaced. */
-export const notesHistorySchema = z.object({
-  changedBy: z.enum(notesAuthors),
-  /** ISO 8601. */
-  changedAt: z.string(),
-  /** The Model Notes before the last change; `""` when there were none. Absent when there is nothing to undo to. */
-  previous: z.string().optional(),
-});
+/** The last change to a field of a Model, and the one previous version it replaced. */
+const changeHistorySchema = <T extends z.ZodType>(previous: T) =>
+  z.object({
+    changedBy: z.enum(changeAuthors),
+    /** ISO 8601. */
+    changedAt: z.string(),
+    /** The value before the last change, empty when there was none. Absent when there is nothing to undo to. */
+    previous: previous.optional(),
+  });
+
+const standingOptionsSchema = z.record(z.string(), z.unknown());
+export const notesHistorySchema = changeHistorySchema(z.string());
+export const standingOptionsHistorySchema = changeHistorySchema(standingOptionsSchema);
 
 export type NotesHistory = z.infer<typeof notesHistorySchema>;
+export type StandingOptionsHistory = z.infer<typeof standingOptionsHistorySchema>;
 
 export const modelSchema = z.object({
   alias: z.string().min(1),
@@ -38,7 +44,8 @@ export const modelSchema = z.object({
   notes: z.string().optional(),
   notesHistory: notesHistorySchema.optional(),
   /** Standing Options (ADR 0010): request fields every Job on the Model sends, under the Agent's `provider_options`. */
-  standingOptions: z.record(z.string(), z.unknown()).optional(),
+  standingOptions: standingOptionsSchema.optional(),
+  standingOptionsHistory: standingOptionsHistorySchema.optional(),
 });
 
 const configSchema = z.object({

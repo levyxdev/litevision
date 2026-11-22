@@ -284,14 +284,49 @@ describe("Standing Options (ADR 0010)", () => {
     const cleared = await edit(null);
     expect(cleared.status).toBe(200);
     expect(cleared.json().model).not.toHaveProperty("standingOptions");
-    expect((await h.readConfig()).models[0]).toEqual(gptImage);
+    expect((await h.readConfig()).models[0]).toEqual({ ...gptImage, standingOptionsHistory: expect.anything() });
   });
 
   test("an empty object clears them too", async () => {
     const h = await start(withModel);
     await edit({ quality: "high" });
     expect((await edit({})).status).toBe(200);
-    expect((await h.readConfig()).models[0]).toEqual(gptImage);
+    expect((await h.readConfig()).models[0]).not.toHaveProperty("standingOptions");
+  });
+
+  test("saving records the User and when, keeping the previous version; saving the same again records nothing", async () => {
+    const time = clock(firstChange);
+    const h = await start({ ...withModel, now: time.now });
+    await edit({ quality: "high" });
+    time.set(secondChange);
+    const saved = await edit({ quality: "low" });
+    const history = { changedBy: "User", changedAt: secondChange.toISOString(), previous: { quality: "high" } };
+    expect(saved.json().model.standingOptionsHistory).toEqual(history);
+    expect((await h.readConfig()).models[0].standingOptionsHistory).toEqual(history);
+
+    time.set(new Date("2026-10-30T12:00:00.000Z"));
+    await edit({ quality: "low" });
+    expect((await h.readConfig()).models[0].standingOptionsHistory).toEqual(history);
+  });
+
+  test("undo swaps back to the previous version as the User's change, and a second undo redoes", async () => {
+    const time = clock(firstChange);
+    const h = await start({ ...withModel, now: time.now });
+    const undo = () => h.send("POST", "/api/models/gpt-image/standing-options/undo");
+    expect((await undo()).status).toBe(409);
+
+    await edit({ quality: "high" });
+    time.set(secondChange);
+    const undone = await undo();
+    expect(undone.status).toBe(200);
+    expect(undone.json().model).not.toHaveProperty("standingOptions");
+    expect((await h.readConfig()).models[0].standingOptionsHistory).toEqual({
+      changedBy: "User",
+      changedAt: secondChange.toISOString(),
+      previous: { quality: "high" },
+    });
+
+    expect((await undo()).json().model.standingOptions).toEqual({ quality: "high" });
   });
 
   test("rejects Standing Options that are not a JSON object, and says why", async () => {
@@ -345,6 +380,7 @@ describe("Models area", () => {
     expect(page.text).toContain('id="model-list"');
     expect(page.text).toContain('id="add-model"');
     expect(page.text).toContain("/notes/undo");
+    expect(page.text).toContain("/standing-options/undo");
   });
 });
 

@@ -20,6 +20,7 @@ import {
   setDefaultModel,
   setDefaultInput,
   undoModelNotes,
+  undoModelStandingOptions,
   updateModel,
   updateModelInput,
 } from "./models.ts";
@@ -163,6 +164,11 @@ const routes: Route[] = [
     method: "POST",
     path: "/api/models/:alias/notes/undo",
     handler: async ({ dirs, now, params }) => ({ body: { model: await undoModelNotes(dirs, params.alias!, now()) } }),
+  },
+  {
+    method: "POST",
+    path: "/api/models/:alias/standing-options/undo",
+    handler: async ({ dirs, now, params }) => ({ body: { model: await undoModelStandingOptions(dirs, params.alias!, now()) } }),
   },
   {
     method: "DELETE",
