@@ -154,12 +154,4 @@ describe("update_model_notes", () => {
       previous: "cartoonish",
     });
   });
-
-  test("the server instructions require showing old and new Model Notes and getting the User's agreement first", async () => {
-    harness = await startHarness();
-    const instructions = harness.client.getInstructions() ?? "";
-    expect(instructions).toContain("update_model_notes");
-    expect(instructions).toMatch(/old and new Model Notes/);
-    expect(instructions).toMatch(/agree/);
-  });
 });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { copyFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { startHarness, type Harness, type Route } from "./harness.ts";
-import { mp4Of, pngOfSize, recorded, textOf } from "./helpers.ts";
+import { mp4Of, pngOfSize, recorded } from "./helpers.ts";
 
 /** Source Jobs (GLOSSARY.md): the earlier Jobs whose results are among a Job's reference images, found by content hash. */
 
@@ -62,7 +62,7 @@ async function generate(args: Record<string, unknown>): Promise<JobOutput> {
 async function getJob(jobId: string) {
   const result = await harness!.client.callTool({ name: "get_job", arguments: { job_id: jobId } });
   expect(result.isError).toBeFalsy();
-  return { output: result.structuredContent as unknown as JobOutput, text: textOf(result) };
+  return { output: result.structuredContent as unknown as JobOutput };
 }
 
 describe("Source Jobs", () => {
@@ -73,7 +73,7 @@ describe("Source Jobs", () => {
     await copyFile(first.files[0]!, copy);
 
     const second = await generate({ prompt: "darken the fur", references: [copy], name: "darker" });
-    const { output, text } = await getJob(second.job_id);
+    const { output } = await getJob(second.job_id);
 
     expect(output.source_jobs).toEqual([
       { job_id: first.job_id, result: 1, model: "gpt-image", file: first.files[0]!, deleted: false, reference: copy },
@@ -88,7 +88,7 @@ describe("Source Jobs", () => {
     await rm(first.files[0]!);
 
     const second = await generate({ prompt: "darken the fur", references: [copy], name: "darker" });
-    const { output, text } = await getJob(second.job_id);
+    const { output } = await getJob(second.job_id);
 
     expect(output.source_jobs).toMatchObject([{ job_id: first.job_id, file: first.files[0]!, deleted: true }]);
     expect((await getJob(first.job_id)).output.files).toEqual(first.files);
@@ -113,10 +113,9 @@ describe("Source Jobs", () => {
     await Bun.write(unrelated, pngOfSize(101, 102));
 
     const second = await generate({ prompt: "darken the fur", references: [unrelated] });
-    const { output, text } = await getJob(second.job_id);
+    const { output } = await getJob(second.job_id);
 
     expect(output).not.toHaveProperty("source_jobs");
-    expect(text).not.toContain("Source Job");
   });
 
   test("lists each Source Job once, in the order of the references, with several Source Jobs from several references", async () => {

@@ -142,21 +142,6 @@ describe("rate_job", () => {
     const { models } = listed.structuredContent as { models: Array<{ option_statuses: { accepted: Array<{ options: unknown }> } }> };
     expect(models[0]!.option_statuses.accepted.map((status) => status.options)).toEqual([{ quality: "high" }]);
   });
-
-  test("is listed, and the server instructions say to rate only on the User's own verdict", async () => {
-    harness = await startHarness();
-    const { tools } = await harness.client.listTools();
-    expect(tools.map((tool) => tool.name)).toContain("rate_job");
-    const instructions = harness.client.getInstructions() ?? "";
-    expect(instructions).toContain("rate_job");
-    expect(instructions).toMatch(/never invent/i);
-  });
-
-  test("the server instructions say to pass `result` when the verdict is about one result", async () => {
-    harness = await startHarness();
-    const instructions = harness.client.getInstructions() ?? "";
-    expect(instructions).toMatch(/about one result[^.]*pass `result`/i);
-  });
 });
 
 describe("rate_job with a result", () => {

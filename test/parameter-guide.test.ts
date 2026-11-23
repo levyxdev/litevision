@@ -32,7 +32,7 @@ async function describe1(models: unknown[], alias: string) {
 
 describe("list_models: the Parameter Guide (ADR 0010)", () => {
   test("with `model`, an OpenAI gpt-image-2.5 Model shows `size` with its arbitrary-size rule, `quality`, and the entry's sources and check date", async () => {
-    const { result, model } = await describe1(
+    const { model } = await describe1(
       [{ alias: "flare", provider: "openai", modelId: "gpt-image-2.5-flare", protocol: "openai-images" }],
       "flare",
     );
@@ -77,7 +77,7 @@ describe("list_models: the Parameter Guide (ADR 0010)", () => {
   });
 
   test("a model id that matches no family gets no guessed entry: litevision says it has none and gives the docs link", async () => {
-    const { result, model } = await describe1(
+    const { model } = await describe1(
       [{ alias: "mystery", provider: "openai", modelId: "acme-paint-7", protocol: "openai-images" }],
       "mystery",
     );

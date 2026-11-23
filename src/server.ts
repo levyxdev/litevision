@@ -79,19 +79,17 @@ export interface ServerDeps {
   runtime?: Runtime;
 }
 
-export const instructions = `litevision generates images and videos through Models the User has configured with their own Providers. Before writing a prompt, use the litevision Skill. If you do not have it, mention once that the User can install it with \`npx skills add levyxdev/litevision\`.
+export const instructions = `litevision generates images and videos through Models the User configured with their own Providers. Before writing a prompt, use the litevision Skill; if you do not have it, mention once that the User can install it with \`npx skills add levyxdev/litevision\`.
 
-- Never ask the User for an API key or any other Credential. If litevision reports that nothing is configured, call \`open_settings\` so the User can set it up in their browser.
-- Use the Model the User names. When they name none, omit \`model\` for the default, unless the request needs something the default lacks; then choose with \`list_models\`.
-- litevision passes \`provider_options\` to the Provider as they are and translates nothing: write each Model's own fields, such as the size, resolution or length, from its Parameter Guide (\`list_models\` with \`model\`). Without them the Provider's defaults apply. Each value's Option Status (\`list_models\`) says what the latest evidence shows: reuse Honoured values; Accepted means the Provider did not reject it but its effect is unknown; never resend a Rejected or Ignored value unchanged, but read the Parameter Guide and docs first, as for anything with no Option Status.
-- Before writing \`provider_options\`, read the Model's Standing Options (\`list_models\`): every Job sends them already, so add only what they lack, and override one only when the User asks.
-- If the Provider rejects an option (the error says it "rejected an option"), fix it from the Provider's message and the docs and try again, at most twice. If it is still rejected, stop and tell the User what the Provider said.
-- Tell the User where the files are, and pass on whatever a result says did not match the request, came back short or overrode a Standing Option.
-- \`generate_comparison\` costs as much as all its Jobs. Start a Comparison only when the User asks for one or agrees to it.
-- When the User says what they think of a result, call \`rate_job\` with their verdict and a one-line reason in their words; when it is about one result of a Job with several, pass \`result\`. Never invent a verdict, and never rate a result yourself.
-- When the User chooses among a Comparison's results, call \`pick_result\`, only when the User actually chooses. A Pick is not a Rating: if they also give a verdict, call \`rate_job\` too.
-- Before calling \`update_model_notes\` or \`update_standing_options\`, show the User the old and new Model Notes or Standing Options and get their agreement; never change them without it.
-- Call \`delete_jobs\` only when the User asks to delete Jobs or their results: it deletes them for good, with their files. Tell the User what its report says was skipped and why.`;
+- Never ask the User for a Credential. When litevision reports something is not configured, call \`open_settings\`.
+- Use the Model the User names. Otherwise omit \`model\` for the default, unless the request needs something it lacks; then choose with \`list_models\`.
+- \`provider_options\` go to the Provider untranslated, in each Model's own fields from its Parameter Guide (\`list_models\` with \`model\`), over its Standing Options. Reuse Honoured values; never resend a Rejected or Ignored value unchanged.
+- When the Provider rejects an option, fix it from its message and the docs and retry, at most twice; then tell the User what it said.
+- Tell the User where the files are, and pass on any \`mismatch\`, \`shortfall\` or \`overrides\` in a result.
+- Start a Comparison (\`generate_comparison\`) only when the User asks or agrees.
+- When the User judges a result, call \`rate_job\`; when they choose among a Comparison's results, call \`pick_result\`.
+- Change Model Notes or Standing Options only with the User's agreement.
+- Delete Jobs only when the User asks.`;
 
 /** How many of a Model's Ratings `list_models` with `model` shows (ADR 0008). */
 const recentRatingsShown = 5;
@@ -107,7 +105,7 @@ const optionStatusSchema = z.object({
     .describe("The `provider_options` keys and the values sent; several keys when a check reads them together, such as width and height."),
   job_id: z.string().describe("The Job the latest evidence comes from."),
   job_deleted: z.literal(true).optional().describe("True when the User has deleted that Job since; the evidence still stands."),
-  date: z.string().describe("When that Job started. Read the docs first when it is old: Providers change their rules."),
+  date: z.string().describe("When that Job started."),
   reason: z.string().optional().describe("Ignored: how the result differed from the request. Rejected: what the Provider said."),
 });
 
@@ -119,7 +117,7 @@ const sourceJobsSchema = z
       result: z.number().describe("Which result of the Source Job, from 1."),
       model: z.string().optional().describe("Alias of the Model that ran the Source Job."),
       file: z.string().describe("Where the Source Job saved that result."),
-      deleted: z.boolean().describe("True when the User has deleted or moved that file since. Not an error: the Source Job still stands."),
+      deleted: z.boolean().describe("True when the User has deleted or moved that file since."),
       job_deleted: z.literal(true).optional().describe("True when the User has deleted the Source Job itself from the Job history."),
       reference: z.string().describe("This Job's reference image or video frame that had the result's content."),
     }),
@@ -143,9 +141,7 @@ const listedModelSchema = z.object({
   standing_options: z
     .record(z.string(), z.unknown())
     .optional()
-    .describe(
-      "Standing Options the User set or agreed to: request fields every Job on this Model sends. Your `provider_options` are merged over them: your values win, objects merge key by key, and `null` removes a key for that Job.",
-    ),
+    .describe("Standing Options the User set or agreed to: request fields every Job on this Model sends."),
   docs_url: z.string().optional().describe("Only with `model`: where to read which `provider_options` this Model accepts."),
   parameters: z
     .string()
@@ -156,7 +152,7 @@ const listedModelSchema = z.object({
   parameter_guide: z
     .object({
       family: z.string(),
-      checked: z.string().describe("When the sources were last checked; read the docs first when this is old."),
+      checked: z.string().describe("When the sources were last checked."),
       sources: z.array(z.string()).optional(),
       parameters: z
         .array(
@@ -202,9 +198,7 @@ const listedModelSchema = z.object({
       }),
     )
     .optional()
-    .describe(
-      `Only with \`model\`: the Model's ${recentRatingsShown} most recent Ratings, newest first, each with its Job's Source Jobs, so a chain of edits reads in order. When they say something the Model Notes do not, propose new Model Notes to the User.`,
-    ),
+    .describe(`Only with \`model\`: the Model's ${recentRatingsShown} most recent Ratings, newest first, each with its Job's Source Jobs.`),
   recent_picks: z
     .array(
       z.object({
@@ -219,7 +213,7 @@ const listedModelSchema = z.object({
     )
     .optional()
     .describe(
-      `Only with \`model\`: the current Picks of up to ${recentPicksShown} Comparisons this Model took part in, most recently picked first, one entry per Job of this Model in them. A Pick is a relative preference among the Comparison's results, not a Rating.`,
+      `Only with \`model\`: the current Picks of up to ${recentPicksShown} Comparisons this Model took part in, most recently picked first, one entry per Job of this Model in them.`,
     ),
   parameter_schema: z
     .unknown()
@@ -534,7 +528,7 @@ function uncheckedOutput(requested: Requested) {
 const mismatchSchema = z
   .string()
   .optional()
-  .describe("Present when the result's shape, pixel size, length or file format differs from the request: an option may not have taken effect. Tell the User.");
+  .describe("Present when the result's shape, pixel size, length or file format differs from the request: how.");
 
 const optionsSentSchema = z
   .object({
@@ -554,7 +548,7 @@ const overridesSchema = z
     }),
   )
   .optional()
-  .describe("Present when this Job replaced or dropped a Standing Option: the User set those for every Job, so tell them.");
+  .describe("Present when this Job replaced or dropped a Standing Option.");
 
 /** The `options_sent` and `overrides` fields of a Job's output. */
 function optionsOutput(sources: OptionSources) {
@@ -590,13 +584,13 @@ function recordedSources(record: JobRecord | undefined): OptionSources | undefin
 
 const jobStatusSchema = z
   .enum(["completed", "running"])
-  .describe('"running" when the Job outlasted the wait limit, or `wait` was false, and continues in the background; call `get_job` with its `job_id`.');
+  .describe('"running" when the Job outlasted the wait limit, or `wait` was false, and continues in the background.');
 
 const waitSchema = z
   .boolean()
   .default(true)
   .describe(
-    "false: start the Job and return its `job_id` at once; it runs in the background, and `get_job` collects it. Defaults to true: wait for the Job, up to two minutes.",
+    "false: start the Job and return its `job_id` at once; it runs in the background. Defaults to true: wait for the Job, up to two minutes.",
   );
 
 /**
@@ -613,6 +607,14 @@ function referencesSchema(purpose: string, caveat: string) {
 }
 
 const kontextTakesFirst = "FLUX.1 Kontext on Together takes only the first.";
+
+/** How a Job's own `provider_options` meet the Model's Standing Options, which every Job sends. */
+const overStanding =
+  "Merged over the Model's Standing Options, which every Job sends: your values win, objects merge key by key, and `null` drops a key. Add only what they lack, and override one only when the User asks.";
+
+/** Why and how to start several Jobs at once, said once on each tool that starts one (ADR 0012). */
+const severalJobs =
+  "To make several at once, with different prompts, Models or options, start each Job with `wait: false`, then collect each with `get_job`: tool calls often run one after another even when sent together, and Jobs started this way run at the same time.";
 
 /** The fields `generate_image`, `generate_video` and `get_job` share. */
 function jobOutput(job: JobState) {
@@ -725,13 +727,13 @@ const failedJobSchema = z.object({
 });
 
 /** The `name` parameter of the tools that start Jobs. */
-function nameSchema(what: string, example: string) {
+function nameSchema(what: string, example: string, timeExample: string) {
   return z
     .string()
     .min(1)
     .optional()
     .describe(
-      `What to name ${what}, in any language, e.g. the person or product it is for: "张三" saves ${example}. A name already taken in the folder gets -2, -3. Omit to name them after the time the Job started, e.g. 140500.png.`,
+      `What to name ${what}, in any language, e.g. the person or product it is for: "张三" saves ${example}. A name already taken in the folder gets -2, -3. Omit to name them after the time the Job started, e.g. ${timeExample}.`,
     );
 }
 
@@ -855,7 +857,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "generate_image",
     {
       description:
-        "Generate images from a text prompt with one of the User's configured Models. Saves the images locally and returns their file paths. To make several images at once with different prompts, Models or options, start each Job with `wait: false`, then collect each with `get_job`: they run at the same time, so the whole takes about as long as the slowest.",
+        `Generate images from a text prompt with one of the User's configured Models. Saves the images locally and returns their file paths; a Job still running continues in the background, and \`get_job\` collects it. ${severalJobs}`,
       // Strict, so a parameter that no longer exists (`aspect_ratio`, ADR 0010) is refused by name, not ignored.
       inputSchema: z.strictObject({
         prompt: z.string().min(1).describe("Sent to the Model verbatim."),
@@ -874,12 +876,12 @@ export function createServer(deps: ServerDeps): McpServer {
           .describe(
             "Folder to save the images in, e.g. the project's assets folder; created if missing. Relative paths resolve against litevision's working directory. Omit to save under a dated folder in the User's home directory.",
           ),
-        name: nameSchema("the images", "张三.png; several images as 张三-1.png, 张三-2.png"),
+        name: nameSchema("the images", "张三.png; several images as 张三-1.png, 张三-2.png", "140500.png"),
         provider_options: z
           .record(z.string(), z.unknown())
           .default({})
           .describe(
-            "The Model's own request fields, passed through untouched, e.g. { \"size\": \"2048x1152\" } for OpenAI: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt, reference image fields and response format are litevision's.",
+            `The Model's own request fields, passed through untouched, e.g. { "size": "2048x1152" } for OpenAI: see its Parameter Guide in \`list_models\`. ${overStanding} Only the model id, prompt, reference image fields and response format are litevision's.`,
           ),
         wait: waitSchema,
       }),
@@ -892,7 +894,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "generate_video",
     {
       description:
-        "Generate one video from a text prompt with one of the User's configured video Models, optionally from a first and last frame or reference images. Saves the video locally and returns its file path. Videos often take minutes: the Job then keeps running in the background. To make several videos at once, start each Job with `wait: false`, then collect each with `get_job`: they run at the same time.",
+        `Generate one video from a text prompt with one of the User's configured video Models, optionally from a first and last frame or reference images. Saves the video locally and returns its file path. Videos often take minutes: a Job still running continues in the background, and \`get_job\` collects it. ${severalJobs}`,
       inputSchema: z.strictObject({
         prompt: z.string().min(1).describe("Sent to the Model verbatim. Describe motion and camera movement, not only the scene."),
         model: z.string().optional().describe("Alias of the video Model to use. Omit to use the default video Model."),
@@ -903,13 +905,15 @@ export function createServer(deps: ServerDeps): McpServer {
           .string()
           .min(1)
           .optional()
-          .describe("Folder to save the video in; created if missing. Omit to save under a dated folder in the User's home directory."),
-        name: nameSchema("the video", "张三.mp4"),
+          .describe(
+            "Folder to save the video in; created if missing. Relative paths resolve against litevision's working directory. Omit to save under a dated folder in the User's home directory.",
+          ),
+        name: nameSchema("the video", "张三.mp4", "140500.mp4"),
         provider_options: z
           .record(z.string(), z.unknown())
           .default({})
           .describe(
-            "The Model's own request fields, passed through untouched, e.g. { \"resolution\": \"1080P\", \"ratio\": \"9:16\", \"seconds\": \"10\" } for Wan 2.7: see its Parameter Guide in `list_models`. Merged over the Model's Standing Options. Only the model id, prompt and media fields are litevision's.",
+            `The Model's own request fields, passed through untouched, e.g. { "resolution": "1080P", "ratio": "9:16", "seconds": "10" } for Wan 2.7: see its Parameter Guide in \`list_models\`. ${overStanding} Only the model id, prompt and media fields are litevision's.`,
           ),
         wait: waitSchema,
       }),
@@ -921,7 +925,7 @@ export function createServer(deps: ServerDeps): McpServer {
   server.registerTool(
     "generate_comparison",
     {
-      description: `Start a Comparison: 2 to ${maxComparisonVariants} Jobs together for one request, differing in prompt, in Model, or both, so the User can choose among their results. All variants' Models must share one Modality. Start one only when the User asks for a Comparison or agrees to one: it costs as much as all its Jobs. Saves each Job's files locally and returns them under one Comparison id.`,
+      description: `Start a Comparison: 2 to ${maxComparisonVariants} Jobs together for one request, differing in prompt, in Model, or both, so the User can choose among their results. It costs as much as all its Jobs. All variants' Models must share one Modality. Saves each Job's files locally and returns them under one Comparison id; show the User every result. A Job still running continues in the background, and \`get_job\` collects it.`,
       inputSchema: z.strictObject({
         variants: z
           .array(
@@ -934,11 +938,11 @@ export function createServer(deps: ServerDeps): McpServer {
                 .positive()
                 .optional()
                 .describe("Image Comparisons only: how many images this variant's Job makes. Defaults to 1."),
-              name: nameSchema("this variant's files", "张三.png"),
+              name: nameSchema("this variant's files", "张三.png or 张三.mp4", "140500.png or 140500.mp4"),
               provider_options: z
                 .record(z.string(), z.unknown())
                 .default({})
-                .describe("This variant's own request fields, in its Model's own names (see its Parameter Guide), merged over its Standing Options."),
+                .describe(`This variant's own request fields, in its Model's own names (see its Parameter Guide). ${overStanding}`),
             }),
           )
           .min(2)
@@ -953,7 +957,9 @@ export function createServer(deps: ServerDeps): McpServer {
           .string()
           .min(1)
           .optional()
-          .describe("Folder to save every Job's files in; created if missing. Omit to save under a dated folder in the User's home directory."),
+          .describe(
+            "Folder to save every Job's files in; created if missing. Relative paths resolve against litevision's working directory. Omit to save under a dated folder in the User's home directory.",
+          ),
       }),
       outputSchema: {
         comparison_id: z.string(),
@@ -961,7 +967,7 @@ export function createServer(deps: ServerDeps): McpServer {
         jobs: z
           .array(z.union([z.object(imageJobShape), z.object(videoJobShape), failedJobSchema]))
           .describe(
-            "One per variant, in the order given: each as `generate_image` or `generate_video` returns it, or status \"failed\" with why. A \"running\" Job continues in the background; call `get_job` with its `job_id`.",
+            'One per variant, in the order given: each as `generate_image` or `generate_video` returns it, or status "failed" with why.',
           ),
       },
     },
@@ -1067,7 +1073,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "cancel_job",
     {
       description:
-        "Cancel a running Job, such as a long local one the User no longer wants. On a local Model the Runtime stops it at its next step and keeps the Model loaded; a Job still waiting for its turn never starts. On a cloud Model litevision only stops waiting: the Provider may still finish the Job and bill for it.",
+        "Cancel a running Job the User no longer wants, such as a long local one. On a local Model the Runtime stops it at its next step and keeps the Model loaded; a Job still waiting for its turn never starts. On a cloud Model litevision only stops waiting: the Provider may still finish the Job and bill for it. While it is `cancelling`, `get_job` shows it end.",
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `generate_comparison` returned."),
       },
@@ -1075,7 +1081,7 @@ export function createServer(deps: ServerDeps): McpServer {
         job_id: z.string(),
         status: z
           .enum(["cancelled", "cancelling"])
-          .describe('"cancelling" while the Runtime or another litevision session has yet to stop it; call `get_job` to see it end.'),
+          .describe('"cancelling" while the Runtime or another litevision session has yet to stop it.'),
         message: z.string(),
       },
     },
@@ -1093,7 +1099,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "delete_jobs",
     {
       description:
-        "Delete Jobs from the User's Job history for good: their records, Ratings and Picks, and the image and video files they saved. Reference images are never deleted, nor are folders named with `output_path`. Call it only when the User asks to delete Jobs or their results; there is no undo. Give exactly one of `job_ids`, `comparison_ids` or `all`. A Job a litevision session is still running is left alone: cancel it first. A Job whose session ended before it finished is interrupted, and is deleted like any other. What litevision learnt about each Model's `provider_options` is kept.",
+        "Delete Jobs from the User's Job history for good, with no undo: their records, Ratings and Picks, and the image and video files they saved. Reference images are never deleted, nor are folders named with `output_path`. Give exactly one of `job_ids`, `comparison_ids` or `all`. A Job a litevision session is still running is left alone: cancel it first. A Job whose session ended before it finished is interrupted, and is deleted like any other. What litevision learnt about each Model's `provider_options` is kept. Tell the User what the report says was skipped and why.",
       inputSchema: {
         job_ids: z.array(z.string().min(1)).min(1).optional().describe("The Jobs to delete."),
         comparison_ids: z.array(z.string().min(1)).min(1).optional().describe("Comparisons to delete with all their Jobs."),
@@ -1102,12 +1108,12 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: {
         deleted_jobs: z.array(z.string()).optional(),
         deleted_files: z.array(z.string()).optional(),
-        already_gone: z.array(z.string()).optional().describe("Result files that were no longer there, as when the User had deleted or moved them. Nothing to report as a problem."),
+        already_gone: z.array(z.string()).optional().describe("Result files that were no longer there, as when the User had deleted or moved them."),
         skipped_files: z
           .array(z.object({ job_id: z.string(), file: z.string(), reason: z.enum(skipReasonNames) }))
           .optional()
           .describe("Files left where they were: `content-changed` when the file is no longer what the Job saved, so the User may have edited it; `could-not-delete` when the system refused, e.g. for want of permission."),
-        running_jobs: z.array(z.string()).optional().describe("Selected Jobs a litevision session is still running, left alone: cancel them first."),
+        running_jobs: z.array(z.string()).optional().describe("Selected Jobs a litevision session is still running, left alone."),
         not_found: z.array(z.string()).optional().describe("Job or Comparison ids the Job history does not have."),
         picks_removed: z.array(z.object({ comparison_id: z.string(), job_id: z.string(), result: z.number().optional() })).optional(),
         references_of_other_jobs: z
@@ -1133,7 +1139,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "rate_job",
     {
       description:
-        "Record the User's Rating of a completed Job, or of one result of it: good or bad, plus a one-line reason. Call it only when the User has actually said what they think of the result; never invent a verdict. A later Rating of the same Job and result replaces the earlier one; a Rating of the whole Job and one of a single result stand side by side.",
+        "Record the User's Rating of a completed Job, or of one result of it: good or bad, plus a one-line reason in their words. Call it only when the User has actually said what they think of the result; never invent a verdict or rate a result yourself. A later Rating of the same Job and result replaces the earlier one; a Rating of the whole Job and one of a single result stand side by side.",
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `get_job` returned."),
         result: z
@@ -1171,7 +1177,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "pick_result",
     {
       description:
-        "Record the User's Pick within a Comparison: the Job, or the one result of it, the User chose among the Comparison's results. Call it only when the User actually chooses; never pick for them. A later Pick for the same Comparison replaces the earlier one. A Pick is a relative preference, not a Rating: it does not mark the result good or the others bad.",
+        "Record the User's Pick within a Comparison: the Job, or the one result of it, the User chose among the Comparison's results. Call it only when the User actually chooses; never pick for them. A later Pick for the same Comparison replaces the earlier one. A Pick is a relative preference, not a Rating: when the User also gives a verdict, call `rate_job` too.",
       inputSchema: {
         comparison_id: z.string().min(1).describe("The `comparison_id` that `generate_comparison` returned."),
         job_id: z.string().min(1).describe("The `job_id` of the chosen Job, one of the Comparison's Jobs."),
@@ -1204,7 +1210,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "list_models",
     {
       description:
-        "List the User's configured Models: Alias, Modality (image or video), Provider, Protocol, Model Notes, Standing Options, a summary of each Model's Parameter Guide, the Option Status of each `provider_options` value sent to it and a docs link, and which Models are the defaults. Use it to choose a Model by what it accepts and costs. Pass `model` for one Model in detail: its full Parameter Guide (or the Provider's own parameter schema, which wins), its Option Statuses with their values, dates and Job ids, its five most recent Ratings, and the Picks of up to five Comparisons it took part in (most recently picked first).",
+        "List the User's configured Models, to choose one by what it accepts and costs: each Model's Alias, Modality (image or video), model id, Provider, Model Notes, Standing Options, a summary of its Parameter Guide and the `provider_options` keys under each Option Status, and the default Model of each Modality. Pass `model` for one Model in detail: its docs link, full Parameter Guide (or the Provider's own parameter schema, which wins), each Option Status with its value, Job, date and reason, its five most recent Ratings and the Picks of up to five Comparisons it took part in. An Option Status is what the latest evidence shows of a value sent, from facts alone: Honoured, the result was checked and matched; Ignored, it was checked and did not match; Rejected, the Provider's error named it; Accepted, the Provider did not reject it, but nothing checks its effect. Providers change their rules, so read the docs first when a date is old.",
       inputSchema: {
         model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
       },
@@ -1242,7 +1248,7 @@ export function createServer(deps: ServerDeps): McpServer {
   server.registerTool(
     "update_model_notes",
     {
-      description: `Replace a Model's Notes with new text, whole: never append. Call it only after showing the User the old and new Model Notes and getting their agreement. At most ${modelNotesMaxLength} characters. The previous version is kept, and the User can undo the change in the settings page.`,
+      description: `Replace a Model's Notes with new text, whole: never append. Before calling it, show the User the old and new Model Notes. At most ${modelNotesMaxLength} characters. The previous version is kept, and the User can undo the change in the settings page.`,
       inputSchema: {
         model: z.string().min(1).describe("Alias of the Model."),
         notes: z
@@ -1280,7 +1286,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "update_standing_options",
     {
       description:
-        "Replace a Model's Standing Options, whole: the request fields every Job on it sends, under each Job's `provider_options`. Call it only after showing the User the old and new Standing Options and getting their agreement. Write the Model's own fields from its Parameter Guide; fields litevision fills itself are refused. The previous version is kept, and the User can undo the change in the settings page.",
+        "Replace a Model's Standing Options, whole, as when the User wants a value on every Job of it: the request fields every Job on it sends, under each Job's `provider_options`. Before calling it, show the User the old and new Standing Options. Write the Model's own fields from its Parameter Guide; fields litevision fills itself are refused. The previous version is kept, and the User can undo the change in the settings page.",
       inputSchema: {
         model: z.string().min(1).describe("Alias of the Model."),
         standing_options: z
@@ -1331,7 +1337,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "open_settings",
     {
       description:
-        "Open litevision's settings page in the User's browser, where the User adds Providers, enters Credentials and sets up Models, and reviews, rates and deletes past Jobs. Call it whenever litevision reports that something is not configured, then ask the User to finish there and tell you when they are done. The User enters Credentials only on that page, never in the conversation.",
+        "Open litevision's settings page in the User's browser, where the User adds Providers, enters Credentials and sets up Models, and reviews, rates and deletes past Jobs. Then ask the User to finish there and tell you when they are done.",
       inputSchema: {
         tab: z
           .enum(settingsTabs)

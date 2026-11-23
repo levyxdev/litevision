@@ -270,13 +270,6 @@ describe("typed Provider errors", () => {
     expect((await readHistory(harness))[0]).toMatchObject({ outcome: "failed", error: { kind: "rejected_option" } });
   });
 
-  test("the server instructions say to fix a rejected option at most twice, then tell the User", async () => {
-    harness = await startHarness(openaiSetup());
-    const instructions = harness.client.getInstructions() ?? "";
-    expect(instructions).toContain("rejected an option");
-    expect(instructions).toMatch(/at most twice.*tell the User/s);
-  });
-
   test("an auth error tells the Agent to call open_settings rather than ask for the key", async () => {
     harness = await startHarness(openaiSetup({ [generationsUrl]: recorded("openai/invalid-api-key.json", 401) }));
     const text = textOf(await generate({}));

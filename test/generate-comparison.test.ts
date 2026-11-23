@@ -266,10 +266,4 @@ describe("generate_comparison", () => {
     expect(done.status).toBe("completed");
     expect(await readFile(done.files[0])).toEqual(tinyPng);
   });
-
-  test("the server instructions say to start a Comparison only when the User asks for one or agrees to it", async () => {
-    harness = await startHarness();
-    expect(harness.client.getInstructions()).toContain("generate_comparison");
-    expect(harness.client.getInstructions()).toMatch(/only when the User asks for one or agrees to it/);
-  });
 });

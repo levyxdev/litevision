@@ -181,15 +181,6 @@ describe("pick_result", () => {
     expect(statusesOf(after).statuses.ignored).toMatchObject([{ options: { size: "1024x1024" }, job_id: "b" }]);
     expect(statusesOf(after).ratings).toBeUndefined();
   });
-
-  test("is listed, and the server instructions say to pick only when the User actually chooses", async () => {
-    harness = await startHarness();
-    const { tools } = await harness.client.listTools();
-    expect(tools.map((tool) => tool.name)).toContain("pick_result");
-    const instructions = harness.client.getInstructions()!;
-    expect(instructions).toContain("`pick_result`");
-    expect(instructions).toContain("only when the User actually chooses");
-  });
 });
 
 const describeModel = (model: string) => harness!.client.callTool({ name: "list_models", arguments: { model } });

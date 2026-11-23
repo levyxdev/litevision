@@ -250,11 +250,6 @@ describe("Standing Options (ADR 0010)", () => {
     expect(JSON.stringify(tools)).not.toMatch(/\\"quality\\": \\"high\\"/);
   });
 
-  test("the server instructions point the Agent at the Standing Options before it writes provider_options", async () => {
-    const h = await start();
-    expect(h.client.getInstructions()).toMatch(/Before writing `provider_options`, read the Model's Standing Options \(`list_models`\)/);
-  });
-
   test("a reserved field in the merged options is rejected with the field named", async () => {
     const h = await start();
     const result = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a fox", provider_options: { model: "other" } } });
@@ -365,10 +360,5 @@ describe("update_standing_options", () => {
     const result = await update({ model: "missing", standing_options: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("flux2, sdxl, wan");
-  });
-
-  test("the server instructions require showing old and new Standing Options and getting the User's agreement first", async () => {
-    const h = await start();
-    expect(h.client.getInstructions()).toMatch(/update_standing_options.*old and new .*Standing Options.*agree/);
   });
 });

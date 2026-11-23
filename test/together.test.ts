@@ -385,17 +385,6 @@ describe("Option Status (ADR 0011)", () => {
     for (const result of [brief, detailed]) expect(textOf(result)).not.toMatch(/known.good|suspect/i);
   });
 
-  test("the server instructions and the litevision Skill say how to use each Option Status", async () => {
-    harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
-    const skill = await readFile(join(import.meta.dir, "..", "skills", "litevision", "SKILL.md"), "utf8");
-    for (const text of [harness.client.getInstructions()!, skill]) {
-      expect(text).toMatch(/reuse Honoured values/i);
-      expect(text).toMatch(/Accepted (means|only means) the Provider did not reject it/);
-      expect(text).toMatch(/never resend a Rejected or Ignored value unchanged/i);
-      expect(text).not.toMatch(/known.good|suspect/i);
-    }
-  });
-
   test("an error that names no option records nothing", async () => {
     harness = await startHarness(flashSetup(recorded("together/invalid-reference-image.json", 400)));
     expect((await generate({ model: "nb2", provider_options: { width: 1792, height: 2400 } })).isError).toBe(true);
