@@ -127,15 +127,18 @@ const sourceJobsSchema = z
   .optional()
   .describe("Source Jobs: earlier Jobs whose results were among this Job's reference images or video frames, found by content. Absent when there are none.");
 
-/** The structured form of one Model in `list_models`. */
+/** Option Statuses in brief, as `list_models` without `model` gives them: the option keys under each status. */
+const statusKeysSchema = z
+  .array(z.string())
+  .optional()
+  .describe('`provider_options` keys, joined with "+" where a check reads them together, e.g. width+height.');
 
+/** The structured form of one Model in `list_models`. */
 const listedModelSchema = z.object({
   alias: z.string(),
   provider: z.string(),
-  protocol: z.string(),
   model_id: z.string().describe("The Provider's own name for the model."),
   modality: z.enum(modalities).describe("What the Model generates: images with `generate_image`, videos with `generate_video`."),
-  default: z.boolean().describe("True for the default Model of its Modality."),
   notes: z.string().optional().describe("Model Notes: what the Model is good or bad at, agreed with the User."),
   standing_options: z
     .record(z.string(), z.unknown())
@@ -143,11 +146,13 @@ const listedModelSchema = z.object({
     .describe(
       "Standing Options the User set or agreed to: request fields every Job on this Model sends. Your `provider_options` are merged over them: your values win, objects merge key by key, and `null` removes a key for that Job.",
     ),
-  docs_url: z.string().optional().describe("Where to read which `provider_options` this Model accepts."),
+  docs_url: z.string().optional().describe("Only with `model`: where to read which `provider_options` this Model accepts."),
   parameters: z
     .string()
     .optional()
-    .describe("In brief, what litevision knows about the Model's request parameters: its Parameter Guide, the Provider's own description, or that it knows neither."),
+    .describe(
+      "In brief, what litevision knows about the Model's request parameters: its Parameter Guide, the Provider's own description, or that it knows neither. With `model`, only when it knows neither.",
+    ),
   parameter_guide: z
     .object({
       family: z.string(),
@@ -170,21 +175,18 @@ const listedModelSchema = z.object({
       "Only with `model`: the built-in Parameter Guide for the Model's family. Absent when litevision has none, or when the Provider describes the Model itself (see `parameter_schema`).",
     ),
   option_statuses: z
-    .object({
-      honoured: z.array(optionStatusSchema).optional().describe("The result was checked against the request and matched. Reuse them."),
-      ignored: z
-        .array(optionStatusSchema)
-        .optional()
-        .describe("The result was checked against the request and did not match, as `reason` says. Do not send them unchanged; read the docs first."),
-      rejected: z
-        .array(optionStatusSchema)
-        .optional()
-        .describe("The Provider's error named them; `reason` is what it said. Do not send them unchanged; fix them from that and the docs."),
-      accepted: z.array(optionStatusSchema).optional().describe("Sent and not rejected, but nothing checks whether they took effect."),
-    })
+    .union([
+      z.object({ honoured: statusKeysSchema, ignored: statusKeysSchema, rejected: statusKeysSchema, accepted: statusKeysSchema }),
+      z.object({
+        honoured: z.array(optionStatusSchema).optional(),
+        ignored: z.array(optionStatusSchema).optional(),
+        rejected: z.array(optionStatusSchema).optional(),
+        accepted: z.array(optionStatusSchema).optional(),
+      }),
+    ])
     .optional()
     .describe(
-      "Option Statuses: what the latest evidence says about each `provider_options` value sent to this Model, from facts alone; Ratings and Picks never change them. Fields a check reads together, such as width and height, share one.",
+      "Option Statuses: what the latest evidence says about each `provider_options` value sent to this Model, from facts alone; Ratings and Picks never change them. Without `model`, the keys under each status; with `model`, each value with its Job and date.",
     ),
   problem: z.string().optional(),
   recent_ratings: z
@@ -225,12 +227,11 @@ const listedModelSchema = z.object({
     .describe("Only with `model`: the Provider's own description of the Model's parameters, when it publishes one."),
 });
 
-/** One Model as `list_models` reports it; `detailed` adds what only `model` asks for. */
+/** One Model as `list_models` reports it: what choosing it needs, or with `detailed`, its full evidence (ADR 0011). */
 async function listedModel(
   deps: ModelInfoDeps,
   config: Config,
   model: Model,
-  isDefault: boolean,
   detailed: boolean,
   ratedJobs: RatedJob[],
   statusesOf: (model: StatusedModel) => OptionStatus[],
@@ -238,10 +239,8 @@ async function listedModel(
   const base = {
     alias: model.alias,
     provider: model.provider,
-    protocol: model.protocol,
     model_id: model.modelId,
     modality: model.modality,
-    default: isDefault,
     notes: model.notes,
     standing_options: filled(model.standingOptions ?? {}),
   };
@@ -273,23 +272,27 @@ async function listedModel(
     return { ...base, problem: error.message };
   }
 
-  const output: Record<string, unknown> = {
+  const statuses = statusesOf(model);
+  if (!detailed) return { ...base, parameters: parametersSummary(described, model.provider), option_statuses: optionStatusKeys(statuses) };
+
+  const byId = new Map(ratedJobs.map(({ job }) => [job.id, job]));
+  const ratings: RecentRating[] = await Promise.all(
+    recentRatings(ratedJobs, model, recentRatingsShown).map(async (rated) => ({ ...rated, sources: await showSourceJobs(rated.job, byId) })),
+  );
+  const known = described.parameterSchema !== undefined || described.guide !== undefined;
+  return {
     ...base,
     docs_url: described.docsUrl,
-    parameters: parametersSummary(described, model.provider),
-    option_statuses: optionStatusesOutput(statusesOf(model)),
+    ...(known ? {} : { parameters: parametersSummary(described, model.provider) }),
+    option_statuses: optionStatusesOutput(statuses),
+    recent_ratings: ratings.map(recentRatingOutput),
+    recent_picks: recentPicks(ratedJobs, model, recentPicksShown).map(recentPickOutput),
+    ...(described.parameterSchema !== undefined
+      ? { parameter_schema: data(described.parameterSchema) }
+      : described.guide === undefined
+        ? {}
+        : { parameter_guide: guideOutput(described.guide) }),
   };
-  if (detailed) {
-    const byId = new Map(ratedJobs.map(({ job }) => [job.id, job]));
-    const ratings: RecentRating[] = await Promise.all(
-      recentRatings(ratedJobs, model, recentRatingsShown).map(async (rated) => ({ ...rated, sources: await showSourceJobs(rated.job, byId) })),
-    );
-    output.recent_ratings = ratings.map(recentRatingOutput);
-    output.recent_picks = recentPicks(ratedJobs, model, recentPicksShown).map(recentPickOutput);
-    if (described.parameterSchema !== undefined) output.parameter_schema = data(described.parameterSchema);
-    else if (described.guide !== undefined) output.parameter_guide = guideOutput(described.guide);
-  }
-  return output;
 }
 
 /** What litevision knows about a Model's parameters, as `list_models` and failed Jobs report it. */
@@ -430,9 +433,15 @@ function optionStatusesOutput(statuses: OptionStatus[]) {
   );
 }
 
+/** The option keys under each status, e.g. `{ honoured: ["width+height"], accepted: ["seed"] }`. */
+function optionStatusKeys(statuses: OptionStatus[]) {
+  const grouped = byStatus(statuses);
+  return Object.fromEntries(optionStatusNames.map((name) => [name, [...new Set(grouped[name].map((status) => Object.keys(status.options).join("+")))]]));
+}
+
 /** One Option Status per line, grouped by status, each with its date and Job id. */
 function optionStatusesText(statuses: OptionStatus[]): string {
-  if (statuses.length === 0) return "Option Statuses: none recorded yet.";
+  if (statuses.length === 0) return "Option Statuses of the options sent: none recorded yet.";
   const grouped = byStatus(statuses);
   const lines = optionStatusNames.flatMap((name) =>
     grouped[name].map(
@@ -440,7 +449,7 @@ function optionStatusesText(statuses: OptionStatus[]): string {
         `- ${statusLabels[name]}${statusGlosses[name] ?? ""}: ${JSON.stringify(status.options)}, Job ${status.jobId}${status.jobDeleted ? " (deleted)" : ""} on ${status.date.slice(0, 10)}${status.reason === undefined ? "" : `: ${status.reason}`}`,
     ),
   );
-  return ["Option Statuses, from the latest evidence for each value:", ...lines].join("\n");
+  return ["Option Statuses of the options sent, from the latest evidence for each value:", ...lines].join("\n");
 }
 
 /** What the evidence of ended Jobs says about a Model's `provider_options` (ADR 0011, ADR 0015). */
@@ -452,7 +461,10 @@ async function modelStatuses(deps: Pick<ModelInfoDeps, "dirs">, model: StatusedM
  * What litevision knows about the parameters of the Model a Job ran on, read from the Job history: the docs link, the
  * built-in Parameter Guide and, where the Provider is still configured, its own description, which wins (ADR 0010).
  */
-async function jobDocs(deps: ModelInfoDeps, jobId: string): Promise<{ known: ParameterKnowledge; provider: string; statuses: OptionStatus[] } | undefined> {
+async function jobDocs(
+  deps: ModelInfoDeps,
+  jobId: string,
+): Promise<{ known: ParameterKnowledge; provider: string; statuses: OptionStatus[]; sent: Record<string, unknown> } | undefined> {
   const job = await readJob(deps.dirs, jobId);
   const adapter = job === undefined ? undefined : adapterForProtocol(job.protocol);
   if (job === undefined || adapter === undefined) return undefined;
@@ -464,17 +476,31 @@ async function jobDocs(deps: ModelInfoDeps, jobId: string): Promise<{ known: Par
     const model = { alias: job.model, provider: job.provider, modelId: job.modelId, protocol: job.protocol, modality };
     known = await modelInfo(deps, { model, provider });
   }
-  return { known, provider: job.provider, statuses: await modelStatuses(deps, job) };
+  return { known, provider: job.provider, statuses: await modelStatuses(deps, job), sent: job.parameters.providerOptions };
 }
 
 /**
- * Where the Agent should look when a Provider rejected a request: the docs link and the Model's Option Statuses
- * (ADR 0011), which already count this rejection, and for a rejected or unsupported request also what litevision
- * knows of the Model's parameters (ADR 0010).
+ * Where the Agent should look when a Provider rejected a request: the docs link, the Option Statuses of the options the
+ * Job sent (ADR 0011), which already count this rejection, and for a rejected or unsupported request also what
+ * litevision knows of the Model's parameters (ADR 0010).
  */
-function failureHint(known: ParameterKnowledge, providerId: string, statuses: OptionStatus[], kind: ProviderErrorKind): string {
+function failureHint(known: ParameterKnowledge, providerId: string, statuses: OptionStatus[], sent: Record<string, unknown>, kind: ProviderErrorKind): string {
   const help = kind === "rejected_option" || kind === "unsupported" ? `\n${parameterHelp(known, providerId)}` : "";
-  return ` Docs for this Model's provider_options: ${known.docsUrl}.\n${optionStatusesText(statuses)}${help}`;
+  const paths = optionPaths(sent);
+  const ofSent = statuses.filter((status) => Object.keys(status.options).some((key) => paths.has(key)));
+  return ` Docs for this Model's provider_options: ${known.docsUrl}.\n${optionStatusesText(ofSent)}${help}`;
+}
+
+/** Every key path in `options`, e.g. `response_format` and `response_format.image_size`, as Option Statuses name them. */
+function optionPaths(options: Record<string, unknown>, prefix = ""): Set<string> {
+  const paths = new Set<string>();
+  for (const [key, value] of Object.entries(options)) {
+    paths.add(`${prefix}${key}`);
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      for (const inner of optionPaths(value as Record<string, unknown>, `${prefix}${key}.`)) paths.add(inner);
+    }
+  }
+  return paths;
 }
 
 /** The structured form of what each saved file turned out to be. */
@@ -778,7 +804,7 @@ export function createServer(deps: ServerDeps): McpServer {
       optionSplit: options.split,
       start: ({ comparison, wait } = {}) =>
         jobs.start({ ...resolved, adapter, credential, normalised, outputDir, options: options.inputs, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
-      hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
+      hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), options.sent, kind),
       report: (job) => ({ ...jobOutput(job), ...uncheckedOutput(normalised.requested), ...optionsOutput(options.split) }),
     };
   };
@@ -809,7 +835,7 @@ export function createServer(deps: ServerDeps): McpServer {
       optionSplit: options.split,
       start: ({ comparison, wait } = {}) =>
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, options: options.inputs, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
-      hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
+      hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), options.sent, kind),
       report: (job) => ({ ...jobOutput(job), ...uncheckedOutput(normalised.requested), ...optionsOutput(options.split) }),
     };
   };
@@ -1029,7 +1055,7 @@ export function createServer(deps: ServerDeps): McpServer {
           error,
           async (kind) => {
             const docs = await jobDocs(infoDeps, job_id);
-            return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.statuses, kind);
+            return docs === undefined ? "" : failureHint(docs.known, docs.provider, docs.statuses, docs.sent, kind);
           },
           recordedSources(record),
         );
@@ -1192,8 +1218,8 @@ export function createServer(deps: ServerDeps): McpServer {
       try {
         const config = await loadConfig(deps.dirs);
         if (config.models.length === 0) throw needsSettings("litevision has no Model configured yet.");
-        const defaultModel = defaultModelAlias(config, "image") ?? null;
-        const defaultVideoModel = defaultModelAlias(config, "video") ?? null;
+        const defaultModel = defaultModelAlias(config, "image");
+        const defaultVideoModel = defaultModelAlias(config, "video");
         let models = config.models;
         if (alias !== undefined) {
           models = models.filter((model) => model.alias === alias);
@@ -1203,20 +1229,9 @@ export function createServer(deps: ServerDeps): McpServer {
         }
         const ratedJobs = await readRatedJobs(deps.dirs);
         const statusesOf = await optionStatusReader(deps.dirs);
-        const entries = await Promise.all(
-          models.map((model) =>
-            listedModel(
-              infoDeps,
-              config,
-              model,
-              model.alias === (model.modality === "video" ? defaultVideoModel : defaultModel),
-              alias !== undefined,
-              ratedJobs,
-              statusesOf,
-            ),
-          ),
-        );
-        return toolResult({ default_model: defaultModel, default_video_model: defaultVideoModel, models: entries });
+        const detailed = alias !== undefined;
+        const entries = await Promise.all(models.map((model) => listedModel(infoDeps, config, model, detailed, ratedJobs, statusesOf)));
+        return toolResult({ ...(detailed ? {} : { default_model: defaultModel, default_video_model: defaultVideoModel }), models: entries });
       } catch (error) {
         if (error instanceof ConfigError) return toolError(error.message);
         throw error;

@@ -299,8 +299,9 @@ describe("Venice's own description of its Models", () => {
 
     expect(byAlias.qwen!.parameters).toContain('Provider "venice" describes this Model');
     expect(byAlias.qwen!).not.toHaveProperty("capabilities");
-    expect(byAlias.qwen!.docs_url).toBe("https://docs.venice.ai/api-reference/endpoint/image/generate");
-    expect(byAlias["banana-edit"]!.docs_url).toBe("https://docs.venice.ai/api-reference/endpoint/image/edit");
+    const docsOf = async (model: string) => ((await listModels({ model })).structuredContent as Listed).models[0]!.docs_url;
+    expect(await docsOf("qwen")).toBe("https://docs.venice.ai/api-reference/endpoint/image/generate");
+    expect(await docsOf("banana-edit")).toBe("https://docs.venice.ai/api-reference/endpoint/image/edit");
     expect(harness.requests.find((request) => request.url.includes("/models"))!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
   });
 

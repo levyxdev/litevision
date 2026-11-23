@@ -312,7 +312,7 @@ describe("list_models with a gemini Model", () => {
 
     expect(result.isError).toBeFalsy();
     const { models } = result.structuredContent as { models: Array<Record<string, any>> };
-    expect(models[0]).toMatchObject({ alias: "nano-banana", protocol: "gemini", docs_url: "https://ai.google.dev/gemini-api/docs/image-generation" });
+    expect(models[0]).toMatchObject({ alias: "nano-banana", docs_url: "https://ai.google.dev/gemini-api/docs/image-generation" });
     expect(models[0]!.parameter_guide.family).toContain("gemini-3.1-flash-image");
     expect(models[0]).not.toHaveProperty("capabilities");
     // Gemini does not describe its Models, so nothing is asked of the Provider.

@@ -94,8 +94,10 @@ describe("the Provider's own description of a Model (ADR 0004, ADR 0010)", () =>
 
     const model = await describeFox();
     expect(model.parameter_schema).toEqual(reported.parameterSchema);
-    expect(model.parameters).toContain('Provider "relay" describes this Model');
+    expect(model).not.toHaveProperty("parameters");
     expect(model.docs_url).toBe("https://docs.relay.example/models/fox-1");
+    const [listed] = ((await listModels()).structuredContent as { models: Array<Record<string, any>> }).models;
+    expect(listed!.parameters).toContain('Provider "relay" describes this Model');
     expect(harness.requests[0]!.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
 
     await listModels();
@@ -184,13 +186,13 @@ describe("list_models with `model`", () => {
     expect(statuses).not.toHaveProperty("rejected");
   });
 
-  test("without `model`, leaves the schema out but still gives the Option Statuses, naming the options in the text", async () => {
+  test("without `model`, leaves the schema out but still names the options under each Option Status", async () => {
     harness = await startHarness(relaySetup({ [capabilitiesUrl]: reportCapabilities }));
     expect((await generate({ provider_options: { style: "noir" } })).isError).toBeFalsy();
     const result = await listModels();
     const [model] = (result.structuredContent as { models: Array<Record<string, unknown>> }).models;
     expect(model).not.toHaveProperty("parameter_schema");
-    expect((model!.option_statuses as { accepted: Array<{ options: unknown }> }).accepted.map((status) => status.options)).toEqual([{ style: "noir" }]);
+    expect(model!.option_statuses).toEqual({ accepted: ["style"] });
   });
 
   test("an unknown Alias errors and lists the known ones", async () => {

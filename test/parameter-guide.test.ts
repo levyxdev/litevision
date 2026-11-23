@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { startHarness, type Harness } from "./harness.ts";
+import { startHarness, type Harness, type Route } from "./harness.ts";
 import { recorded, textOf, type ToolResult } from "./helpers.ts";
 
 const openai = { id: "openai", baseUrl: "https://api.openai.com/v1" };
@@ -165,7 +165,7 @@ describe("list_models: a Model the Provider describes itself (ADR 0010)", () => 
     const model = (result.structuredContent as { models: Array<Listed & { parameter_schema?: unknown }> }).models[0]!;
     expect(model).not.toHaveProperty("parameter_guide");
     expect(model.parameter_schema).toBeDefined();
-    expect(model.parameters).toContain('Provider "apimart" describes this Model\'s parameters itself');
+    expect(model).not.toHaveProperty("parameters");
   });
 });
 
@@ -191,12 +191,32 @@ describe("rejected options carry the Parameter Guide (ADR 0010)", () => {
   });
 });
 
+describe("a rejection's error", () => {
+  test("lists the Option Statuses only of the options the Job sent, and keeps the full Parameter Guide", async () => {
+    let answer: Route = recorded("openai/generations.json");
+    harness = await startHarness({
+      config: { providers: [openai], models: [{ alias: "flare", provider: "openai", modelId: "gpt-image-2.5-flare", protocol: "openai-images" }] },
+      credentials,
+      routes: { "POST https://api.openai.com/v1/images/generations": (request) => answer(request) },
+    });
+    const generate = (provider_options: Record<string, unknown>) =>
+      harness!.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", model: "flare", provider_options } });
+    expect((await generate({ probe_field: "opaque" })).isError).toBeFalsy();
+
+    answer = recorded("openai/invalid-value.json", 400);
+    const text = textOf(await generate({ quality: "ultra" }));
+    expect(text).toContain('{"quality":"ultra"}');
+    expect(text).not.toContain("probe_field");
+    expect(text).toContain("- quality:");
+    expect(text).toContain("https://platform.openai.com/docs/api-reference/images/create");
+  });
+});
+
 describe("list_models: the Parameter Guides of local Models", () => {
   async function localGuide(modelId: string): Promise<GuideOutput & { notes: string[] }> {
     harness = await startHarness({ config: { providers: [{ id: "local" }], models: [{ alias: "mine", provider: "local", modelId, protocol: "sdcpp" }] } });
     const result = await harness.client.callTool({ name: "list_models", arguments: { model: "mine" } });
     expect(result.isError, textOf(result)).toBeFalsy();
-    expect(textOf(result)).toContain("Parameter Guide for");
     return modelsOf(result)[0]!.parameter_guide as GuideOutput & { notes: string[] };
   }
   const parameter = (guide: GuideOutput, name: string) => guide.parameters.find((candidate) => candidate.name === name);

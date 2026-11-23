@@ -16,7 +16,7 @@ afterEach(async () => {
 const listModels = () => harness!.client.callTool({ name: "list_models", arguments: {} });
 
 describe("list_models", () => {
-  test("returns each Model's Alias, Provider, Protocol, Parameter Guide summary, Model Notes and Standing Options, plus the default", async () => {
+  test("gives only what choosing a Model needs: each Model's Alias, Modality, model id, Provider, Notes and Parameter Guide summary, and the defaults once", async () => {
     harness = await startHarness({
       config: {
         providers: [openai, relay],
@@ -36,22 +36,16 @@ describe("list_models", () => {
         {
           alias: "gpt-image",
           provider: "openai",
-          protocol: "openai-images",
           model_id: "gpt-image-1",
           modality: "image",
-          default: true,
           notes: "photoreal, legible text",
-          docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           parameters: expect.stringContaining("Parameter Guide for GPT Image 1.x"),
         },
         {
           alias: "dalle",
           provider: "relay",
-          protocol: "openai-images",
           model_id: "dall-e-3",
           modality: "image",
-          default: false,
-          docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           parameters: expect.stringContaining("litevision has no Parameter Guide for this model id"),
         },
       ],
@@ -73,7 +67,6 @@ describe("list_models", () => {
     expect(result.isError).toBeFalsy();
     const [model] = (result.structuredContent as { models: Array<Record<string, unknown>> }).models;
     expect(model).toMatchObject({ alias: "odd" });
-    expect(model).not.toHaveProperty("docs_url");
     expect(String(model!.problem)).toContain('Protocol "carrier-pigeon"');
   });
 

@@ -372,17 +372,16 @@ describe("Option Status (ADR 0011)", () => {
     await generate({ model: "nb2", provider_options: { width: 1536, height: 2048 } });
 
     const brief = await call("list_models", {});
-    expect(ok(brief).models[0].option_statuses).toMatchObject({
-      honoured: [{ options: { width: 1792, height: 2400 } }],
-      rejected: [{ options: { width: 1536, height: 2048 } }],
-      accepted: [{ options: { seed: 7 } }],
-    });
+    expect(ok(brief).models[0].option_statuses).toEqual({ honoured: ["width+height"], rejected: ["width+height"], accepted: ["seed"] });
     const detailed = await call("list_models", { model: "nb2" });
-    expect(ok(detailed).models[0].option_statuses).toMatchObject({
+    expect(ok(detailed).models[0].option_statuses).toEqual({
       honoured: [{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date }],
-      rejected: [{ reason: `HTTP 400: ${sizeRejected}` }],
-      accepted: [{ options: { seed: 7 }, job_id: job.job_id }],
+      rejected: [{ options: { width: 1536, height: 2048 }, job_id: expect.any(String), date, reason: `HTTP 400: ${sizeRejected}` }],
+      accepted: [{ options: { seed: 7 }, job_id: job.job_id, date }],
     });
+    expect(ok(detailed)).not.toHaveProperty("default_model");
+    expect(ok(detailed).models[0]).toMatchObject({ alias: "nb2", docs_url: expect.stringContaining("https://") });
+    expect(ok(brief).models[0]).not.toHaveProperty("docs_url");
     for (const result of [brief, detailed]) expect(textOf(result)).not.toMatch(/known.good|suspect/i);
   });
 
@@ -508,7 +507,7 @@ describe("generate_video with the together Protocol", () => {
     const again = textOf(await call("get_job", { job_id: jobId }));
     expect(again).toContain("invalidDuration");
     expect(again).toContain("https://docs.together.ai/docs/wan2.7-quickstart");
-    expect(again).toContain("Option Statuses: none recorded yet.");
+    expect(again).toContain("Option Statuses of the options sent: none recorded yet.");
   });
 
   test("a Model that takes no shape is not checked for one", async () => {
@@ -606,11 +605,7 @@ describe("Modality", () => {
     expect(listed.default_model).toBe("sdxl");
     expect(listed.default_video_model).toBe("wan");
     const wan = listed.models.find((model: { alias: string }) => model.alias === "wan");
-    expect(wan).toMatchObject({
-      modality: "video",
-      default: true,
-      docs_url: "https://docs.together.ai/docs/wan2.7-quickstart",
-    });
+    expect(wan).toMatchObject({ modality: "video" });
     expect(wan.parameters).toContain("resolution, ratio, seconds");
     expect(wan).not.toHaveProperty("video_capabilities");
   });
@@ -638,11 +633,8 @@ describe("Modality", () => {
         models: expected.map(([modelId, modality], index) => ({ alias: `m${index}`, provider: "together-ai", modelId, protocol: "together", modality })),
       },
     });
-    const listed = ok(await call("list_models", {})).models as Array<{ alias: string; docs_url: string }>;
-    const modelIdOf = new Map(expected.map(([modelId], index) => [`m${index}`, modelId]));
-    expect(listed.map((model) => [modelIdOf.get(model.alias), model.docs_url])).toEqual(
-      expected.map(([modelId, , docsUrl]) => [modelId, docsUrl]),
-    );
+    const docsUrls = await Promise.all(expected.map(async (_, index) => ok(await call("list_models", { model: `m${index}` })).models[0].docs_url));
+    expect(expected.map(([modelId], index) => [modelId, docsUrls[index]])).toEqual(expected.map(([modelId, , docsUrl]) => [modelId, docsUrl]));
   });
 
   test("Gemini 3.1 Flash Image's Parameter Guide lists its fixed width and height pairs, as Together rejects any other", async () => {
