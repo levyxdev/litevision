@@ -8,6 +8,7 @@ import { catalog, type Catalog } from "../src/local/catalog.ts";
 import { runtimePlatform, type Hardware } from "../src/local/hardware.ts";
 import { runLocal } from "../src/local/install.ts";
 import type { Runtime } from "../src/local/runtime.ts";
+import { fieldKind, fieldSchema, itemSchema, type JsonSchema } from "../src/result.ts";
 import { createServer } from "../src/server.ts";
 import { makeTempDirs, recordedTransport, type Route, type Routes } from "./recorded-http.ts";
 
@@ -125,9 +126,11 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const callTool = client.callTool.bind(client);
+    let outputSchemas: Promise<Map<string, JsonSchema | undefined>> | undefined;
     client.callTool = (async (...args: Parameters<typeof callTool>) => {
       const result = await callTool(...args);
-      assertOneForm(result);
+      outputSchemas ??= client.listTools().then(({ tools }) => new Map(tools.map((tool) => [tool.name, tool.outputSchema as JsonSchema | undefined])));
+      assertOneForm(result, (await outputSchemas).get(args[0].name));
       return result;
     }) as typeof callTool;
     return { server, client };
@@ -178,41 +181,33 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   };
 }
 
-/** Fields whose values are Provider request fields or the Provider's own schema: data, so never compacted (ADR 0017). */
-const dataFields = new Set(["options", "standing_options", "previous_standing_options", "parameter_schema", "standing", "job"]);
-
 /**
  * Every successful result reaches every Agent in one form (ADR 0017): its text is exactly the compact JSON of its
- * structured content, which has no null field, empty array, empty object or empty string. Errors stay plain text.
+ * structured content, which has no null field, empty array, empty object or empty string. What its outputSchema
+ * declares as any value or as a set of request fields is data, kept whole; a set of request fields is never empty.
+ * Errors stay plain text.
  */
-export function assertOneForm(result: Awaited<ReturnType<Client["callTool"]>>): void {
+export function assertOneForm(result: Awaited<ReturnType<Client["callTool"]>>, outputSchema: JsonSchema | undefined): void {
   if (result.isError) return;
   const expected = [{ type: "text", text: JSON.stringify(result.structuredContent) }];
-  if (result.structuredContent === undefined || JSON.stringify(result.content) !== JSON.stringify(expected)) {
+  if (outputSchema === undefined || result.structuredContent === undefined || JSON.stringify(result.content) !== JSON.stringify(expected)) {
     throw new Error(`A successful result's text must be the compact JSON of its structured content; got ${JSON.stringify(result)}`);
   }
-  const empty = emptyFields(result.structuredContent, "");
+  const empty = emptyFields(result.structuredContent, outputSchema, "");
   if (empty.length > 0) throw new Error(`A result must leave out empty and null fields; found ${empty.join(", ")} in ${JSON.stringify(result.structuredContent)}`);
 }
 
-function emptyFields(value: unknown, path: string): string[] {
-  if (value === null || value === "" || (Array.isArray(value) && value.length === 0)) return [path];
-  // A null item holds its place in an array, such as a file litevision could not read.
-  if (Array.isArray(value)) return value.flatMap((item, index) => (item === null ? [] : emptyFields(item, `${path}[${index}]`)));
-  if (typeof value !== "object") return [];
-  const entries = Object.entries(value as Record<string, unknown>);
+function emptyFields(value: unknown, schema: JsonSchema, path: string): string[] {
+  const kind = fieldKind(schema);
+  if (kind === "value") return value === null ? [path] : [];
+  const empty = value === null || value === "" || (typeof value === "object" && Object.keys(value).length === 0);
   // A result with nothing to report is the empty object itself.
-  if (entries.length === 0) return path === "" ? [] : [path];
-  return entries.flatMap(([key, field]) => {
-    const at = path === "" ? key : `${path}.${key}`;
-    if (!dataFields.has(key)) return emptyFields(field, at);
-    // An override's `job` is the value the Job sent, which may be an empty object.
-    return field === null || (key !== "job" && isEmptyObject(field)) ? [at] : [];
-  });
-}
-
-function isEmptyObject(value: unknown): boolean {
-  return typeof value === "object" && value !== null && Object.keys(value).length === 0;
+  if (empty) return path === "" ? [] : [path];
+  if (kind === "record") return [];
+  // A null item holds its place in an array, such as a file litevision could not read.
+  if (Array.isArray(value)) return value.flatMap((item, index) => (item === null ? [] : emptyFields(item, itemSchema(schema), `${path}[${index}]`)));
+  if (typeof value !== "object") return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, field]) => emptyFields(field, fieldSchema(schema, key), path === "" ? key : `${path}.${key}`));
 }
 
 /** A Runtime that is always installed and running at `url`, which never starts or stops a process. */

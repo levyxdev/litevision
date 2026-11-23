@@ -49,7 +49,7 @@ import { normaliseImageRequest, normaliseVideoRequest } from "./protocols/reques
 import { adapterFor, adapterForProtocol, credentialFor } from "./protocols/index.ts";
 import { guideOutput, guideSummary, guideText, type ParameterGuide, type Requested } from "./protocols/parameter-guide.ts";
 import { modalities, type Modality, type ProviderErrorKind } from "./protocols/protocol.ts";
-import { data, filled, toolResult } from "./result.ts";
+import { toolResult } from "./result.ts";
 import { openInBrowser, type OpenBrowser } from "./settings/browser.ts";
 import { settingsOpener, settingsTabs } from "./settings/opener.ts";
 import { defaultSettingsIdleMs } from "./settings/server.ts";
@@ -229,14 +229,14 @@ async function listedModel(
   detailed: boolean,
   ratedJobs: RatedJob[],
   statusesOf: (model: StatusedModel) => OptionStatus[],
-): Promise<Record<string, unknown>> {
+): Promise<z.input<typeof listedModelSchema>> {
   const base = {
     alias: model.alias,
     provider: model.provider,
     model_id: model.modelId,
     modality: model.modality,
     notes: model.notes,
-    standing_options: filled(model.standingOptions ?? {}),
+    standing_options: model.standingOptions,
   };
 
   let described: {
@@ -282,7 +282,7 @@ async function listedModel(
     recent_ratings: ratings.map(recentRatingOutput),
     recent_picks: recentPicks(ratedJobs, model, recentPicksShown).map(recentPickOutput),
     ...(described.parameterSchema !== undefined
-      ? { parameter_schema: data(described.parameterSchema) }
+      ? { parameter_schema: described.parameterSchema }
       : described.guide === undefined
         ? {}
         : { parameter_guide: guideOutput(described.guide) }),
@@ -417,7 +417,7 @@ function optionStatusesOutput(statuses: OptionStatus[]) {
     optionStatusNames.map((name) => [
       name,
       grouped[name].map((status) => ({
-        options: data(status.options),
+        options: status.options,
         job_id: status.jobId,
         ...(status.jobDeleted ? { job_deleted: true as const } : {}),
         date: status.date,
@@ -554,8 +554,8 @@ const overridesSchema = z
 /** The `options_sent` and `overrides` fields of a Job's output. */
 function optionsOutput(sources: OptionSources) {
   return {
-    options_sent: { standing: filled(sources.standing), job: filled(sources.job) },
-    overrides: sources.overrides.map(({ option, standing, job }) => ({ option, standing: data(standing), ...(job === null ? { dropped: true } : { job: data(job) }) })),
+    options_sent: { standing: sources.standing, job: sources.job },
+    overrides: sources.overrides.map(({ option, standing, job }) => ({ option, standing, ...(job === null ? { dropped: true as const } : { job }) })),
   };
 }
 
@@ -667,7 +667,7 @@ interface PreparedJob {
   model: Model;
   /** Starts the Job; with `wait` false, returns it running at once. */
   start(how?: StartOptions & { comparison?: string }): Promise<JobState>;
-  report(job: JobState): Record<string, unknown>;
+  report(job: JobState): z.input<z.ZodObject<typeof imageJobShape>> & z.input<z.ZodObject<typeof videoJobShape>>;
   /** The Model's docs link, Option Statuses and Parameter Guide, for a failed Job's error (ADR 0010, ADR 0011). */
   hint: Hint;
   /** Where the options the Job sends came from. */
@@ -766,6 +766,109 @@ function comparisonModality(config: Config, variants: Array<{ model?: string | u
   return [...found][0] ?? "image";
 }
 
+/** What `generate_comparison` returns. */
+const comparisonOutput = {
+    comparison_id: z.string(),
+    modality: z.enum(modalities),
+    jobs: z
+      .array(z.union([z.object(imageJobShape), z.object(videoJobShape), failedJobSchema]))
+      .describe(
+        'One per variant, in the order given: each as `generate_image` or `generate_video` returns it, or status "failed" with why.',
+      ),
+  };
+
+/** What `get_job` returns. */
+const getJobOutput = {
+    job_id: z.string(),
+    status: jobStatusSchema,
+    model: z.string().describe("Alias of the Model that ran the Job."),
+    files: z.array(z.string()).optional().describe("Paths of the saved images or video, once the Job has completed."),
+    shortfall: z.string().optional().describe("Present when fewer images than asked for were saved: how many, and why."),
+    unchecked: uncheckedSchema,
+    observed: observedSchema,
+    mismatch: mismatchSchema,
+    source_jobs: sourceJobsSchema,
+    options_sent: optionsSentSchema,
+    overrides: overridesSchema,
+  };
+
+/** What `cancel_job` returns. */
+const cancelOutput = {
+    job_id: z.string(),
+    status: z
+      .enum(["cancelled", "cancelling"])
+      .describe('"cancelling" while the Runtime or another litevision session has yet to stop it.'),
+    message: z.string(),
+  };
+
+/** What `delete_jobs` returns. */
+const deletionReportOutput = {
+    deleted_jobs: z.array(z.string()).optional(),
+    deleted_files: z.array(z.string()).optional(),
+    already_gone: z.array(z.string()).optional().describe("Result files that were no longer there, as when the User had deleted or moved them."),
+    skipped_files: z
+      .array(z.object({ job_id: z.string(), file: z.string(), reason: z.enum(skipReasonNames) }))
+      .optional()
+      .describe("Files left where they were: `content-changed` when the file is no longer what the Job saved, so the User may have edited it; `could-not-delete` when the system refused, e.g. for want of permission."),
+    running_jobs: z.array(z.string()).optional().describe("Selected Jobs a litevision session is still running, left alone."),
+    not_found: z.array(z.string()).optional().describe("Job or Comparison ids the Job history does not have."),
+    picks_removed: z.array(z.object({ comparison_id: z.string(), job_id: z.string(), result: z.number().optional() })).optional(),
+    references_of_other_jobs: z
+      .array(z.object({ file: z.string(), job_ids: z.array(z.string()) }))
+      .optional()
+      .describe("Deleted files that remaining Jobs had used as a reference image or video frame."),
+  };
+
+/** What `rate_job` returns. */
+const ratingOutputShape = {
+    job_id: z.string(),
+    result: z.number().optional().describe("The result rated; absent for a Rating of the whole Job."),
+    verdict: z.enum(verdicts),
+    reason: z.string().describe("The reason as recorded, on one line."),
+    rated_at: z.string().describe("When the Rating was recorded, ISO 8601."),
+  };
+
+/** What `pick_result` returns. */
+const pickOutputShape = {
+    comparison_id: z.string(),
+    job_id: z.string(),
+    result: z.number().optional().describe("The result picked; absent when the Job was picked as a whole."),
+    picked_at: z.string().describe("When the Pick was recorded, ISO 8601."),
+  };
+
+/** What `list_models` returns. */
+const listModelsOutput = {
+    default_model: z.string().optional().describe("Alias of the default image Model, used when `generate_image` gets no `model`."),
+    default_video_model: z.string().optional().describe("Alias of the default video Model, used when `generate_video` gets no `model`."),
+    models: z.array(listedModelSchema),
+  };
+
+/** What `update_model_notes` returns. */
+const modelNotesOutput = {
+    model: z.string(),
+    notes: z.string().optional().describe("The Model Notes now; absent when there are none."),
+    previous_notes: z.string().optional().describe("The Model Notes before this call; absent when there were none."),
+    changed: z.boolean().describe("False when the text was already the Model Notes, so nothing was recorded."),
+    changed_by: z.enum(changeAuthors).optional().describe("Who made the last change."),
+    changed_at: z.string().optional().describe("When the last change was made, ISO 8601."),
+  };
+
+/** What `update_standing_options` returns. */
+const standingOptionsOutput = {
+    model: z.string(),
+    standing_options: z.record(z.string(), z.unknown()).optional().describe("The Standing Options now; absent when there are none."),
+    previous_standing_options: z.record(z.string(), z.unknown()).optional().describe("The Standing Options before this call; absent when there were none."),
+    changed: z.boolean().describe("False when they already were these options, so nothing was recorded."),
+    changed_by: z.enum(changeAuthors).optional().describe("Who made the last change."),
+    changed_at: z.string().optional().describe("When the last change was made, ISO 8601."),
+  };
+
+/** What `open_settings` returns. */
+const openSettingsOutput = {
+    opened: z.literal(true).describe("The settings page is open in the User's browser."),
+    tab: z.enum(settingsTabs).optional().describe("The tab it opened on, when one was asked for."),
+  };
+
 export function createServer(deps: ServerDeps): McpServer {
   const server = new McpServer({ name: "litevision", version }, { instructions });
   const now = deps.now ?? (() => new Date());
@@ -844,11 +947,11 @@ export function createServer(deps: ServerDeps): McpServer {
   };
 
   /** Runs one prepared Job on its own, as `generate_image` and `generate_video` do; with `wait` false, in the background. */
-  const runSingle = async (wait: boolean, prepare: () => Promise<PreparedJob>) => {
+  const runSingle = async (wait: boolean, outputSchema: typeof imageJobShape | typeof videoJobShape, prepare: () => Promise<PreparedJob>) => {
     let prepared: PreparedJob | undefined;
     try {
       prepared = await prepare();
-      return toolResult(prepared.report(await prepared.start({ wait })));
+      return toolResult(outputSchema, prepared.report(await prepared.start({ wait })));
     } catch (error) {
       return failure(error, prepared?.hint, prepared?.optionSplit);
     }
@@ -888,7 +991,7 @@ export function createServer(deps: ServerDeps): McpServer {
       }),
       outputSchema: imageJobShape,
     },
-    async ({ model: alias, wait, ...args }) => runSingle(wait, async () => prepareImage(resolveModel(await loadConfig(deps.dirs), alias), args)),
+    async ({ model: alias, wait, ...args }) => runSingle(wait, imageJobShape, async () => prepareImage(resolveModel(await loadConfig(deps.dirs), alias), args)),
   );
 
   server.registerTool(
@@ -920,7 +1023,7 @@ export function createServer(deps: ServerDeps): McpServer {
       }),
       outputSchema: videoJobShape,
     },
-    async ({ model: alias, wait, ...args }) => runSingle(wait, async () => prepareVideo(resolveModel(await loadConfig(deps.dirs), alias, "video"), args)),
+    async ({ model: alias, wait, ...args }) => runSingle(wait, videoJobShape, async () => prepareVideo(resolveModel(await loadConfig(deps.dirs), alias, "video"), args)),
   );
 
   server.registerTool(
@@ -962,15 +1065,7 @@ export function createServer(deps: ServerDeps): McpServer {
             "Folder to save every Job's files in; created if missing. Relative paths resolve against litevision's working directory. Omit to save under a dated folder in the User's home directory.",
           ),
       }),
-      outputSchema: {
-        comparison_id: z.string(),
-        modality: z.enum(modalities),
-        jobs: z
-          .array(z.union([z.object(imageJobShape), z.object(videoJobShape), failedJobSchema]))
-          .describe(
-            'One per variant, in the order given: each as `generate_image` or `generate_video` returns it, or status "failed" with why.',
-          ),
-      },
+      outputSchema: comparisonOutput,
     },
     async ({ variants, modality: wanted, references, output_path }) => {
       let prepared: PreparedJob[];
@@ -1011,7 +1106,7 @@ export function createServer(deps: ServerDeps): McpServer {
           const reason = await failureReason(outcome.reason, job.hint, job.optionSplit).catch(
             () => `litevision could not run this Job: ${(outcome.reason as Error).message}`,
           );
-          const jobId = outcome.reason instanceof JobFailedError ? outcome.reason.jobId : null;
+          const jobId = outcome.reason instanceof JobFailedError ? outcome.reason.jobId : undefined;
           return {
             job_id: jobId,
             status: "failed" as const,
@@ -1021,7 +1116,7 @@ export function createServer(deps: ServerDeps): McpServer {
           };
         }),
       );
-      return toolResult({ comparison_id: comparisonId, modality, jobs: results });
+      return toolResult(comparisonOutput, { comparison_id: comparisonId, modality, jobs: results });
     },
   );
 
@@ -1033,19 +1128,7 @@ export function createServer(deps: ServerDeps): McpServer {
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `generate_comparison` returned."),
       },
-      outputSchema: {
-        job_id: z.string(),
-        status: jobStatusSchema,
-        model: z.string().describe("Alias of the Model that ran the Job."),
-        files: z.array(z.string()).optional().describe("Paths of the saved images or video, once the Job has completed."),
-        shortfall: z.string().optional().describe("Present when fewer images than asked for were saved: how many, and why."),
-        unchecked: uncheckedSchema,
-        observed: observedSchema,
-        mismatch: mismatchSchema,
-        source_jobs: sourceJobsSchema,
-        options_sent: optionsSentSchema,
-        overrides: overridesSchema,
-      },
+      outputSchema: getJobOutput,
     },
     async ({ job_id }) => {
       try {
@@ -1054,7 +1137,7 @@ export function createServer(deps: ServerDeps): McpServer {
         const record = history.find((candidate) => candidate.id === job_id);
         const sources = record === undefined ? [] : await showSourceJobs(record, new Map(history.map((known) => [known.id, known])));
         const optionSplit = recordedSources(record);
-        return toolResult({ ...jobOutput(job), ...sourceJobsField(sources), ...(optionSplit === undefined ? {} : optionsOutput(optionSplit)) });
+        return toolResult(getJobOutput, { ...jobOutput(job), ...sourceJobsField(sources), ...(optionSplit === undefined ? {} : optionsOutput(optionSplit)) });
       } catch (error) {
         // A video often outlasts `generate_video`'s wait, so its rejection may first reach the Agent here.
         const record = await readJob(deps.dirs, job_id).catch(() => undefined);
@@ -1078,18 +1161,12 @@ export function createServer(deps: ServerDeps): McpServer {
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `generate_comparison` returned."),
       },
-      outputSchema: {
-        job_id: z.string(),
-        status: z
-          .enum(["cancelled", "cancelling"])
-          .describe('"cancelling" while the Runtime or another litevision session has yet to stop it.'),
-        message: z.string(),
-      },
+      outputSchema: cancelOutput,
     },
     async ({ job_id }) => {
       try {
         const outcome = await jobs.cancel(job_id);
-        return toolResult({ job_id, ...outcome });
+        return toolResult(cancelOutput, { job_id, ...outcome });
       } catch (error) {
         return failure(error, undefined);
       }
@@ -1106,22 +1183,7 @@ export function createServer(deps: ServerDeps): McpServer {
         comparison_ids: z.array(z.string().min(1)).min(1).optional().describe("Comparisons to delete with all their Jobs."),
         all: z.literal(true).optional().describe("Delete every Job in the Job history."),
       },
-      outputSchema: {
-        deleted_jobs: z.array(z.string()).optional(),
-        deleted_files: z.array(z.string()).optional(),
-        already_gone: z.array(z.string()).optional().describe("Result files that were no longer there, as when the User had deleted or moved them."),
-        skipped_files: z
-          .array(z.object({ job_id: z.string(), file: z.string(), reason: z.enum(skipReasonNames) }))
-          .optional()
-          .describe("Files left where they were: `content-changed` when the file is no longer what the Job saved, so the User may have edited it; `could-not-delete` when the system refused, e.g. for want of permission."),
-        running_jobs: z.array(z.string()).optional().describe("Selected Jobs a litevision session is still running, left alone."),
-        not_found: z.array(z.string()).optional().describe("Job or Comparison ids the Job history does not have."),
-        picks_removed: z.array(z.object({ comparison_id: z.string(), job_id: z.string(), result: z.number().optional() })).optional(),
-        references_of_other_jobs: z
-          .array(z.object({ file: z.string(), job_ids: z.array(z.string()) }))
-          .optional()
-          .describe("Deleted files that remaining Jobs had used as a reference image or video frame."),
-      },
+      outputSchema: deletionReportOutput,
     },
     async ({ job_ids, comparison_ids, all }) => {
       const given = [job_ids, comparison_ids, all].filter((selector) => selector !== undefined).length;
@@ -1132,7 +1194,7 @@ export function createServer(deps: ServerDeps): McpServer {
         deps.dirs,
         job_ids !== undefined ? { jobIds: job_ids } : comparison_ids !== undefined ? { comparisonIds: comparison_ids } : { all: true },
       );
-      return toolResult(deletionOutput(report));
+      return toolResult(deletionReportOutput, deletionOutput(report));
     },
   );
 
@@ -1155,18 +1217,12 @@ export function createServer(deps: ServerDeps): McpServer {
           .max(ratingReasonMaxLength)
           .describe(`Why, in one line and in the User's words, e.g. "the text is misspelled". At most ${ratingReasonMaxLength} characters.`),
       },
-      outputSchema: {
-        job_id: z.string(),
-        result: z.number().optional().describe("The result rated; absent for a Rating of the whole Job."),
-        verdict: z.enum(verdicts),
-        reason: z.string().describe("The reason as recorded, on one line."),
-        rated_at: z.string().describe("When the Rating was recorded, ISO 8601."),
-      },
+      outputSchema: ratingOutputShape,
     },
     async ({ job_id, result, verdict, reason }) => {
       try {
         const rating = await rateJob(deps.dirs, { jobId: job_id, result, verdict, reason }, now());
-        return toolResult(ratingOutput(rating));
+        return toolResult(ratingOutputShape, ratingOutput(rating));
       } catch (error) {
         if (error instanceof RatingError) return toolError(error.message);
         throw error;
@@ -1189,17 +1245,12 @@ export function createServer(deps: ServerDeps): McpServer {
           .optional()
           .describe("Which result of that Job the User chose, from 1 in the order of its files. Omit when the Job made one result or the User chose the Job as a whole."),
       },
-      outputSchema: {
-        comparison_id: z.string(),
-        job_id: z.string(),
-        result: z.number().optional().describe("The result picked; absent when the Job was picked as a whole."),
-        picked_at: z.string().describe("When the Pick was recorded, ISO 8601."),
-      },
+      outputSchema: pickOutputShape,
     },
     async ({ comparison_id, job_id, result }) => {
       try {
         const pick = await pickResult(deps.dirs, { comparison: comparison_id, jobId: job_id, result }, now());
-        return toolResult(pickOutput(pick));
+        return toolResult(pickOutputShape, pickOutput(pick));
       } catch (error) {
         if (error instanceof PickError) return toolError(error.message);
         throw error;
@@ -1215,11 +1266,7 @@ export function createServer(deps: ServerDeps): McpServer {
       inputSchema: {
         model: z.string().optional().describe("Alias of one Model to describe in detail. Omit to list every Model."),
       },
-      outputSchema: {
-        default_model: z.string().optional().describe("Alias of the default image Model, used when `generate_image` gets no `model`."),
-        default_video_model: z.string().optional().describe("Alias of the default video Model, used when `generate_video` gets no `model`."),
-        models: z.array(listedModelSchema),
-      },
+      outputSchema: listModelsOutput,
     },
     async ({ model: alias }) => {
       try {
@@ -1238,7 +1285,7 @@ export function createServer(deps: ServerDeps): McpServer {
         const statusesOf = await optionStatusReader(deps.dirs);
         const detailed = alias !== undefined;
         const entries = await Promise.all(models.map((model) => listedModel(infoDeps, config, model, detailed, ratedJobs, statusesOf)));
-        return toolResult({ ...(detailed ? {} : { default_model: defaultModel, default_video_model: defaultVideoModel }), models: entries });
+        return toolResult(listModelsOutput, { ...(detailed ? {} : { default_model: defaultModel, default_video_model: defaultVideoModel }), models: entries });
       } catch (error) {
         if (error instanceof ConfigError) return toolError(error.message);
         throw error;
@@ -1256,19 +1303,12 @@ export function createServer(deps: ServerDeps): McpServer {
           .string()
           .describe(`The complete new Model Notes the User agreed to, at most ${modelNotesMaxLength} characters. An empty string clears them.`),
       },
-      outputSchema: {
-        model: z.string(),
-        notes: z.string().optional().describe("The Model Notes now; absent when there are none."),
-        previous_notes: z.string().optional().describe("The Model Notes before this call; absent when there were none."),
-        changed: z.boolean().describe("False when the text was already the Model Notes, so nothing was recorded."),
-        changed_by: z.enum(changeAuthors).optional().describe("Who made the last change."),
-        changed_at: z.string().optional().describe("When the last change was made, ISO 8601."),
-      },
+      outputSchema: modelNotesOutput,
     },
     async ({ model, notes }) => {
       try {
         const change = await updateNotesAsAgent(deps.dirs, model, notes, now());
-        return toolResult({
+        return toolResult(modelNotesOutput, {
           model,
           notes: change.notes,
           previous_notes: change.previous,
@@ -1294,22 +1334,15 @@ export function createServer(deps: ServerDeps): McpServer {
           .record(z.string(), z.unknown())
           .describe('The complete new Standing Options the User agreed to, such as { "size": "1024x1024" }. {} clears them.'),
       },
-      outputSchema: {
-        model: z.string(),
-        standing_options: z.record(z.string(), z.unknown()).optional().describe("The Standing Options now; absent when there are none."),
-        previous_standing_options: z.record(z.string(), z.unknown()).optional().describe("The Standing Options before this call; absent when there were none."),
-        changed: z.boolean().describe("False when they already were these options, so nothing was recorded."),
-        changed_by: z.enum(changeAuthors).optional().describe("Who made the last change."),
-        changed_at: z.string().optional().describe("When the last change was made, ISO 8601."),
-      },
+      outputSchema: standingOptionsOutput,
     },
     async ({ model, standing_options }) => {
       try {
         const change = await updateStandingOptionsAsAgent(deps.dirs, model, standing_options, now());
-        return toolResult({
+        return toolResult(standingOptionsOutput, {
           model,
-          standing_options: filled(change.standingOptions),
-          previous_standing_options: filled(change.previous),
+          standing_options: change.standingOptions,
+          previous_standing_options: change.previous,
           changed: change.changed,
           changed_by: change.history?.changedBy,
           changed_at: change.history?.changedAt,
@@ -1345,10 +1378,7 @@ export function createServer(deps: ServerDeps): McpServer {
           .optional()
           .describe("The tab to open: `providers`, `models` or `history` (the Job history). Omit to open the page as it opens by default."),
       },
-      outputSchema: {
-        opened: z.literal(true).describe("The settings page is open in the User's browser."),
-        tab: z.enum(settingsTabs).optional().describe("The tab it opened on, when one was asked for."),
-      },
+      outputSchema: openSettingsOutput,
     },
     async ({ tab }) => {
       try {
@@ -1359,7 +1389,7 @@ export function createServer(deps: ServerDeps): McpServer {
           "Could not open the User's browser. Ask the User to run `litevision settings` in a terminal, which opens the settings page and prints its address.",
         );
       }
-      return toolResult({ opened: true, tab });
+      return toolResult(openSettingsOutput, { opened: true, tab });
     },
   );
 
