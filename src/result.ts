@@ -18,13 +18,13 @@ export function filled(value: Record<string, unknown>): Data | undefined {
 
 /**
  * `value` without its null, undefined or empty-string fields and without empty arrays and objects; data stays whole.
- * An array keeps a null item, which holds its place, such as a file litevision could not read; one of nulls alone goes.
+ * An array keeps a null item, which holds its place, such as a file litevision could not read.
  */
 export function compact(value: unknown): unknown {
   if (value instanceof Data) return value.value;
   if (Array.isArray(value)) {
     const items = value.map((item) => compact(item) ?? null);
-    return items.every((item) => item === null) ? undefined : items;
+    return items.length === 0 ? undefined : items;
   }
   if (typeof value === "object" && value !== null) {
     const entries = Object.entries(value).flatMap(([key, field]) => {

@@ -503,11 +503,11 @@ const observedSchema = z
   .optional()
   .describe("What each saved file turned out to be, in the order of `files`, read from the file itself; null where litevision could not tell.");
 
-/** What a Job's result can be checked for, when litevision reads it from the request (ADR 0006). */
-const checkedDimensions = ["shape", "size", "format", "length"] as const;
+/** What litevision checks a Job's result for, when it can read it from the request (ADR 0006). */
+const checkedFacts = ["shape", "size", "format", "length"] as const;
 
 const uncheckedSchema = z
-  .array(z.enum(checkedDimensions))
+  .array(z.enum(checkedFacts))
   .optional()
   .describe(
     "Present when litevision could not read from the request what the result should be, so did not check it: shape, size (in pixels), format or length (videos).",
@@ -515,14 +515,15 @@ const uncheckedSchema = z
 
 /** The `unchecked` field of a Job's output: what litevision could not read from the request, so did not check. */
 function uncheckedOutput(requested: Requested) {
-  const unread: Record<(typeof checkedDimensions)[number], boolean> = {
+  const unread: Record<(typeof checkedFacts)[number], boolean> = {
     shape: requested.shape === null,
+    // Absent on a Job recorded before litevision checked it, so unchecked too.
     size: requested.size == null,
     format: requested.format == null,
     // Only a video Job has a length.
     length: requested.seconds === null,
   };
-  return { unchecked: checkedDimensions.filter((dimension) => unread[dimension]) };
+  return { unchecked: checkedFacts.filter((fact) => unread[fact]) };
 }
 
 const mismatchSchema = z
@@ -1139,7 +1140,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "rate_job",
     {
       description:
-        "Record the User's Rating of a completed Job, or of one result of it: good or bad, plus a one-line reason in their words. Call it only when the User has actually said what they think of the result; never invent a verdict or rate a result yourself. A later Rating of the same Job and result replaces the earlier one; a Rating of the whole Job and one of a single result stand side by side.",
+        "Record the User's Rating of a completed Job, or of one result of it: their own verdict, good or bad, plus a one-line reason in their words. Never invent a verdict or rate a result yourself. A later Rating of the same Job and result replaces the earlier one; a Rating of the whole Job and one of a single result stand side by side.",
       inputSchema: {
         job_id: z.string().min(1).describe("The `job_id` that `generate_image`, `generate_video` or `get_job` returned."),
         result: z
@@ -1177,7 +1178,7 @@ export function createServer(deps: ServerDeps): McpServer {
     "pick_result",
     {
       description:
-        "Record the User's Pick within a Comparison: the Job, or the one result of it, the User chose among the Comparison's results. Call it only when the User actually chooses; never pick for them. A later Pick for the same Comparison replaces the earlier one. A Pick is a relative preference, not a Rating: when the User also gives a verdict, call `rate_job` too.",
+        "Record the User's Pick within a Comparison: the Job, or the one result of it, the User chose among the Comparison's results. Never pick for them. A later Pick for the same Comparison replaces the earlier one. A Pick is a relative preference, not a Rating: when the User also gives a verdict, call `rate_job` too.",
       inputSchema: {
         comparison_id: z.string().min(1).describe("The `comparison_id` that `generate_comparison` returned."),
         job_id: z.string().min(1).describe("The `job_id` of the chosen Job, one of the Comparison's Jobs."),
