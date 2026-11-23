@@ -219,8 +219,8 @@ describe("the first run after upgrading", () => {
     const [fromFirst, fromSecond] = await Promise.all([statuses(harness), statuses(second)]);
 
     expect(fromSecond).toEqual(fromFirst);
+    expect(fromFirst).not.toHaveProperty("honoured");
     expect(fromFirst).toMatchObject({
-      honoured: [],
       ignored: [{ options: { size: "1536x1024" }, job_id: "wide", reason: "asked for 1536x1024, got 1024x1024" }],
       rejected: [{ options: { quality: "ultra" }, job_id: "ultra" }],
       accepted: [{ options: { quality: "high" }, job_id: "high" }],

@@ -32,7 +32,6 @@ describe("list_models", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({
       default_model: "gpt-image",
-      default_video_model: null,
       models: [
         {
           alias: "gpt-image",
@@ -42,10 +41,8 @@ describe("list_models", () => {
           modality: "image",
           default: true,
           notes: "photoreal, legible text",
-          standing_options: {},
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           parameters: expect.stringContaining("Parameter Guide for GPT Image 1.x"),
-          option_statuses: { honoured: [], ignored: [], rejected: [], accepted: [] },
         },
         {
           alias: "dalle",
@@ -54,18 +51,11 @@ describe("list_models", () => {
           model_id: "dall-e-3",
           modality: "image",
           default: false,
-          notes: "",
-          standing_options: {},
           docs_url: "https://platform.openai.com/docs/api-reference/images/create",
           parameters: expect.stringContaining("litevision has no Parameter Guide for this model id"),
-          option_statuses: { honoured: [], ignored: [], rejected: [], accepted: [] },
         },
       ],
     });
-    const text = textOf(result);
-    expect(text).toContain("gpt-image (default image)");
-    expect(text).toContain("photoreal, legible text");
-    expect(text).toContain("no Parameter Guide");
   });
 
   test("with no Model configured, tells the Agent to call open_settings", async () => {
@@ -82,7 +72,8 @@ describe("list_models", () => {
     const result = await listModels();
     expect(result.isError).toBeFalsy();
     const [model] = (result.structuredContent as { models: Array<Record<string, unknown>> }).models;
-    expect(model).toMatchObject({ alias: "odd", docs_url: null });
+    expect(model).toMatchObject({ alias: "odd" });
+    expect(model).not.toHaveProperty("docs_url");
     expect(String(model!.problem)).toContain('Protocol "carrier-pigeon"');
   });
 
@@ -189,11 +180,6 @@ describe("list_models with `model`: recent Ratings (ADR 0008)", () => {
       { job_id: "f", result: 2, verdict: "good", reason: "third, on the second image", rated_at: "2026-11-01T10:02:00.000Z", prompt: "prompt of f" },
       { job_id: "b", verdict: "bad", reason: "second", rated_at: "2026-11-01T10:01:00.000Z", prompt: "prompt of b" },
     ]);
-    const text = textOf(result);
-    expect(text).toContain('bad on result 1 of Job e ("prompt of e"): newest');
-    expect(text).toContain('good on Job d ("prompt of d"): fifth');
-    expect(text.indexOf("newest")).toBeLessThan(text.indexOf("fifth"));
-    expect(text).not.toContain("oldest");
   });
 
   test("shows only the start of a long prompt, on one line", async () => {
@@ -206,7 +192,6 @@ describe("list_models with `model`: recent Ratings (ADR 0008)", () => {
     expect(ratingsOf(result)).toMatchObject([
       { prompt: "A watercolour fox sitting in tall grass at dusk, with fireflies all around with…" },
     ]);
-    expect(textOf(result)).toContain('("A watercolour fox sitting in tall grass at dusk, with fireflies all around with…"): lovely light');
   });
 
   test("follows the Model by Provider, Protocol and model id, so renaming its Alias keeps its Ratings", async () => {
@@ -255,8 +240,7 @@ describe("list_models with `model`: recent Ratings (ADR 0008)", () => {
   test("says when the Model has no Ratings yet", async () => {
     await start([jobRecord("fox", "2026-11-01T09:00:00.000Z")]);
     const result = await describeModel("gpt-image");
-    expect(ratingsOf(result)).toEqual([]);
-    expect(textOf(result)).toContain("Recent Ratings: none recorded yet.");
+    expect(ratingsOf(result)).toBeUndefined();
   });
 
   test("list_models without `model` does not show Ratings", async () => {

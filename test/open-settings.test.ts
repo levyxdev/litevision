@@ -31,7 +31,7 @@ describe("open_settings", () => {
     const result = await openSettings();
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain("Opened the litevision settings page");
+    expect(result.structuredContent).toEqual({ opened: true });
     expect(harness.openedUrls).toHaveLength(1);
     const url = new URL(harness.openedUrls[0]!);
     expect(url.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);

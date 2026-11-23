@@ -40,6 +40,12 @@ function ok(result: ToolResult): Record<string, any> {
   return result.structuredContent as Record<string, any>;
 }
 
+/** A deletion report with its empty lists, which the result leaves out (ADR 0017). */
+function reportOf(result: ToolResult): Record<string, any> {
+  const lists = ["deleted_jobs", "deleted_files", "already_gone", "skipped_files", "running_jobs", "not_found", "picks_removed", "references_of_other_jobs"];
+  return { ...Object.fromEntries(lists.map((list) => [list, []])), ...ok(result) };
+}
+
 const call = (name: string, args: Record<string, unknown>, on: Harness = harness!) => on.client.callTool({ name, arguments: args });
 const deleteJobs = (args: Record<string, unknown>) => call("delete_jobs", args);
 
@@ -58,7 +64,7 @@ describe("delete_jobs", () => {
     ok(await call("rate_job", { job_id: kept.job_id, verdict: "bad", reason: "blurry" }));
     const keptLines = (await readHistoryLines(harness)).filter((line) => line.id === kept.job_id || line.jobId === kept.job_id);
 
-    const report = ok(await deleteJobs({ job_ids: [gone.job_id] }));
+    const report = reportOf(await deleteJobs({ job_ids: [gone.job_id] }));
 
     expect(report).toMatchObject({ deleted_jobs: [gone.job_id], deleted_files: gone.files, already_gone: [], skipped_files: [], running_jobs: [], not_found: [] });
     expect(await exists(gone.files[0]!)).toBe(false);
@@ -80,8 +86,8 @@ describe("delete_jobs", () => {
 
   test("lists ids the Job history does not have", async () => {
     harness = await startHarness(togetherSetup());
-    expect(ok(await deleteJobs({ job_ids: ["nope"] }))).toMatchObject({ deleted_jobs: [], not_found: ["nope"] });
-    expect(ok(await deleteJobs({ comparison_ids: ["none"] }))).toMatchObject({ deleted_jobs: [], not_found: ["none"] });
+    expect(reportOf(await deleteJobs({ job_ids: ["nope"] }))).toMatchObject({ deleted_jobs: [], not_found: ["nope"] });
+    expect(reportOf(await deleteJobs({ comparison_ids: ["none"] }))).toMatchObject({ deleted_jobs: [], not_found: ["none"] });
   });
 
   test("with comparison_ids deletes all of a Comparison's Jobs and its Pick; deleting one of its Jobs keeps the others", async () => {
@@ -93,11 +99,11 @@ describe("delete_jobs", () => {
     ok(await call("pick_result", { comparison_id: first.comparison_id, job_id: b!.job_id }));
     ok(await call("pick_result", { comparison_id: other.comparison_id, job_id: c!.job_id }));
 
-    const whole = ok(await deleteJobs({ comparison_ids: [first.comparison_id] }));
+    const whole = reportOf(await deleteJobs({ comparison_ids: [first.comparison_id] }));
     expect(whole.deleted_jobs.sort()).toEqual([a!.job_id, b!.job_id].sort());
     expect(whole.picks_removed).toEqual([{ comparison_id: first.comparison_id, job_id: b!.job_id }]);
 
-    const one = ok(await deleteJobs({ job_ids: [d!.job_id] }));
+    const one = reportOf(await deleteJobs({ job_ids: [d!.job_id] }));
     expect(one).toMatchObject({ deleted_jobs: [d!.job_id], picks_removed: [] });
     expect((await readHistory(harness)).map((record) => record.id)).toEqual([c!.job_id]);
     expect((await readHistoryLines(harness)).filter((line) => line.type === "pick")).toEqual([
@@ -112,7 +118,7 @@ describe("delete_jobs", () => {
     ok(await call("pick_result", { comparison_id: comparison.comparison_id, job_id: a!.job_id }));
     ok(await call("pick_result", { comparison_id: comparison.comparison_id, job_id: b!.job_id }));
 
-    ok(await deleteJobs({ job_ids: [b!.job_id] }));
+    reportOf(await deleteJobs({ job_ids: [b!.job_id] }));
 
     expect((await readHistoryLines(harness)).filter((line) => line.type === "pick")).toEqual([]);
   });
@@ -131,7 +137,7 @@ describe("delete_jobs", () => {
     held = true;
     const running = ok(await call("generate_image", { prompt: "a slow fox", wait: false })) as { job_id: string };
 
-    const report = ok(await deleteJobs({ all: true }));
+    const report = reportOf(await deleteJobs({ all: true }));
 
     expect(report).toMatchObject({ deleted_jobs: [done.job_id], running_jobs: [running.job_id] });
     release();
@@ -146,17 +152,14 @@ describe("delete_jobs", () => {
     await writeFile(changed.files[0]!, "edited by the User");
     await Bun.file(missing.files[0]!).delete();
 
-    const result = await deleteJobs({ job_ids: [changed.job_id, missing.job_id] });
-    const report = ok(result);
+    const report = reportOf(await deleteJobs({ job_ids: [changed.job_id, missing.job_id] }));
 
     expect(report.deleted_jobs.sort()).toEqual([changed.job_id, missing.job_id].sort());
     expect(report.deleted_files).toEqual([]);
     expect(report.already_gone).toEqual([missing.files[0]]);
     expect(report.skipped_files).toEqual([{ job_id: changed.job_id, file: changed.files[0], reason: "content-changed" }]);
     expect(await readFile(changed.files[0]!, "utf8")).toBe("edited by the User");
-    expect(textOf(result)).toContain("1 Result was already gone");
-    expect(textOf(result)).not.toContain(`Left ${missing.files[0]}`);
-    expect(textOf(await deleteJobs({ all: true }))).toContain("Deleted 0 Jobs");
+    expect(reportOf(await deleteJobs({ all: true })).deleted_jobs).toEqual([]);
   });
 
   // Root may delete anything, so only another user can be refused.
@@ -166,7 +169,7 @@ describe("delete_jobs", () => {
     const free = await generate({ name: "free" });
     await chmod(dirname(locked.files[0]!), 0o500);
     try {
-      const report = ok(await deleteJobs({ job_ids: [locked.job_id, free.job_id] }));
+      const report = reportOf(await deleteJobs({ job_ids: [locked.job_id, free.job_id] }));
 
       expect(report.deleted_jobs.sort()).toEqual([locked.job_id, free.job_id].sort());
       expect(report.deleted_files).toEqual(free.files);
@@ -202,7 +205,7 @@ describe("delete_jobs", () => {
     await mkdir(harness.dirs.home, { recursive: true });
     await writeFile(join(harness.dirs.home, "jobs.jsonl"), JSON.stringify(old) + "\n");
 
-    const report = ok(await deleteJobs({ job_ids: ["old"] }));
+    const report = reportOf(await deleteJobs({ job_ids: ["old"] }));
 
     expect(report).toMatchObject({ deleted_files: [image], skipped_files: [{ job_id: "old", file: replaced, reason: "content-changed" }] });
     expect(await exists(replaced)).toBe(true);
@@ -215,7 +218,7 @@ describe("delete_jobs", () => {
     const source = await generate({ name: "source", references: [userImage] });
     const user = await generate({ name: "user", references: [source.files[0]] });
 
-    const report = ok(await deleteJobs({ job_ids: [source.job_id] }));
+    const report = reportOf(await deleteJobs({ job_ids: [source.job_id] }));
 
     expect(report.deleted_files).toEqual(source.files);
     expect(report.references_of_other_jobs).toEqual([{ file: source.files[0], job_ids: [user.job_id] }]);
@@ -229,7 +232,7 @@ describe("delete_jobs", () => {
     const named = await generate({ output_path: chosen });
     expect(dirname(named.files[0]!)).toBe(chosen);
 
-    ok(await deleteJobs({ all: true }));
+    reportOf(await deleteJobs({ all: true }));
 
     expect(await exists(dated.files[0]!)).toBe(false);
     expect(await stat(dirname(dated.files[0]!)).catch(() => undefined)).toBeUndefined();
@@ -242,19 +245,18 @@ describe("after deleting a Job", () => {
   test("its Option Statuses stay, marked as from a deleted Job", async () => {
     harness = await startHarness(togetherSetup());
     const job = await generate({ provider_options: { steps: 4 } });
-    ok(await deleteJobs({ job_ids: [job.job_id] }));
+    reportOf(await deleteJobs({ job_ids: [job.job_id] }));
 
     const listed = ok(await call("list_models", { model: "sdxl" }));
     expect(listed.models[0].option_statuses.accepted).toEqual([
       { options: { steps: 4 }, job_id: job.job_id, job_deleted: true, date: expect.any(String) },
     ]);
-    expect(textOf(await call("list_models", { model: "sdxl" }))).toContain(`Job ${job.job_id} (deleted)`);
   });
 
   test("get_job answers as for a Job litevision never had", async () => {
     harness = await startHarness(togetherSetup());
     const job = await generate();
-    ok(await deleteJobs({ job_ids: [job.job_id] }));
+    reportOf(await deleteJobs({ job_ids: [job.job_id] }));
 
     const result = await call("get_job", { job_id: job.job_id });
     expect(result.isError).toBe(true);
@@ -267,7 +269,7 @@ describe("after deleting a Job", () => {
     const user = await generate({ name: "user", references: [source.files[0]] });
     const before = (await readHistory(harness)).find((record) => record.id === user.job_id);
 
-    ok(await deleteJobs({ job_ids: [source.job_id] }));
+    reportOf(await deleteJobs({ job_ids: [source.job_id] }));
 
     expect((await readHistory(harness)).find((record) => record.id === user.job_id)).toEqual(before!);
     const shown = ok(await call("get_job", { job_id: user.job_id }));
@@ -319,7 +321,7 @@ describe("a Job left running by a session that has ended", () => {
     await mkdir(harness.dirs.home, { recursive: true });
     await writeFile(join(harness.dirs.home, "jobs.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
 
-    const report = ok(await deleteJobs({ all: true }));
+    const report = reportOf(await deleteJobs({ all: true }));
 
     expect(report.deleted_jobs.sort()).toEqual(["before-owners", "orphan"]);
     expect(report.running_jobs).toEqual(["live"]);
@@ -355,7 +357,7 @@ describe("a Job left running by a session that has ended", () => {
     // As an older litevision, or a process whose pid was reused, would leave it: taken for interrupted.
     const [record] = await readHistory(harness);
     await writeFile(join(harness.dirs.home, "jobs.jsonl"), JSON.stringify({ ...record, owner: { pid: await deadPid() } }) + "\n", { flag: "a" });
-    expect(ok(await deleteJobs({ job_ids: [running.job_id] })).deleted_jobs).toEqual([running.job_id]);
+    expect(reportOf(await deleteJobs({ job_ids: [running.job_id] })).deleted_jobs).toEqual([running.job_id]);
 
     release();
     // Long enough for the Job to finish in the background, saving and recording what it brought back.
@@ -375,7 +377,7 @@ describe("a Job left running by a session that has ended", () => {
     const { rm } = await import("node:fs/promises");
     await rm(join(harness.dirs.home, "evidence.jsonl"), { recursive: true });
 
-    ok(await deleteJobs({ job_ids: [job.job_id] }));
+    reportOf(await deleteJobs({ job_ids: [job.job_id] }));
 
     const listed = ok(await call("list_models", { model: "sdxl" }));
     expect(listed.models[0].option_statuses.accepted).toMatchObject([{ options: { steps: 4 }, job_id: job.job_id, job_deleted: true }]);

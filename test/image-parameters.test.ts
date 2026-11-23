@@ -72,7 +72,7 @@ describe("size", () => {
     harness = await startHarness(openaiSetup());
     const output = outputOf(await generate({}));
     expect(await harness.requests[0]!.json()).not.toHaveProperty("size");
-    expect(output).toMatchObject({ requested_shape: null });
+    expect(output).not.toHaveProperty("requested_shape");
     expect(output).not.toHaveProperty("aspect_ratio");
     expect(output).not.toHaveProperty("size");
     expect(output).not.toHaveProperty("aspect_ratio_adjusted");

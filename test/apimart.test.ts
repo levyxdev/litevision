@@ -337,7 +337,7 @@ describe("what list_models knows about an APIMart Model", () => {
 
     const [model] = (result.structuredContent as { models: any[] }).models;
     expect(model.parameter_schema.properties.resolution.enum).toEqual(["1k", "2k", "4k"]);
-    expect(model.parameter_guide).toBeNull();
+    expect(model).not.toHaveProperty("parameter_guide");
     expect(model).not.toHaveProperty("capabilities");
     expect(model.docs_url).toBe("https://docs.apimart.ai/en/api-reference/images/gpt-image-2/generation");
     const [schemaRequest] = harness.requests;
@@ -382,9 +382,8 @@ describe("asynchronous Jobs", () => {
 
     expect(result.isError).toBeFalsy();
     const output = result.structuredContent as unknown as GenerateResult;
-    expect(output).toMatchObject({ status: "running", model: "gpt2", files: [] });
-    expect(textOf(result)).toContain("get_job");
-    expect(textOf(result)).toContain(output.job_id);
+    expect(output).toMatchObject({ status: "running", model: "gpt2" });
+    expect(output).not.toHaveProperty("files");
     expect((await readHistory(harness))[0]).toMatchObject({ id: output.job_id, outcome: "running" });
 
     task.release();
@@ -394,7 +393,6 @@ describe("asynchronous Jobs", () => {
     expect(done).toMatchObject({ job_id: output.job_id, status: "completed", model: "gpt2" });
     expect(done.files).toHaveLength(1);
     expect(await readFile(done.files[0]!)).toEqual(tinyPng);
-    expect(textOf(job)).toContain(done.files[0]!);
 
     // A completed Job is answered from the Job history.
     const again = await getJob(harness, output.job_id);
@@ -407,7 +405,7 @@ describe("asynchronous Jobs", () => {
 
     const job = await getJob(harness, job_id);
     expect(job.isError).toBeFalsy();
-    expect(job.structuredContent).toMatchObject({ job_id, status: "running", files: [] });
+    expect(job.structuredContent).toEqual({ job_id, status: "running", model: "gpt2" });
   });
 
   test("get_job resumes polling from the Job history after the MCP server restarts", async () => {

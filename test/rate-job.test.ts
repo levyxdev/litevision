@@ -174,7 +174,6 @@ describe("rate_job with a result", () => {
       reason: "the second one is great",
       rated_at: ratedAt.toISOString(),
     });
-    expect(textOf(response)).toContain("result 2");
     expect((await readHistoryLines(harness)).at(-1)).toEqual({
       type: "rating",
       jobId,

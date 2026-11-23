@@ -70,11 +70,10 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     harness = await startHarness(setup());
     const result = await video();
     const output = result.structuredContent as unknown as VideoOutput;
-    expect(output.requested_shape).toBeNull();
-    expect(output.requested_duration).toBeNull();
-    expect(output.requested_resolution).toBeNull();
+    expect(output.requested_shape).toBeUndefined();
+    expect(output.requested_duration).toBeUndefined();
+    expect(output.requested_resolution).toBeUndefined();
     expect(output.mismatch).toBeUndefined();
-    expect(textOf(result)).toContain("not checked");
   });
 
   test("resolution, ratio and seconds in provider_options reach Together unchanged", async () => {
@@ -84,7 +83,6 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(await sentBody()).toMatchObject({ resolution: "1080P", ratio: "9:16", seconds: "12" });
     const output = result.structuredContent as unknown as VideoOutput;
     expect(output).toMatchObject({ requested_shape: "9:16", requested_resolution: "1080P", requested_duration: 12 });
-    expect(textOf(result)).toContain("9:16 at 1080P, 12 s");
     expect(output.mismatch).toBeUndefined();
   });
 

@@ -119,8 +119,7 @@ describe("Standing Options (ADR 0010)", () => {
     const result = await h.client.callTool({ name: "list_models", arguments: {} });
     const models = (result.structuredContent as { models: Array<{ alias: string; standing_options: unknown }> }).models;
     expect(models.find((model) => model.alias === "flux2")!.standing_options).toEqual(standing);
-    expect(models.find((model) => model.alias === "sdxl")!.standing_options).toEqual({});
-    expect(textOf(result)).toContain(`Standing Options: ${JSON.stringify(standing)}`);
+    expect(models.find((model) => model.alias === "sdxl")).not.toHaveProperty("standing_options");
   });
 
   test("a generate_image result shows which options came from the Standing Options and which from the Job, and each one the Job overrode", async () => {
@@ -138,10 +137,9 @@ describe("Standing Options (ADR 0010)", () => {
       overrides: [
         { option: "steps", standing: 28, job: 40 },
         { option: "output.quality", standing: 90, job: 70 },
-        { option: "seed", standing: 7, job: null },
+        { option: "seed", standing: 7, dropped: true },
       ],
     });
-    expect(textOf(result)).toContain("This Job overrode Standing Options: steps 28 → 40, output.quality 90 → 70, seed 7 → dropped.");
   });
 
   test("a Job that drops every key of a Standing object shows the empty object it sent", async () => {
@@ -153,8 +151,8 @@ describe("Standing Options (ADR 0010)", () => {
     expect(result.structuredContent).toMatchObject({
       options_sent: { standing: { steps: 28, guidance: 3.5, seed: 7 }, job: { output: {} } },
       overrides: [
-        { option: "output.format", standing: "png", job: null },
-        { option: "output.quality", standing: 90, job: null },
+        { option: "output.format", standing: "png", dropped: true },
+        { option: "output.quality", standing: 90, dropped: true },
       ],
     });
   });
@@ -226,24 +224,24 @@ describe("Standing Options (ADR 0010)", () => {
       options_sent: { standing: { guidance: 3.5, output: { format: "png", quality: 90 }, seed: 7 }, job: { steps: 40 } },
       overrides: [{ option: "steps", standing: 28, job: 40 }],
     });
-    expect(textOf(result)).toContain("This Job overrode Standing Options: steps 28 → 40.");
   });
 
   test("a generate_video result and each generate_comparison variant show their options the same way", async () => {
     const h = await start();
     const video = await h.client.callTool({ name: "generate_video", arguments: { prompt: "a fox runs", provider_options: { negative_prompt: null } } });
     expect(video.structuredContent).toMatchObject({
-      options_sent: { standing: { generate_audio: true }, job: {} },
-      overrides: [{ option: "negative_prompt", standing: "blur", job: null }],
+      options_sent: { standing: { generate_audio: true } },
+      overrides: [{ option: "negative_prompt", standing: "blur", dropped: true }],
     });
+    expect((video.structuredContent as { options_sent: object }).options_sent).not.toHaveProperty("job");
 
     const comparison = await h.client.callTool({
       name: "generate_comparison",
       arguments: { variants: [{ prompt: "a fox", model: "flux2" }, { prompt: "a fox", model: "sdxl", provider_options: { steps: 30 } }] },
     });
     const [flux, sdxl] = (comparison.structuredContent as { jobs: unknown[] }).jobs;
-    expect(flux).toMatchObject({ options_sent: { standing, job: {} } });
-    expect(sdxl).toMatchObject({ options_sent: { standing: {}, job: { steps: 30 } } });
+    expect((flux as { options_sent: unknown }).options_sent).toEqual({ standing });
+    expect((sdxl as { options_sent: unknown }).options_sent).toEqual({ job: { steps: 30 } });
   });
 
   test("no tool description models a price option such as quality: high", async () => {
@@ -303,7 +301,8 @@ describe("update_standing_options", () => {
   test("sets them on a Model that had none, and {} clears them", async () => {
     await start();
     const set = await update({ model: "sdxl", standing_options: { steps: 30 } });
-    expect(set.structuredContent).toMatchObject({ previous_standing_options: {}, changed: true });
+    expect(set.structuredContent).toMatchObject({ changed: true });
+    expect(set.structuredContent).not.toHaveProperty("previous_standing_options");
     expect((await stored("sdxl")).standingOptions).toEqual({ steps: 30 });
 
     const cleared = await update({ model: "sdxl", standing_options: {} });
@@ -314,7 +313,8 @@ describe("update_standing_options", () => {
   test("the same options again record no change", async () => {
     await start();
     const result = await update({ model: "flux2", standing_options: standing });
-    expect(result.structuredContent).toMatchObject({ changed: false, changed_by: null });
+    expect(result.structuredContent).toMatchObject({ changed: false });
+    expect(result.structuredContent).not.toHaveProperty("changed_by");
     expect(await stored("flux2")).not.toHaveProperty("standingOptionsHistory");
   });
 

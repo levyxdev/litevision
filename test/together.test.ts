@@ -202,12 +202,10 @@ describe("generate_image with the together Protocol", () => {
     const result = await generate({ provider_options: { width: 1024, height: 576 } });
     const output = ok(result);
     expect(output.mismatch).toBe("asked for 1024x576, got 1024x1024");
-    expect(textOf(result)).toContain("does not match the request");
-    expect(textOf(result)).toContain("https://docs.together.ai/docs/inference/images/parameters");
 
     const listed = ok(await call("list_models", { model: "sdxl" }));
     expect(listed.models[0].option_statuses.ignored).toMatchObject([{ options: { width: 1024, height: 576 }, reason: "asked for 1024x576, got 1024x1024" }]);
-    expect(listed.models[0].option_statuses.honoured).toEqual([]);
+    expect(listed.models[0].option_statuses.honoured).toBeUndefined();
   });
 
   test("a result is checked against the asked aspect ratio, within rounding to the Model's grid", async () => {
@@ -241,8 +239,6 @@ describe("Option Status (ADR 0011)", () => {
 
     expect(await statusesOf()).toEqual({
       honoured: [{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date }],
-      ignored: [],
-      rejected: [],
       accepted: [{ options: { seed: 7 }, job_id: job.job_id, date }],
     });
   });
@@ -300,7 +296,7 @@ describe("Option Status (ADR 0011)", () => {
 
     const statuses = await statusesOf();
     expect(statuses.ignored).toEqual([{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date, reason: "asked for 1792x2400, got 896x1200" }]);
-    expect(statuses.honoured).toEqual([]);
+    expect(statuses.honoured).toBeUndefined();
     expect(statuses.accepted).toEqual([{ options: { seed: 7 }, job_id: job.job_id, date }]);
   });
 
@@ -326,7 +322,7 @@ describe("Option Status (ADR 0011)", () => {
   test("a format litevision cannot read from a file's header is not checked", async () => {
     harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
     const job = ok(await generate({ model: "nb2", provider_options: { output_format: "svg" } }));
-    expect(job).toMatchObject({ requested_format: null });
+    expect(job).not.toHaveProperty("requested_format");
     expect(job.mismatch).toBeUndefined();
     expect((await statusesOf()).accepted).toEqual([{ options: { output_format: "svg" }, job_id: job.job_id, date }]);
   });
@@ -341,19 +337,19 @@ describe("Option Status (ADR 0011)", () => {
     answer = imageOfSize(1792, 2400);
     const honoured = ok(await generate({ model: "nb2", provider_options: pair }));
     let statuses = await statusesOf();
-    expect(statuses.ignored).toEqual([]);
+    expect(statuses.ignored).toBeUndefined();
     expect(statuses.honoured).toEqual([{ options: pair, job_id: honoured.job_id, date }]);
 
     answer = rejectSize;
     await generate({ model: "nb2", provider_options: pair });
     statuses = await statusesOf();
-    expect(statuses.honoured).toEqual([]);
+    expect(statuses.honoured).toBeUndefined();
     expect(statuses.rejected).toMatchObject([{ options: pair, reason: `HTTP 400: ${sizeRejected}` }]);
 
     answer = imageOfSize(1792, 2400);
     const again = ok(await generate({ model: "nb2", provider_options: pair }));
     statuses = await statusesOf();
-    expect(statuses.rejected).toEqual([]);
+    expect(statuses.rejected).toBeUndefined();
     expect(statuses.honoured).toEqual([{ options: pair, job_id: again.job_id, date }]);
   });
 
@@ -375,13 +371,19 @@ describe("Option Status (ADR 0011)", () => {
     answer = rejectSize;
     await generate({ model: "nb2", provider_options: { width: 1536, height: 2048 } });
 
-    const brief = textOf(await call("list_models", {}));
-    expect(brief).toContain("Honoured options: width+height. Rejected options: width+height. Accepted options: seed.");
-    const detailed = textOf(await call("list_models", { model: "nb2" }));
-    expect(detailed).toContain(`- Honoured: {"width":1792,"height":2400}, Job ${job.job_id} on ${date.slice(0, 10)}`);
-    expect(detailed).toContain(`- Accepted (not rejected, effect unknown): {"seed":7}, Job ${job.job_id}`);
-    expect(detailed).toContain(`: HTTP 400: ${sizeRejected}`);
-    for (const text of [brief, detailed]) expect(text).not.toMatch(/known.good|suspect/i);
+    const brief = await call("list_models", {});
+    expect(ok(brief).models[0].option_statuses).toMatchObject({
+      honoured: [{ options: { width: 1792, height: 2400 } }],
+      rejected: [{ options: { width: 1536, height: 2048 } }],
+      accepted: [{ options: { seed: 7 } }],
+    });
+    const detailed = await call("list_models", { model: "nb2" });
+    expect(ok(detailed).models[0].option_statuses).toMatchObject({
+      honoured: [{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date }],
+      rejected: [{ reason: `HTTP 400: ${sizeRejected}` }],
+      accepted: [{ options: { seed: 7 }, job_id: job.job_id }],
+    });
+    for (const result of [brief, detailed]) expect(textOf(result)).not.toMatch(/known.good|suspect/i);
   });
 
   test("the server instructions and the litevision Skill say how to use each Option Status", async () => {
@@ -398,7 +400,7 @@ describe("Option Status (ADR 0011)", () => {
   test("an error that names no option records nothing", async () => {
     harness = await startHarness(flashSetup(recorded("together/invalid-reference-image.json", 400)));
     expect((await generate({ model: "nb2", provider_options: { width: 1792, height: 2400 } })).isError).toBe(true);
-    expect(await statusesOf()).toEqual({ honoured: [], ignored: [], rejected: [], accepted: [] });
+    expect(await statusesOf()).toBeUndefined();
   });
 });
 
@@ -418,12 +420,9 @@ describe("generate_video with the together Protocol", () => {
     expect(output).toMatchObject({
       status: "completed",
       model: "wan",
-      requested_shape: null,
-      requested_duration: null,
       observed: [{ width: 1920, height: 1080, seconds: 5 }],
     });
     expect(output.files[0]).toEndWith(".mp4");
-    expect(textOf(result)).toContain("Got 1920x1080, 5 s.");
     expect((await readHistory(harness))[0]).toMatchObject({
       modality: "video",
       outcome: "completed",
@@ -515,7 +514,7 @@ describe("generate_video with the together Protocol", () => {
     const frame = join(harness.cwd, "landscape.png");
     await writeFile(frame, pngOfSize(1280, 720));
     const output = ok(await video({ model: "seedance", first_frame: frame }));
-    expect(output.requested_shape).toBeNull();
+    expect(output.requested_shape).toBeUndefined();
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -532,7 +531,7 @@ describe("generate_video with the together Protocol", () => {
     await writeFile(frame, pngOfSize(720, 1280));
     const output = ok(await video({ model: "wan-i2v", first_frame: frame }));
     expect(await bodyOf(videosUrl)).not.toHaveProperty("ratio");
-    expect(output.requested_shape).toBeNull();
+    expect(output.requested_shape).toBeUndefined();
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -568,7 +567,8 @@ describe("generate_video with the together Protocol", () => {
     const status: Route = (request) => recorded(done ? "together/video-completed.json" : "together/video-submitted.json")(request);
     harness = await startHarness({ ...togetherSetup({ [videoStatusUrl]: status }), waitLimitMs: 60_000 });
     const started = ok(await video({ wait: false }));
-    expect(started).toMatchObject({ status: "running", files: [] });
+    expect(started).toMatchObject({ status: "running" });
+    expect(started).not.toHaveProperty("files");
 
     done = true;
     const finished = ok(await call("get_job", { job_id: started.job_id }));
@@ -611,7 +611,6 @@ describe("Modality", () => {
     });
     expect(wan.parameters).toContain("resolution, ratio, seconds");
     expect(wan).not.toHaveProperty("video_capabilities");
-    expect(textOf(result)).toContain("wan (default video): video Model Wan-AI/wan2.7-t2v");
   });
 
   test("each Model's docs link is its Parameter Guide's first source, else Together's generic parameters page", async () => {

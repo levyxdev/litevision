@@ -78,7 +78,6 @@ describe("Source Jobs", () => {
     expect(output.source_jobs).toEqual([
       { job_id: first.job_id, result: 1, model: "gpt-image", file: first.files[0]!, deleted: false, reference: copy },
     ]);
-    expect(text).toContain(`Source Jobs: Job ${first.job_id}, result 1 on gpt-image (${first.files[0]!}).`);
   });
 
   test("an earlier output deleted by the User still makes a copy of it find its Job, and is reported as deleted", async () => {
@@ -92,7 +91,6 @@ describe("Source Jobs", () => {
     const { output, text } = await getJob(second.job_id);
 
     expect(output.source_jobs).toMatchObject([{ job_id: first.job_id, file: first.files[0]!, deleted: true }]);
-    expect(text).toContain(`(${first.files[0]!}, deleted)`);
     expect((await getJob(first.job_id)).output.files).toEqual(first.files);
   });
 
@@ -162,7 +160,6 @@ describe("list_models with `model`: Ratings show their Job's Source Jobs", () =>
       { job_id: fox.job_id, verdict: "bad" },
     ]);
     expect(ratings[1]).not.toHaveProperty("source_jobs");
-    expect(textOf(result)).toContain(`good on Job ${fixed.job_id} ("fix the hair") [Source Jobs: Job ${fox.job_id}, result 1 on gpt-image (${fox.files[0]!}, deleted)]: the hair is right now`);
   });
 });
 

@@ -46,12 +46,6 @@ describe("list_models: the Parameter Guide (ADR 0010)", () => {
     const quality = guide.parameters.find((parameter) => parameter.name === "quality")!;
     expect(quality.values).toContain("high");
     expect(quality.price).not.toBe("");
-
-    const text = textOf(result);
-    expect(text).toContain("Parameter Guide for");
-    expect(text).toContain("- size:");
-    expect(text).toContain(guide.checked);
-    expect(text).toContain(guide.sources[0]!);
   });
 
   test("with `model`, a Gemini image Model shows `response_format.image_size` with its tiers and `response_format.aspect_ratio` with its ratios", async () => {
@@ -87,10 +81,9 @@ describe("list_models: the Parameter Guide (ADR 0010)", () => {
       [{ alias: "mystery", provider: "openai", modelId: "acme-paint-7", protocol: "openai-images" }],
       "mystery",
     );
-    expect(model.parameter_guide).toBeNull();
+    expect(model).not.toHaveProperty("parameter_guide");
     expect(model.parameters).toContain("no Parameter Guide");
     expect(model.parameters).toContain(model.docs_url!);
-    expect(textOf(result)).toContain("no Parameter Guide");
   });
 });
 
@@ -152,7 +145,7 @@ describe("list_models: Parameter Guide entries for Venice, APIMart and Together 
       { provider: "venice", modelId: "venice-sd35", protocol: "venice" },
       { "GET https://api.venice.ai/api/v1/models?type=image": recorded("venice/models-image.json") as () => Response },
     );
-    expect(model.parameter_guide).toBeNull();
+    expect(model).not.toHaveProperty("parameter_guide");
     expect(model.parameter_schema).toBeDefined();
   });
 });
@@ -170,11 +163,9 @@ describe("list_models: a Model the Provider describes itself (ADR 0010)", () => 
     });
     const result = await harness.client.callTool({ name: "list_models", arguments: { model: "gpt2" } });
     const model = (result.structuredContent as { models: Array<Listed & { parameter_schema?: unknown }> }).models[0]!;
-    expect(model.parameter_guide).toBeNull();
+    expect(model).not.toHaveProperty("parameter_guide");
     expect(model.parameter_schema).toBeDefined();
     expect(model.parameters).toContain('Provider "apimart" describes this Model\'s parameters itself');
-    expect(textOf(result)).toContain('Parameter schema from Provider "apimart"');
-    expect(textOf(result)).not.toContain("Parameter Guide for");
   });
 });
 

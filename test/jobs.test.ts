@@ -110,8 +110,7 @@ describe("wait: false", () => {
     expect(result.isError).toBeFalsy();
     const { job_id, status, files } = result.structuredContent as unknown as JobResult;
     expect(status).toBe("running");
-    expect(files).toEqual([]);
-    expect(textOf(result)).toContain("get_job");
+    expect(files).toBeUndefined();
 
     generation.release();
     const job = await harness.client.callTool({ name: "get_job", arguments: { job_id } });
@@ -185,7 +184,7 @@ describe("cancel_job on a cloud Model", () => {
 
     const cancelled = await harness.client.callTool({ name: "cancel_job", arguments: { job_id } });
     expect(cancelled.structuredContent).toMatchObject({ job_id, status: "cancelled" });
-    expect(textOf(cancelled)).toContain('Provider "openai" may still finish it and bill for it');
+    expect((cancelled.structuredContent as { message: string }).message).toContain('Provider "openai" may still finish it and bill for it');
 
     // The Provider's late answer changes nothing.
     generation.release();

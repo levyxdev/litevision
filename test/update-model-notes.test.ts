@@ -79,7 +79,8 @@ describe("update_model_notes", () => {
   test("sets Model Notes on a Model that had none, and can clear them", async () => {
     await start([gptImage]);
     const set = await updateNotes({ model: "gpt-image", notes: "  sharp line art  " });
-    expect(set.structuredContent).toMatchObject({ notes: "sharp line art", previous_notes: "" });
+    expect(set.structuredContent).toMatchObject({ notes: "sharp line art" });
+    expect(set.structuredContent).not.toHaveProperty("previous_notes");
     expect((await readConfig()).models[0].notes).toBe("sharp line art");
 
     const cleared = await updateNotes({ model: "gpt-image", notes: "" });
@@ -88,7 +89,7 @@ describe("update_model_notes", () => {
       ...gptImage,
       notesHistory: { changedBy: "Agent", changedAt: firstChange.toISOString(), previous: "sharp line art" },
     });
-    expect(await listedNotes("gpt-image")).toBe("");
+    expect(await listedNotes("gpt-image")).toBeUndefined();
   });
 
   test("rejects Model Notes over the length cap and changes nothing", async () => {

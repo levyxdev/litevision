@@ -124,6 +124,12 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     const client = new Client({ name: "test", version: "0.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const callTool = client.callTool.bind(client);
+    client.callTool = (async (...args: Parameters<typeof callTool>) => {
+      const result = await callTool(...args);
+      assertOneForm(result);
+      return result;
+    }) as typeof callTool;
     return { server, client };
   };
   let connected = await connect();
@@ -170,6 +176,43 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       if (shared === undefined) await rm(root, { recursive: true, force: true });
     },
   };
+}
+
+/** Fields whose values are Provider request fields or the Provider's own schema: data, so never compacted (ADR 0017). */
+const dataFields = new Set(["options", "standing_options", "previous_standing_options", "parameter_schema", "standing", "job"]);
+
+/**
+ * Every successful result reaches every Agent in one form (ADR 0017): its text is exactly the compact JSON of its
+ * structured content, which has no null field, empty array, empty object or empty string. Errors stay plain text.
+ */
+export function assertOneForm(result: Awaited<ReturnType<Client["callTool"]>>): void {
+  if (result.isError) return;
+  const expected = [{ type: "text", text: JSON.stringify(result.structuredContent) }];
+  if (result.structuredContent === undefined || JSON.stringify(result.content) !== JSON.stringify(expected)) {
+    throw new Error(`A successful result's text must be the compact JSON of its structured content; got ${JSON.stringify(result)}`);
+  }
+  const empty = emptyFields(result.structuredContent, "");
+  if (empty.length > 0) throw new Error(`A result must leave out empty and null fields; found ${empty.join(", ")} in ${JSON.stringify(result.structuredContent)}`);
+}
+
+function emptyFields(value: unknown, path: string): string[] {
+  if (value === null || value === "" || (Array.isArray(value) && value.length === 0)) return [path];
+  // A null item holds its place in an array, such as a file litevision could not read.
+  if (Array.isArray(value)) return value.flatMap((item, index) => (item === null ? [] : emptyFields(item, `${path}[${index}]`)));
+  if (typeof value !== "object") return [];
+  const entries = Object.entries(value as Record<string, unknown>);
+  // A result with nothing to report is the empty object itself.
+  if (entries.length === 0) return path === "" ? [] : [path];
+  return entries.flatMap(([key, field]) => {
+    const at = path === "" ? key : `${path}.${key}`;
+    if (!dataFields.has(key)) return emptyFields(field, at);
+    // An override's `job` is the value the Job sent, which may be an empty object.
+    return field === null || (key !== "job" && isEmptyObject(field)) ? [at] : [];
+  });
+}
+
+function isEmptyObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && Object.keys(value).length === 0;
 }
 
 /** A Runtime that is always installed and running at `url`, which never starts or stops a process. */

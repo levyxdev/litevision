@@ -214,10 +214,10 @@ describe("generate_comparison", () => {
     const [good, bad] = output.jobs;
     expect(good).toMatchObject({ status: "completed", model: "sdxl" });
     expect(good.files).toHaveLength(1);
-    expect(bad).toMatchObject({ status: "failed", model: "flux2", files: [] });
+    expect(bad).toMatchObject({ status: "failed", model: "flux2" });
+    expect(bad).not.toHaveProperty("files");
     expect(bad.job_id).toMatch(/\S+/);
     expect(bad.error).toContain("Unable to access model");
-    expect(textOf(result)).toContain(`Job ${bad.job_id} on flux2 failed`);
 
     const history = await readHistory(harness);
     expect(history.find((record) => record.id === bad.job_id)).toMatchObject({ outcome: "failed", comparison: output.comparison_id });
@@ -254,8 +254,8 @@ describe("generate_comparison", () => {
 
     const [fast, running] = output.jobs;
     expect(fast).toMatchObject({ status: "completed", model: "sdxl" });
-    expect(running).toMatchObject({ status: "running", model: "flux2", files: [] });
-    expect(textOf(result)).toContain("get_job");
+    expect(running).toMatchObject({ status: "running", model: "flux2" });
+    expect(running).not.toHaveProperty("files");
 
     slow.release();
     const job = await harness.client.callTool({ name: "get_job", arguments: { job_id: running.job_id } });

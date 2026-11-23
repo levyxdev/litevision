@@ -182,7 +182,6 @@ describe("generate_image with a gemini Model", () => {
     const result = await generate({ provider_options: { response_format: format } });
     const output = outputOf(result);
     expect(output).toMatchObject({ requested_shape: "16:9", requested_resolution: "2K", requested_size: "2752x1536" });
-    expect(textOf(result)).toContain("The request asks for 16:9 at 2K (2752x1536).");
     expect(output).not.toHaveProperty("mismatch");
     expect((await statusesOf()).honoured).toMatchObject([{ options: { "response_format.aspect_ratio": "16:9" } }, { options: { "response_format.image_size": "2K" } }]);
   });
@@ -212,7 +211,7 @@ describe("generate_image with a gemini Model", () => {
     harness = await startHarness(geminiSetup({ [interactionsUrl]: imageOfSize(1376, 768) }));
     for (const format of [{ image_size: "2K" }, { aspect_ratio: "16:9", image_size: "8K" }]) {
       const output = outputOf(await generate({ provider_options: { response_format: format } }));
-      expect(output).toMatchObject({ requested_size: null });
+      expect(output).not.toHaveProperty("requested_size");
       expect(output).not.toHaveProperty("mismatch");
     }
   });

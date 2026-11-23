@@ -72,7 +72,6 @@ describe("pick_result", () => {
 
     expect(result.isError, textOf(result)).toBeFalsy();
     expect(result.structuredContent).toEqual({ comparison_id: "c1", job_id: "b", result: 2, picked_at: "2026-11-05T10:00:00.000Z" });
-    expect(textOf(result)).toContain("result 2 of Job b");
     expect((await readHistoryLines(harness!)).at(-1)).toEqual({
       type: "pick",
       comparison: "c1",
@@ -180,7 +179,7 @@ describe("pick_result", () => {
     expect(statusesOf(after)).toEqual(statusesOf(before));
     expect(statusesOf(after).statuses.accepted).toMatchObject([{ options: { quality: "high" }, job_id: "a" }]);
     expect(statusesOf(after).statuses.ignored).toMatchObject([{ options: { size: "1024x1024" }, job_id: "b" }]);
-    expect(statusesOf(after).ratings).toEqual([]);
+    expect(statusesOf(after).ratings).toBeUndefined();
   });
 
   test("is listed, and the server instructions say to pick only when the User actually chooses", async () => {
@@ -225,12 +224,6 @@ describe("list_models with `model`: recent Picks", () => {
       { comparison_id: "c1", job_id: "a", picked: false, picked_model: "dall-e", picked_at: "2026-11-05T10:01:00.000Z", prompt: "prompt of a" },
       { comparison_id: "c2", job_id: "c", picked: true, result: 2, picked_model: "gpt-image", picked_at: "2026-11-05T10:00:00.000Z", prompt: "a fox in the snow" },
     ]);
-    const text = textOf(result);
-    expect(text).toContain('Job a in Comparison c1 ("prompt of a"): not picked; the User picked a Job on dall-e');
-    expect(text).toContain('Job c in Comparison c2 ("a fox in the snow"): picked, result 2');
-    expect(text.indexOf("Comparison c1")).toBeLessThan(text.indexOf("Comparison c2"));
-    expect(text).not.toContain("Comparison c3");
-    expect(text).not.toContain("Comparison c4");
 
     expect(await recentPicksOf("dall-e")).toMatchObject([
       { comparison_id: "c4", job_id: "g", picked: true },
@@ -247,7 +240,7 @@ describe("list_models with `model`: recent Picks", () => {
       // A second Job of this Model in c6: still one Comparison.
       jobRecord("j6b", "2026-11-05T06:00:00.000Z", { comparison: "c6" }),
     ]);
-    expect(textOf(await describeModel("gpt-image"))).toContain("Recent Picks: none recorded yet.");
+    expect(await recentPicksOf("gpt-image")).toBeUndefined();
 
     for (const id of ids) await pick({ comparison_id: `c${id}`, job_id: `j${id}` }, `2026-11-05T10:0${id}:00.000Z`);
 
