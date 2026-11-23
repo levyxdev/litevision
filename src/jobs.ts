@@ -16,6 +16,7 @@ import { providerError, providerLabel } from "./protocols/errors.ts";
 import { adapterForProtocol, credentialFor } from "./protocols/index.ts";
 import { checkResult, mismatchOf } from "./result-check.ts";
 import { contentHash, findSourceJobs } from "./source-jobs.ts";
+import type { OptionInputs } from "./standing-options.ts";
 import {
   ProviderError,
   type GeneratedFile,
@@ -67,8 +68,8 @@ interface SpecBase extends ResolvedModel {
   name?: string;
   /** The Comparison this Job belongs to (ADR 0009), when it is one of several started together. */
   comparison?: string;
-  /** What the merged `providerOptions` were made of: the Model's Standing Options and the Agent's own options. */
-  options: { standing: Record<string, unknown>; job: Record<string, unknown> };
+  /** What the merged `providerOptions` were made of. */
+  options: OptionInputs;
 }
 
 export interface JobSpec extends SpecBase {

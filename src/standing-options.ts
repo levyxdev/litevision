@@ -33,6 +33,12 @@ export interface Override {
   job: unknown;
 }
 
+/** What a Job's options are made of: the Model's Standing Options, and the Agent's own `provider_options` for the Job. */
+export interface OptionInputs {
+  standing: Record<string, unknown>;
+  job: Record<string, unknown>;
+}
+
 /**
  * What a Job sent, by where it came from: `standing` and `job` merge into exactly the options sent, and `overrides`
  * names each Standing Option the Job's own options replaced or dropped.
@@ -44,7 +50,7 @@ export interface OptionSources {
 }
 
 /** Splits what a Job sends by source. A value the Job sets the same as its Standing Option is the Job's, and no override. */
-export function optionSources(standing: Record<string, unknown>, job: Record<string, unknown>): OptionSources {
+export function optionSources({ standing, job }: OptionInputs): OptionSources {
   const sources: OptionSources = { standing: {}, job: mergeOptions({}, job), overrides: [] };
   collectStanding(standing, job, "", sources.standing, sources.overrides);
   return sources;
@@ -64,7 +70,7 @@ function collectStanding(standing: Record<string, unknown>, job: Record<string, 
       collectStanding(value, jobValue, `${option}.`, inner, overrides);
       if (Object.keys(inner).length > 0) kept[key] = inner;
     } else if (!isDeepStrictEqual(value, jobValue)) {
-      overrides.push({ option, standing: value, job: jobValue });
+      overrides.push({ option, standing: value, job: isPlainObject(jobValue) ? mergeOptions({}, jobValue) : jobValue });
     }
   }
 }

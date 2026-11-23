@@ -16,7 +16,7 @@ const standing = { steps: 28, guidance: 3.5, output: { format: "png", quality: 9
 const firstChange = new Date("2026-11-21T10:00:00.000Z");
 const secondChange = new Date("2026-11-21T11:30:00.000Z");
 
-async function start(now = () => firstChange, images = recorded("together/images.json")) {
+async function start(now = () => firstChange, routes: Record<string, ReturnType<typeof recorded>> = {}) {
   harness = await startHarness({
     now,
     config: {
@@ -38,10 +38,11 @@ async function start(now = () => firstChange, images = recorded("together/images
     },
     credentials: { "together-ai": { apiKey: "together-test-0000secret0000" } },
     routes: {
-      [imagesUrl]: images,
+      [imagesUrl]: recorded("together/images.json"),
       [videosUrl]: recorded("together/video-submitted.json"),
       [`GET ${root}/v2/videos/${videoId}`]: recorded("together/video-completed.json"),
       "GET https://api.together.ai/shrt/example0000": () => new Response(mp4Of(1920, 1080, 5), { headers: { "content-type": "video/mp4" } }),
+      ...routes,
     },
     pollIntervalMs: 1,
   });
@@ -159,12 +160,46 @@ describe("Standing Options (ADR 0010)", () => {
   });
 
   test("a failed Job's error says which options it sent and which Standing Options it overrode", async () => {
-    const h = await start(undefined, recorded("together/invalid-reference-image.json", 400));
+    const h = await start(undefined, { [imagesUrl]: recorded("together/invalid-reference-image.json", 400) });
     const result = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { steps: 40 } } });
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('Sent {"guidance":3.5');
     expect(textOf(result)).toContain("This Job overrode Standing Options: steps 28 → 40.");
+  });
+
+  test("a failed Comparison variant shows its options and overrides too", async () => {
+    const h = await start(undefined, { [imagesUrl]: recorded("together/invalid-reference-image.json", 400) });
+    const result = await h.client.callTool({
+      name: "generate_comparison",
+      arguments: { variants: [{ prompt: "a fox", model: "flux2", provider_options: { steps: 40 } }, { prompt: "a fox", model: "sdxl" }] },
+    });
+
+    const [flux] = (result.structuredContent as { jobs: Array<{ error: string }> }).jobs;
+    expect(flux).toMatchObject({ status: "failed", options_sent: { job: { steps: 40 } }, overrides: [{ option: "steps", standing: 28, job: 40 }] });
+    expect(flux!.error).toContain("This Job overrode Standing Options: steps 28 → 40.");
+  });
+
+  test("a Job that fails after its wait ends says in get_job which options it sent", async () => {
+    const h = await start(undefined, { [`GET ${root}/v2/videos/${videoId}`]: recorded("together/video-failed.json") });
+    const started = await h.client.callTool({ name: "generate_video", arguments: { prompt: "a fox runs", provider_options: { negative_prompt: null }, wait: false } });
+    const { job_id } = started.structuredContent as { job_id: string };
+
+    const result = await h.client.callTool({ name: "get_job", arguments: { job_id } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Sent {"generate_audio":true} from Standing Options.');
+    expect(textOf(result)).toContain('This Job overrode Standing Options: negative_prompt "blur" → dropped.');
+  });
+
+  test("an override names the value sent, as merged", async () => {
+    const h = await start();
+    const result = await h.client.callTool({ name: "generate_image", arguments: { prompt: "a red fox", provider_options: { seed: { a: null } } } });
+
+    const [body] = await sentBodies(h);
+    expect(body.seed).toEqual({});
+    const { options_sent, overrides } = result.structuredContent as { options_sent: { job: unknown }; overrides: unknown };
+    expect(options_sent.job).toEqual({ seed: {} });
+    expect(overrides).toEqual([{ option: "seed", standing: 7, job: {} }]);
   });
 
   test("a Job that overrides nothing says nothing about overrides", async () => {
