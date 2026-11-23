@@ -12,7 +12,7 @@ interface GenerateResult {
   job_id: string;
   model: string;
   files: string[];
-  requested_shape: string | null;
+  unchecked?: string[];
 }
 
 /** One OpenAI Provider with three `openai-images` Models; `gpt-image` is the default. */
@@ -65,14 +65,14 @@ describe("size", () => {
     harness = await startHarness(openaiSetup());
     const output = outputOf(await generate({ provider_options: { size: "1024x1536" } }));
     expect(await harness.requests[0]!.json()).toMatchObject({ size: "1024x1536" });
-    expect(output.requested_shape).toBe("1024x1536");
+    expect(output.unchecked ?? []).not.toContain("shape");
   });
 
   test("omitted, no size is sent and the Provider's default applies (ADR 0010)", async () => {
     harness = await startHarness(openaiSetup());
     const output = outputOf(await generate({}));
     expect(await harness.requests[0]!.json()).not.toHaveProperty("size");
-    expect(output).not.toHaveProperty("requested_shape");
+    expect(output.unchecked).toContain("shape");
     expect(output).not.toHaveProperty("aspect_ratio");
     expect(output).not.toHaveProperty("size");
     expect(output).not.toHaveProperty("aspect_ratio_adjusted");

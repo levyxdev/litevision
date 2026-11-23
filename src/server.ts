@@ -483,47 +483,26 @@ const observedSchema = z
   .optional()
   .describe("What each saved file turned out to be, in the order of `files`, read from the file itself; null where litevision could not tell.");
 
-/** What the request sent asks for, as every Job output reports it; see {@link requestedOutput}. */
-const requestedShapeSchema = z
-  .string()
+/** What a Job's result can be checked for, when litevision reads it from the request (ADR 0006). */
+const checkedDimensions = ["shape", "size", "format", "length"] as const;
+
+const uncheckedSchema = z
+  .array(z.enum(checkedDimensions))
   .optional()
   .describe(
-    "The shape the request sent asks for, as litevision read it from the Model's own fields, e.g. 16:9 or 3840x2160; null when it asks for none litevision can read, so the result's shape is not checked. Compare it with `observed`.",
+    "Present when litevision could not read from the request what the result should be, so did not check it: shape, size (in pixels), format or length (videos).",
   );
 
-const requestedResolutionSchema = z
-  .string()
-  .optional()
-  .describe(
-    "The resolution tier the request sent asks for, as written in its Protocol's tier field, e.g. 4K or 1080P; null when it sets none. Checked only where the Parameter Guide gives the tier's pixel size: see `requested_size`.",
-  );
-
-const requestedSizeSchema = z
-  .string()
-  .optional()
-  .describe(
-    "The pixel size the request sent asks for, e.g. 1792x2400, from exact dimensions or from a tier and aspect ratio the Model's Parameter Guide sizes; null when it names none litevision can read, so the result's pixel size is not checked.",
-  );
-
-const requestedFormatSchema = z
-  .string()
-  .optional()
-  .describe("The file format the request sent asks for, e.g. png or jpeg; null when it names none litevision can read from a file's header, so the result's format is not checked.");
-
-const requestedDurationSchema = z
-  .number()
-  .optional()
-  .describe("Video Jobs: the length in seconds the request sent asks for, as litevision read it; null when unreadable, so the length is not checked.");
-
-/** The `requested_*` fields of a Job's output; `requested_duration` only for a video Job. */
-function requestedOutput(requested: Requested) {
-  return {
-    requested_shape: requested.shape,
-    requested_resolution: requested.resolution,
-    requested_size: requested.size ?? null,
-    requested_format: requested.format ?? null,
-    ...(requested.seconds === undefined ? {} : { requested_duration: requested.seconds }),
+/** The `unchecked` field of a Job's output: what litevision could not read from the request, so did not check. */
+function uncheckedOutput(requested: Requested) {
+  const unread: Record<(typeof checkedDimensions)[number], boolean> = {
+    shape: requested.shape === null,
+    size: requested.size == null,
+    format: requested.format == null,
+    // Only a video Job has a length.
+    length: requested.seconds === null,
   };
+  return { unchecked: checkedDimensions.filter((dimension) => unread[dimension]) };
 }
 
 const mismatchSchema = z
@@ -616,7 +595,7 @@ function jobOutput(job: JobState) {
     status: job.status,
     model: job.model,
     ...(job.status === "completed"
-      ? { files: job.files, observed: job.observed, shortfall: job.shortfall, mismatch: job.mismatch, ...(job.requested === undefined ? {} : requestedOutput(job.requested)) }
+      ? { files: job.files, observed: job.observed, shortfall: job.shortfall, mismatch: job.mismatch, ...(job.requested === undefined ? {} : uncheckedOutput(job.requested)) }
       : {}),
   };
 }
@@ -690,10 +669,7 @@ const imageJobShape = {
   status: jobStatusSchema,
   model: z.string().describe("Alias of the Model that ran the Job."),
   files: z.array(z.string()).optional().describe("Paths of the saved images, once the Job has completed."),
-  requested_shape: requestedShapeSchema,
-  requested_resolution: requestedResolutionSchema,
-  requested_size: requestedSizeSchema,
-  requested_format: requestedFormatSchema,
+  unchecked: uncheckedSchema,
   shortfall: z.string().optional().describe("Present when fewer images than `n` were saved: how many, and why."),
   observed: observedSchema,
   mismatch: mismatchSchema,
@@ -706,11 +682,7 @@ const videoJobShape = {
   status: jobStatusSchema,
   model: z.string().describe("Alias of the Model that ran the Job."),
   files: z.array(z.string()).optional().describe("Path of the saved video, once the Job has completed."),
-  requested_shape: requestedShapeSchema,
-  requested_duration: requestedDurationSchema,
-  requested_resolution: requestedResolutionSchema,
-  requested_size: requestedSizeSchema,
-  requested_format: requestedFormatSchema,
+  unchecked: uncheckedSchema,
   observed: observedSchema,
   mismatch: mismatchSchema,
   options_sent: optionsSentSchema,
@@ -807,7 +779,7 @@ export function createServer(deps: ServerDeps): McpServer {
       start: ({ comparison, wait } = {}) =>
         jobs.start({ ...resolved, adapter, credential, normalised, outputDir, options: options.inputs, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
-      report: (job) => ({ ...jobOutput(job), ...requestedOutput(normalised.requested), ...optionsOutput(options.split) }),
+      report: (job) => ({ ...jobOutput(job), ...uncheckedOutput(normalised.requested), ...optionsOutput(options.split) }),
     };
   };
 
@@ -838,7 +810,7 @@ export function createServer(deps: ServerDeps): McpServer {
       start: ({ comparison, wait } = {}) =>
         jobs.startVideo({ ...resolved, adapter, credential, normalised, outputDir, options: options.inputs, ...(name === undefined ? {} : { name }), ...(comparison === undefined ? {} : { comparison }) }, { wait }),
       hint: async (kind) => failureHint(info, model.provider, await modelStatuses(deps, model), kind),
-      report: (job) => ({ ...jobOutput(job), ...requestedOutput(normalised.requested), ...optionsOutput(options.split) }),
+      report: (job) => ({ ...jobOutput(job), ...uncheckedOutput(normalised.requested), ...optionsOutput(options.split) }),
     };
   };
 
@@ -1034,11 +1006,7 @@ export function createServer(deps: ServerDeps): McpServer {
         model: z.string().describe("Alias of the Model that ran the Job."),
         files: z.array(z.string()).optional().describe("Paths of the saved images or video, once the Job has completed."),
         shortfall: z.string().optional().describe("Present when fewer images than asked for were saved: how many, and why."),
-        requested_shape: requestedShapeSchema.optional(),
-        requested_duration: requestedDurationSchema.optional(),
-        requested_resolution: requestedResolutionSchema.optional(),
-        requested_size: requestedSizeSchema.optional(),
-        requested_format: requestedFormatSchema.optional(),
+        unchecked: uncheckedSchema,
         observed: observedSchema,
         mismatch: mismatchSchema,
         source_jobs: sourceJobsSchema,

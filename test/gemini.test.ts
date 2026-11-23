@@ -21,6 +21,7 @@ interface GenerateResult {
   size: string;
   aspect_ratio_adjusted: boolean;
   shortfall?: string;
+  unchecked?: string[];
 }
 
 interface InteractionBody {
@@ -173,7 +174,7 @@ describe("generate_image with a gemini Model", () => {
     harness = await startHarness(geminiSetup());
     const output = outputOf(await generate({ provider_options: { response_format: { aspect_ratio: "9:16", image_size: "2K" } } }));
     expect((await bodyOf(harness.requests[0]!)).response_format).toEqual({ type: "image", aspect_ratio: "9:16", image_size: "2K" });
-    expect(output).toMatchObject({ requested_shape: "9:16" });
+    expect(output.unchecked).not.toContain("shape");
   });
 
   test("a tier the Parameter Guide sizes is checked against the result's pixel size: its own size is Honoured", async () => {
@@ -181,7 +182,8 @@ describe("generate_image with a gemini Model", () => {
     const format = { aspect_ratio: "16:9", image_size: "2K" };
     const result = await generate({ provider_options: { response_format: format } });
     const output = outputOf(result);
-    expect(output).toMatchObject({ requested_shape: "16:9", requested_resolution: "2K", requested_size: "2752x1536" });
+    expect(output.unchecked ?? []).not.toContain("shape");
+    expect(output.unchecked ?? []).not.toContain("size");
     expect(output).not.toHaveProperty("mismatch");
     expect((await statusesOf()).honoured).toMatchObject([{ options: { "response_format.aspect_ratio": "16:9" } }, { options: { "response_format.image_size": "2K" } }]);
   });
@@ -211,7 +213,7 @@ describe("generate_image with a gemini Model", () => {
     harness = await startHarness(geminiSetup({ [interactionsUrl]: imageOfSize(1376, 768) }));
     for (const format of [{ image_size: "2K" }, { aspect_ratio: "16:9", image_size: "8K" }]) {
       const output = outputOf(await generate({ provider_options: { response_format: format } }));
-      expect(output).not.toHaveProperty("requested_size");
+      expect(output.unchecked).toContain("size");
       expect(output).not.toHaveProperty("mismatch");
     }
   });

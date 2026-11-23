@@ -48,9 +48,7 @@ async function sentBody(): Promise<Record<string, unknown>> {
 }
 
 interface VideoOutput {
-  requested_shape: string | null;
-  requested_duration: number | null;
-  requested_resolution: string | null;
+  unchecked?: string[];
   mismatch?: string;
 }
 
@@ -70,10 +68,9 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     harness = await startHarness(setup());
     const result = await video();
     const output = result.structuredContent as unknown as VideoOutput;
-    expect(output.requested_shape).toBeUndefined();
-    expect(output.requested_duration).toBeUndefined();
-    expect(output.requested_resolution).toBeUndefined();
+    expect(output.unchecked).toEqual(expect.arrayContaining(["shape", "size", "length"]));
     expect(output.mismatch).toBeUndefined();
+    expect(Object.keys(output).filter((key) => key.startsWith("requested_"))).toEqual([]);
   });
 
   test("resolution, ratio and seconds in provider_options reach Together unchanged", async () => {
@@ -82,7 +79,7 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(result.isError).toBeFalsy();
     expect(await sentBody()).toMatchObject({ resolution: "1080P", ratio: "9:16", seconds: "12" });
     const output = result.structuredContent as unknown as VideoOutput;
-    expect(output).toMatchObject({ requested_shape: "9:16", requested_resolution: "1080P", requested_duration: 12 });
+    expect(output.unchecked).toEqual(["size", "format"]);
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -125,6 +122,7 @@ describe("video Jobs pass every non-fixed field through (ADR 0010)", () => {
     const [job] = await readHistory(harness);
     expect(job!.parameters).toMatchObject({ requested: { shape: "16:9", seconds: 5, resolution: "720P" } });
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
-    expect(again.structuredContent).toMatchObject({ requested_shape: "16:9", requested_duration: 5, requested_resolution: "720P" });
+    expect(again.structuredContent).not.toHaveProperty("requested_shape");
+    expect((again.structuredContent as { unchecked?: string[] }).unchecked).not.toContain("length");
   });
 });

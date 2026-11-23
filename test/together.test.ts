@@ -292,7 +292,7 @@ describe("Option Status (ADR 0011)", () => {
     harness = await startHarness(flashSetup(imageOfSize(896, 1200)));
     const job = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, seed: 7 } }));
     expect(job.mismatch).toBe("asked for 1792x2400, got 896x1200");
-    expect(job.requested_size).toBe("1792x2400");
+    expect(job.unchecked).toEqual(["format"]);
 
     const statuses = await statusesOf();
     expect(statuses.ignored).toEqual([{ options: { width: 1792, height: 2400 }, job_id: job.job_id, date, reason: "asked for 1792x2400, got 896x1200" }]);
@@ -305,7 +305,7 @@ describe("Option Status (ADR 0011)", () => {
     harness = await startHarness(flashSetup(jpeg));
     const job = ok(await generate({ model: "nb2", provider_options: { width: 1792, height: 2400, output_format: "png" } }));
     expect(job.mismatch).toBe("asked for png, got jpeg");
-    expect(job.requested_format).toBe("png");
+    expect(job).not.toHaveProperty("unchecked");
 
     const statuses = await statusesOf();
     expect(statuses.ignored).toEqual([{ options: { output_format: "png" }, job_id: job.job_id, date, reason: "asked for png, got jpeg" }]);
@@ -322,7 +322,7 @@ describe("Option Status (ADR 0011)", () => {
   test("a format litevision cannot read from a file's header is not checked", async () => {
     harness = await startHarness(flashSetup(imageOfSize(1792, 2400)));
     const job = ok(await generate({ model: "nb2", provider_options: { output_format: "svg" } }));
-    expect(job).not.toHaveProperty("requested_format");
+    expect(job.unchecked).toEqual(["shape", "size", "format"]);
     expect(job.mismatch).toBeUndefined();
     expect((await statusesOf()).accepted).toEqual([{ options: { output_format: "svg" }, job_id: job.job_id, date }]);
   });
@@ -434,14 +434,15 @@ describe("generate_video with the together Protocol", () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 20) }));
     const output = ok(await video({ provider_options: { seconds: "20", resolution: "720p" } }));
     expect(await bodyOf(videosUrl)).toMatchObject({ seconds: "20", resolution: "720p" });
-    expect(output).toMatchObject({ requested_duration: 20 });
+    expect(output.unchecked).not.toContain("length");
     expect(output.mismatch).toBeUndefined();
   });
 
   test("a tier and ratio whose size the Parameter Guide gives are checked against the video's pixel size", async () => {
     harness = await startHarness(togetherSetup({ [videoFileUrl]: mp4Response(1280, 720, 5) }));
     const output = ok(await video({ provider_options: { resolution: "1080P", ratio: "16:9" } }));
-    expect(output).toMatchObject({ requested_size: "1920x1080", mismatch: "asked for 1080P (1920x1080), got 1280x720" });
+    expect(output).toMatchObject({ mismatch: "asked for 1080P (1920x1080), got 1280x720" });
+    expect(output.unchecked).not.toContain("size");
     const statuses = ok(await call("list_models", { model: "wan" })).models[0].option_statuses;
     expect(statuses.ignored).toMatchObject([{ options: { resolution: "1080P" }, reason: "asked for 1080P (1920x1080), got 1280x720" }]);
     expect(statuses.honoured).toMatchObject([{ options: { ratio: "16:9" } }]);
@@ -458,7 +459,8 @@ describe("generate_video with the together Protocol", () => {
       height: 1280,
       generate_audio: true,
     });
-    expect(output).toMatchObject({ requested_shape: "720x1280", requested_duration: 6 });
+    expect(output.unchecked ?? []).not.toContain("shape");
+    expect(output.unchecked ?? []).not.toContain("length");
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -514,7 +516,7 @@ describe("generate_video with the together Protocol", () => {
     const frame = join(harness.cwd, "landscape.png");
     await writeFile(frame, pngOfSize(1280, 720));
     const output = ok(await video({ model: "seedance", first_frame: frame }));
-    expect(output.requested_shape).toBeUndefined();
+    expect(output.unchecked).toContain("shape");
     expect(output.mismatch).toBeUndefined();
   });
 
@@ -531,7 +533,7 @@ describe("generate_video with the together Protocol", () => {
     await writeFile(frame, pngOfSize(720, 1280));
     const output = ok(await video({ model: "wan-i2v", first_frame: frame }));
     expect(await bodyOf(videosUrl)).not.toHaveProperty("ratio");
-    expect(output.requested_shape).toBeUndefined();
+    expect(output.unchecked).toContain("shape");
     expect(output.mismatch).toBeUndefined();
   });
 

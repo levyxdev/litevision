@@ -85,8 +85,8 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(result.isError).toBeFalsy();
     const [body] = await bodiesTo(urls.openai);
     expect(body!.size).toBe("3840x2160");
-    const output = result.structuredContent as { requested_shape: string | null; mismatch?: string };
-    expect(output.requested_shape).toBe("3840x2160");
+    const output = result.structuredContent as { unchecked?: string[]; mismatch?: string };
+    expect(output.unchecked).not.toContain("size");
     expect(output.mismatch).toContain("3840x2160");
   });
 
@@ -94,7 +94,7 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     harness = await startHarness(setup({ [urls.openai]: openaiImages(3840, 2160) }));
     const result = await generate({ model: "flare", provider_options: { size: "3840x2160" } });
     expect(result.structuredContent).not.toHaveProperty("mismatch");
-    expect((result.structuredContent as { requested_shape: string }).requested_shape).toBe("3840x2160");
+    expect(result.structuredContent).toMatchObject({ unchecked: ["format"] });
   });
 
   test("with no aspect_ratio and no size option, no image Protocol sends a size", async () => {
@@ -119,9 +119,9 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
   test("a request with no readable size is unchecked, not a mismatch, and says so", async () => {
     harness = await startHarness(setup({ [urls.openai]: openaiImages(1024, 1536) }));
     const result = await generate({ model: "flare", provider_options: { size: "auto" } });
-    const output = result.structuredContent as { requested_shape: string | null };
-    expect(output.requested_shape).toBeUndefined();
+    expect(result.structuredContent).toMatchObject({ unchecked: ["shape", "size", "format"] });
     expect(result.structuredContent).not.toHaveProperty("mismatch");
+    expect(Object.keys(result.structuredContent!).filter((key) => key.startsWith("requested_"))).toEqual([]);
   });
 
   test("a Job asking for more images than the old tables allowed is sent, and the Provider's rejection comes back with the Parameter Guide", async () => {
@@ -205,7 +205,7 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(job!.parameters).toMatchObject({ requested: { shape: "2048x1152" } });
 
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
-    expect(again.structuredContent).toMatchObject({ requested_shape: "2048x1152" });
+    expect(again.structuredContent).toMatchObject({ unchecked: ["format"] });
   });
 
   test("each Comparison variant's provider_options reach only that variant's Job", async () => {
@@ -228,34 +228,34 @@ describe("image Jobs pass every non-fixed field through (ADR 0010)", () => {
     expect(together).not.toHaveProperty("quality");
   });
 
-  test("the resolution tier the request asks for is shown and recorded", async () => {
+  test("the resolution tier the request asks for is recorded, and sizes the result for the check", async () => {
     harness = await startHarness(setup());
     const result = await generate({ model: "banana", provider_options: { response_format: { aspect_ratio: "16:9", image_size: "4K" } } });
-    const output = result.structuredContent as { requested_shape: string | null; requested_resolution: string | null };
-    expect(output).toMatchObject({ requested_shape: "16:9", requested_resolution: "4K" });
+    expect(result.structuredContent).toMatchObject({ unchecked: ["format"] });
 
     const [job] = await readHistory(harness);
     expect(job!.parameters).toMatchObject({ requested: { shape: "16:9", resolution: "4K" } });
     const again = await harness.client.callTool({ name: "get_job", arguments: { job_id: job!.id } });
-    expect(again.structuredContent).toMatchObject({ requested_resolution: "4K" });
+    expect(again.structuredContent).toMatchObject({ unchecked: ["format"] });
   });
 
   test("each Protocol's tier field is read: APIMart and Venice `resolution`; OpenAI has none", async () => {
     harness = await startHarness(setup());
-    const mart = await generate({ model: "mart", provider_options: { size: "16:9", resolution: "2k" } });
-    expect(mart.structuredContent).toMatchObject({ requested_shape: "16:9", requested_resolution: "2k" });
-    const venice = await generate({ model: "venice", provider_options: { aspect_ratio: "1:1", resolution: "2K" } });
-    expect(venice.structuredContent).toMatchObject({ requested_resolution: "2K" });
-    const unknown = await generate({ model: "mystery" });
-    expect(unknown.structuredContent).not.toHaveProperty("requested_resolution");
+    await generate({ model: "mart", provider_options: { size: "16:9", resolution: "2k" } });
+    await generate({ model: "venice", provider_options: { aspect_ratio: "1:1", resolution: "2K" } });
+    await generate({ model: "mystery" });
+    expect((await readHistory(harness)).map((job) => (job.parameters as { requested: unknown }).requested)).toMatchObject([
+      { shape: "16:9", resolution: "2k" },
+      { resolution: "2K" },
+      { resolution: null },
+    ]);
   });
 
   test("a request that sets no tier has a null resolution, not a default", async () => {
     harness = await startHarness(setup({ [urls.openai]: openaiImages(1024, 1024) }));
-    const result = await generate({ model: "flare", provider_options: { size: "1024x1024", quality: "high" } });
-    expect(result.structuredContent).not.toHaveProperty("requested_resolution");
-    const gemini = await generate({ model: "banana" });
-    expect(gemini.structuredContent).not.toHaveProperty("requested_resolution");
+    await generate({ model: "flare", provider_options: { size: "1024x1024", quality: "high" } });
+    await generate({ model: "banana" });
+    expect((await readHistory(harness)).map((job) => (job.parameters as { requested: unknown }).requested)).toMatchObject([{ resolution: null }, { resolution: null }]);
   });
 
   test("the removed parameters are refused by name, not silently ignored (ADR 0010)", async () => {

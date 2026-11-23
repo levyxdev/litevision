@@ -48,7 +48,7 @@ function veniceSetup(routes: HarnessOptions["routes"] = {}): HarnessOptions {
 interface GenerateResult {
   job_id: string;
   files: string[];
-  requested_shape: string | null;
+  unchecked?: string[];
   shortfall?: string;
 }
 
@@ -103,7 +103,7 @@ describe("text-to-image with a venice Model", () => {
     harness = await startHarness(veniceSetup());
     const output = outputOf(await generate({ model: "sd35", provider_options: { width: 1280, height: 720 } }));
 
-    expect(output.requested_shape).toBe("1280x720");
+    expect(output.unchecked ?? []).not.toContain("shape");
     expect(await bodyOf(generateUrl)).toMatchObject({ model: "venice-sd35", width: 1280, height: 720 });
   });
 
@@ -115,7 +115,7 @@ describe("text-to-image with a venice Model", () => {
     const body = await bodyOf(generateUrl);
     expect(body).toMatchObject({ model: "nano-banana-pro", aspect_ratio: "3:2", resolution: "2K" });
     expect(body).not.toHaveProperty("width");
-    expect(output.requested_shape).toBe("3:2");
+    expect(output.unchecked ?? []).not.toContain("shape");
   });
 
 

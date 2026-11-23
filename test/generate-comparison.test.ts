@@ -91,8 +91,9 @@ describe("generate_comparison", () => {
     expect(output.modality).toBe("image");
     expect(output.jobs).toHaveLength(2);
     const [first, second] = output.jobs;
-    expect(first).toMatchObject({ status: "completed", model: "sdxl", requested_shape: "1024x576" });
-    expect(second).toMatchObject({ status: "completed", model: "flux2", requested_shape: "1344x768" });
+    expect(first).toMatchObject({ status: "completed", model: "sdxl" });
+    expect(second).toMatchObject({ status: "completed", model: "flux2" });
+    for (const job of [first, second]) expect(job.unchecked).toEqual(["format"]);
     expect(first.job_id).not.toBe(second.job_id);
     expect(await readFile(first.files[0])).toEqual(tinyPng);
 
@@ -145,7 +146,8 @@ describe("generate_comparison", () => {
     );
     expect(videos.modality).toBe("video");
     expect(videos.jobs.map((job: { model: string }) => job.model)).toEqual(["seedance", "wan"]);
-    expect(videos.jobs[0]).toMatchObject({ status: "completed", requested_duration: 5 });
+    expect(videos.jobs[0]).toMatchObject({ status: "completed" });
+    expect(videos.jobs[0].unchecked).not.toContain("length");
   });
 
   test("with no variant naming a Model, `modality` picks the default video Model", async () => {
